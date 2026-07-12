@@ -39,3 +39,13 @@ contextBridge.exposeInMainWorld('actualizador', {
         };
     }
 });
+
+contextBridge.exposeInMainWorld('sistema', {
+    notificar(titulo, cuerpo) {
+        return ipcRenderer.invoke('sistema:notificar', { titulo, cuerpo });
+    },
+
+    obtenerVersion() {
+        return ipcRenderer.invoke('sistema:obtener-version');
+    }
+});

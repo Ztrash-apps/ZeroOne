@@ -1,6 +1,6 @@
 {
   "name": "autostatues",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Aplicación de escritorio para gestionar estados de WhatsApp",
   "main": "main.js",

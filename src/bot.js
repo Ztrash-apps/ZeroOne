@@ -18,6 +18,9 @@ const CARPETA_UPLOADS = path.join(CARPETA_DATOS, 'uploads');
 const CARPETA_SESIONES = path.join(CARPETA_DATOS, 'sesiones');
 const CARPETA_PROGRAMADOS = path.join(CARPETA_DATOS, 'programados');
 const CARPETA_IMAGENES_PROGRAMADAS = path.join(CARPETA_PROGRAMADOS, 'imagenes');
+const CARPETA_HISTORIAL = path.join(CARPETA_DATOS, 'historial');
+const CARPETA_IMAGENES_HISTORIAL = path.join(CARPETA_HISTORIAL, 'imagenes');
+const ARCHIVO_CONFIGURACION = path.join(CARPETA_DATOS, 'configuracion.json');
 
 function carpetaTieneContenido(ruta) {
     try {
@@ -56,6 +59,7 @@ fs.mkdirSync(CARPETA_DATOS, { recursive: true });
 migrarCarpetaAnterior('sesiones');
 migrarCarpetaAnterior('programados');
 migrarCarpetaAnterior('uploads');
+migrarCarpetaAnterior('historial');
 
 app.use(express.json());
 app.use(express.static(CARPETA_PUBLIC));
@@ -64,22 +68,35 @@ fs.mkdirSync(CARPETA_UPLOADS, { recursive: true });
 fs.mkdirSync(CARPETA_SESIONES, { recursive: true });
 fs.mkdirSync(CARPETA_PROGRAMADOS, { recursive: true });
 fs.mkdirSync(CARPETA_IMAGENES_PROGRAMADAS, { recursive: true });
+fs.mkdirSync(CARPETA_HISTORIAL, { recursive: true });
+fs.mkdirSync(CARPETA_IMAGENES_HISTORIAL, { recursive: true });
 
+// No se establece un límite de peso para las imágenes.
 const upload = multer({ dest: CARPETA_UPLOADS });
 
 const lineas = new Map();
 const programaciones = new Map();
 const trabajosProgramados = new Map();
+const historialPublicaciones = [];
 
 const archivoLineas = path.join(CARPETA_SESIONES, 'lineas.json');
 const archivoProgramaciones = path.join(CARPETA_PROGRAMADOS, 'programaciones.json');
+const archivoHistorial = path.join(CARPETA_HISTORIAL, 'publicaciones.json');
 
 let colaPublicaciones = Promise.resolve();
 let publicacionesPendientes = 0;
 let progresoPublicacion = crearProgresoVacio();
 
 const ETIQUETAS_LINEA = new Set(['activa', 'indefinida', 'caida', 'reposo']);
-const UMBRAL_FALLOS_SEGURIDAD = 0.8;
+const DIAS_SEMANA_VALIDOS = new Set([0, 1, 2, 3, 4, 5, 6]);
+const MAXIMO_HISTORIAL = 500;
+
+let configuracion = {
+    umbralFallosSeguridad: 0.8,
+    notificaciones: true,
+    lineasPorGrupoPredeterminado: 10,
+    intervaloMinutosPredeterminado: 5
+};
 
 let controlSeguridadPublicacion = {
     pausada: false,
@@ -111,6 +128,111 @@ function crearProgresoVacio() {
 
 function esperar(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function guardarJSONAtomico(ruta, datos) {
+    const temporal = `${ruta}.tmp`;
+    fs.writeFileSync(temporal, JSON.stringify(datos, null, 2), 'utf8');
+
+    try {
+        fs.renameSync(temporal, ruta);
+    } catch {
+        fs.copyFileSync(temporal, ruta);
+        eliminarArchivoSeguro(temporal);
+    }
+}
+
+function notificarEscritorio(titulo, cuerpo) {
+    if (!configuracion.notificaciones) return;
+
+    try {
+        const escritorio = global.autostatuesDesktop;
+        if (escritorio && typeof escritorio.notificar === 'function') {
+            escritorio.notificar(titulo, cuerpo);
+        }
+    } catch (error) {
+        console.error('No se pudo mostrar la notificación:', error.message);
+    }
+}
+
+function normalizarDiasSemana(valor) {
+    const dias = Array.isArray(valor) ? valor : [];
+    const normalizados = [...new Set(
+        dias.map(Number).filter(dia => DIAS_SEMANA_VALIDOS.has(dia))
+    )].sort((a, b) => a - b);
+
+    return normalizados.length ? normalizados : [0, 1, 2, 3, 4, 5, 6];
+}
+
+function cargarConfiguracion() {
+    if (!fs.existsSync(ARCHIVO_CONFIGURACION)) return;
+
+    try {
+        const datos = JSON.parse(fs.readFileSync(ARCHIVO_CONFIGURACION, 'utf8'));
+        configuracion = {
+            ...configuracion,
+            ...datos,
+            umbralFallosSeguridad: Math.min(
+                1,
+                Math.max(0.1, Number(datos.umbralFallosSeguridad) || 0.8)
+            ),
+            notificaciones: datos.notificaciones !== false,
+            lineasPorGrupoPredeterminado: Math.min(
+                50,
+                Math.max(1, Number(datos.lineasPorGrupoPredeterminado) || 10)
+            ),
+            intervaloMinutosPredeterminado: Math.min(
+                1440,
+                Math.max(0, Number(datos.intervaloMinutosPredeterminado) || 5)
+            )
+        };
+    } catch (error) {
+        console.error('No se pudo cargar la configuración:', error.message);
+    }
+}
+
+function guardarConfiguracion() {
+    guardarJSONAtomico(ARCHIVO_CONFIGURACION, configuracion);
+}
+
+function detectarTipoImagen(ruta) {
+    const descriptor = fs.openSync(ruta, 'r');
+    const cabecera = Buffer.alloc(12);
+
+    try {
+        fs.readSync(descriptor, cabecera, 0, cabecera.length, 0);
+    } finally {
+        fs.closeSync(descriptor);
+    }
+
+    if (cabecera[0] === 0xff && cabecera[1] === 0xd8 && cabecera[2] === 0xff) {
+        return { extension: '.jpg', mime: 'image/jpeg' };
+    }
+
+    if (
+        cabecera[0] === 0x89 && cabecera[1] === 0x50 &&
+        cabecera[2] === 0x4e && cabecera[3] === 0x47
+    ) {
+        return { extension: '.png', mime: 'image/png' };
+    }
+
+    return null;
+}
+
+function validarImagenSubida(archivo) {
+    if (!archivo?.path || !fs.existsSync(archivo.path)) {
+        return { error: 'No se recibió una imagen válida.' };
+    }
+
+    try {
+        const tipo = detectarTipoImagen(archivo.path);
+        if (!tipo) {
+            return { error: 'El archivo debe ser una imagen JPG o PNG real.' };
+        }
+        return { tipo };
+    } catch {
+        return { error: 'No se pudo verificar la imagen seleccionada.' };
+    }
 }
 
 function normalizarEtiqueta(valor) {
@@ -160,14 +282,14 @@ function guardarLineas() {
     const datos = Array.from(lineas.values()).map(linea => ({
         id: linea.id,
         nombre: linea.nombre,
-        etiqueta: normalizarEtiqueta(linea.etiqueta)
+        etiqueta: normalizarEtiqueta(linea.etiqueta),
+        ultimaConexion: linea.ultimaConexion || null,
+        ultimaPublicacion: linea.ultimaPublicacion || null,
+        ultimoError: linea.ultimoError || null,
+        fallosRecientes: Number(linea.fallosRecientes) || 0
     }));
 
-    fs.writeFileSync(
-        archivoLineas,
-        JSON.stringify(datos, null, 2),
-        'utf8'
-    );
+    guardarJSONAtomico(archivoLineas, datos);
 }
 
 function cargarLineasGuardadas() {
@@ -191,7 +313,11 @@ function cargarLineasGuardadas() {
                 iniciando: false,
                 eliminando: false,
                 temporizadorReconexion: null,
-                reconexionManualEnCurso: false
+                reconexionManualEnCurso: false,
+                ultimaConexion: datosLinea.ultimaConexion || null,
+                ultimaPublicacion: datosLinea.ultimaPublicacion || null,
+                ultimoError: datosLinea.ultimoError || null,
+                fallosRecientes: Number(datosLinea.fallosRecientes) || 0
             });
         }
 
@@ -202,11 +328,81 @@ function cargarLineasGuardadas() {
 }
 
 function guardarProgramaciones() {
-    fs.writeFileSync(
+    guardarJSONAtomico(
         archivoProgramaciones,
-        JSON.stringify(Array.from(programaciones.values()), null, 2),
-        'utf8'
+        Array.from(programaciones.values())
     );
+}
+
+function guardarHistorial() {
+    while (historialPublicaciones.length > MAXIMO_HISTORIAL) {
+        const eliminado = historialPublicaciones.pop();
+        eliminarArchivoSeguro(eliminado?.rutaImagen);
+    }
+
+    guardarJSONAtomico(archivoHistorial, historialPublicaciones);
+}
+
+function cargarHistorial() {
+    if (!fs.existsSync(archivoHistorial)) return;
+
+    try {
+        const datos = JSON.parse(fs.readFileSync(archivoHistorial, 'utf8'));
+        if (Array.isArray(datos)) {
+            historialPublicaciones.push(...datos.slice(0, MAXIMO_HISTORIAL));
+        }
+    } catch (error) {
+        console.error('No se pudo cargar el historial:', error.message);
+    }
+}
+
+function crearRegistroHistorial({
+    idsLineas,
+    rutaImagen,
+    texto,
+    lineasPorGrupo,
+    intervaloMinutos,
+    origen
+}) {
+    const id = crypto.randomUUID();
+    const tipo = detectarTipoImagen(rutaImagen) || { extension: '.jpg', mime: 'image/jpeg' };
+    const rutaCopia = path.join(CARPETA_IMAGENES_HISTORIAL, `${id}${tipo.extension}`);
+    fs.copyFileSync(rutaImagen, rutaCopia);
+
+    const registro = {
+        id,
+        fechaInicio: new Date().toISOString(),
+        fechaFin: null,
+        origen,
+        texto: String(texto || ''),
+        idsLineas: [...idsLineas],
+        lineasPorGrupo,
+        intervaloMinutos,
+        rutaImagen: rutaCopia,
+        mimeImagen: tipo.mime,
+        estado: 'ejecutando',
+        total: idsLineas.length,
+        correctas: 0,
+        fallidas: 0,
+        lineasCorrectas: [],
+        lineasFallidas: [],
+        error: null
+    };
+
+    historialPublicaciones.unshift(registro);
+    guardarHistorial();
+    return registro;
+}
+
+function finalizarRegistroHistorial(registro, estado, error = null) {
+    registro.fechaFin = new Date().toISOString();
+    registro.estado = estado;
+    registro.correctas = progresoPublicacion.correctas;
+    registro.fallidas = progresoPublicacion.fallidas;
+    registro.lineasCorrectas = [...progresoPublicacion.lineasCorrectas];
+    registro.lineasFallidas = [...progresoPublicacion.lineasFallidas];
+    registro.error = error;
+    guardarHistorial();
 }
 
 function obtenerExtensionImagen(nombreOriginal) {
@@ -293,6 +489,9 @@ async function iniciarWhatsApp(lineaId) {
                 linea.qr = null;
                 linea.estado = 'conectado';
                 linea.reconexionManualEnCurso = false;
+                linea.ultimaConexion = new Date().toISOString();
+                linea.ultimoError = null;
+                guardarLineas();
 
                 const numero = sock.user.id.split(':')[0];
                 linea.jid = `${numero}@s.whatsapp.net`;
@@ -309,12 +508,16 @@ async function iniciarWhatsApp(lineaId) {
 
                 if (codigoError === 401) {
                     linea.estado = 'sesion_cerrada';
+                    linea.ultimoError = 'La sesión de WhatsApp fue cerrada.';
                     fs.rmSync(carpetaSesion, { recursive: true, force: true });
                 } else {
                     // La linea permanece marcada como desconectada hasta que
                     // una nueva conexion se abra correctamente.
                     linea.estado = 'desconectado';
+                    linea.ultimoError = 'La línea se desconectó y está intentando reconectar.';
                 }
+
+                guardarLineas();
 
                 if (linea.eliminando || !lineas.has(lineaId)) return;
 
@@ -331,6 +534,8 @@ async function iniciarWhatsApp(lineaId) {
         linea.iniciando = false;
         linea.reconexionManualEnCurso = false;
         linea.estado = 'error';
+        linea.ultimoError = error.message || 'No se pudo iniciar la línea.';
+        guardarLineas();
         console.error(`Error iniciando ${linea.nombre}:`, error);
     }
 }
@@ -365,6 +570,14 @@ async function ejecutarPublicacion({
 
     const imagenLeida = fs.readFileSync(rutaImagen);
     const textoLimpio = String(texto || '').trim();
+    const registroHistorial = crearRegistroHistorial({
+        idsLineas,
+        rutaImagen,
+        texto: textoLimpio,
+        lineasPorGrupo,
+        intervaloMinutos,
+        origen
+    });
     const { correctas: lineasDisponibles, noDisponibles } =
         obtenerLineasDisponibles(idsLineas);
 
@@ -440,6 +653,9 @@ async function ejecutarPublicacion({
                             nombre: linea.nombre,
                             numero: linea.jid ? linea.jid.split('@')[0] : null
                         });
+                        linea.ultimaPublicacion = new Date().toISOString();
+                        linea.ultimoError = null;
+                        linea.fallosRecientes = 0;
 
                         return true;
                     } catch (error) {
@@ -449,6 +665,8 @@ async function ejecutarPublicacion({
                             nombre: linea.nombre,
                             error: error.message || 'Error desconocido'
                         });
+                        linea.ultimoError = error.message || 'Error al publicar.';
+                        linea.fallosRecientes = (Number(linea.fallosRecientes) || 0) + 1;
 
                         console.error(`Error publicando en ${linea.nombre}:`, error);
                         return false;
@@ -457,6 +675,8 @@ async function ejecutarPublicacion({
                     }
                 })
             );
+
+            guardarLineas();
 
             const fallosGrupo = resultadosGrupo.filter(resultado => !resultado).length;
             const porcentajeFallos = grupo.length > 0
@@ -472,7 +692,10 @@ async function ejecutarPublicacion({
 
             let reanudadaTrasSeguridad = false;
 
-            if (quedanGrupos && porcentajeFallos >= UMBRAL_FALLOS_SEGURIDAD) {
+            if (
+                quedanGrupos &&
+                porcentajeFallos >= configuracion.umbralFallosSeguridad
+            ) {
                 progresoPublicacion.estado = 'detenido_seguridad';
                 progresoPublicacion.seguridadActiva = true;
                 progresoPublicacion.proximoGrupoSegundos = 0;
@@ -482,6 +705,10 @@ async function ejecutarPublicacion({
                     `${progresoPublicacion.grupoActual}.`;
                 progresoPublicacion.mensaje =
                     'Publicación detenida por seguridad. Corroborá el problema antes de reanudar.';
+                notificarEscritorio(
+                    'Publicación detenida',
+                    progresoPublicacion.mensajeSeguridad
+                );
 
                 const decision = await esperarDecisionSeguridad();
 
@@ -521,6 +748,8 @@ async function ejecutarPublicacion({
         progresoPublicacion.mensaje =
             `Publicación completada: ${progresoPublicacion.correctas} correctas ` +
             `y ${progresoPublicacion.fallidas} fallidas.`;
+        finalizarRegistroHistorial(registroHistorial, 'completado');
+        notificarEscritorio('Publicación finalizada', progresoPublicacion.mensaje);
 
         return {
             correctas: progresoPublicacion.correctas,
@@ -538,6 +767,12 @@ async function ejecutarPublicacion({
         }
 
         progresoPublicacion.mensaje = error.message;
+        finalizarRegistroHistorial(
+            registroHistorial,
+            error.codigo === 'CANCELADA_SEGURIDAD' ? 'cancelado' : 'error',
+            error.message
+        );
+        notificarEscritorio('Error en la publicación', error.message);
         throw error;
     } finally {
         controlSeguridadPublicacion = {
@@ -571,12 +806,17 @@ function cancelarTrabajoProgramado(id) {
 function programarTrabajo(programacion) {
     cancelarTrabajoProgramado(programacion.id);
 
+    if (programacion.activa === false) {
+        return;
+    }
+
     if (!horaValida(programacion.hora)) {
         throw new Error('La hora programada no es válida.');
     }
 
     const [hora, minuto] = programacion.hora.split(':').map(Number);
     const regla = new schedule.RecurrenceRule();
+    regla.dayOfWeek = normalizarDiasSemana(programacion.diasSemana);
     regla.hour = hora;
     regla.minute = minuto;
     regla.second = 0;
@@ -586,7 +826,7 @@ function programarTrabajo(programacion) {
     });
 
     if (!trabajo) {
-        throw new Error('No se pudo crear la programación diaria.');
+        throw new Error('No se pudo crear la programación.');
     }
 
     trabajosProgramados.set(programacion.id, trabajo);
@@ -619,7 +859,8 @@ function yaSeEjecutoHoy(programacion) {
 }
 
 function recuperarEjecucionReciente(programacion) {
-    if (yaSeEjecutoHoy(programacion)) return;
+    if (programacion.activa === false || yaSeEjecutoHoy(programacion)) return;
+    if (!normalizarDiasSemana(programacion.diasSemana).includes(new Date().getDay())) return;
 
     const [hora, minuto] = programacion.hora.split(':').map(Number);
     const ahora = new Date();
@@ -636,7 +877,7 @@ function recuperarEjecucionReciente(programacion) {
 async function ejecutarProgramacion(id) {
     const programacion = programaciones.get(id);
 
-    if (!programacion) return;
+    if (!programacion || programacion.activa === false) return;
     if (['en_cola', 'ejecutando'].includes(programacion.estado)) return;
 
     programacion.estado = 'en_cola';
@@ -657,7 +898,7 @@ async function ejecutarProgramacion(id) {
             origen: `programación diaria ${programacion.id}`
         });
 
-        programacion.estado = 'programado';
+        programacion.estado = programacion.activa === false ? 'pausado' : 'programado';
         programacion.ultimaEjecucion = new Date().toISOString();
         programacion.ultimoResultado = {
             correctas: resultado.correctas,
@@ -667,7 +908,7 @@ async function ejecutarProgramacion(id) {
             `Última ejecución: ${resultado.correctas} correctas y ` +
             `${resultado.fallidas} fallidas.`;
     } catch (error) {
-        programacion.estado = 'programado';
+        programacion.estado = programacion.activa === false ? 'pausado' : 'programado';
         programacion.ultimaEjecucion = new Date().toISOString();
         programacion.ultimoResultado = {
             correctas: 0,
@@ -712,7 +953,9 @@ function cargarProgramaciones() {
             if (!horaValida(item.hora)) continue;
 
             item.texto = String(item.texto || '');
-            item.estado = 'programado';
+            item.activa = item.activa !== false;
+            item.diasSemana = normalizarDiasSemana(item.diasSemana);
+            item.estado = item.activa ? 'programado' : 'pausado';
             item.ultimaEjecucion = item.ultimaEjecucion || item.ejecutadoEn || null;
             item.ultimoResultado = item.ultimoResultado || null;
             item.actualizadoEn = item.actualizadoEn || item.creadoEn || new Date().toISOString();
@@ -734,8 +977,10 @@ function cargarProgramaciones() {
             }
 
             programaciones.set(item.id, item);
-            programarTrabajo(item);
-            recuperarEjecucionReciente(item);
+            if (item.activa) {
+                programarTrabajo(item);
+                recuperarEjecucionReciente(item);
+            }
         }
 
         if (huboMigracion) guardarProgramaciones();
@@ -747,6 +992,14 @@ function cargarProgramaciones() {
 function validarConfiguracionComun(req, rutaTemporalFoto, imagenObligatoria = true) {
     if (imagenObligatoria && !req.file) {
         return { error: 'Tenés que seleccionar una imagen.' };
+    }
+
+    if (req.file) {
+        const validacionImagen = validarImagenSubida(req.file);
+        if (validacionImagen.error) {
+            eliminarArchivoSeguro(rutaTemporalFoto);
+            return { error: validacionImagen.error };
+        }
     }
 
     let idsLineas;
@@ -819,7 +1072,11 @@ app.post('/lineas', (req, res) => {
         iniciando: false,
         eliminando: false,
         temporizadorReconexion: null,
-        reconexionManualEnCurso: false
+        reconexionManualEnCurso: false,
+        ultimaConexion: null,
+        ultimaPublicacion: null,
+        ultimoError: null,
+        fallosRecientes: 0
     });
 
     guardarLineas();
@@ -839,7 +1096,11 @@ app.get('/estado', (req, res) => {
         etiqueta: normalizarEtiqueta(linea.etiqueta),
         estado: linea.estado,
         qr: linea.qr,
-        numero: linea.jid ? linea.jid.split('@')[0] : null
+        numero: linea.jid ? linea.jid.split('@')[0] : null,
+        ultimaConexion: linea.ultimaConexion || null,
+        ultimaPublicacion: linea.ultimaPublicacion || null,
+        ultimoError: linea.ultimoError || null,
+        fallosRecientes: Number(linea.fallosRecientes) || 0
     }));
 
     res.json({ lineas: resultado });
@@ -1009,6 +1270,14 @@ app.post('/programar', upload.single('imagen'), (req, res) => {
     }
 
     const hora = String(req.body.hora || '').trim();
+    let diasSemana;
+
+    try {
+        diasSemana = normalizarDiasSemana(JSON.parse(req.body.diasSemana || '[]'));
+    } catch {
+        eliminarArchivoSeguro(rutaTemporalFoto);
+        return res.status(400).json({ error: 'Los días seleccionados no son válidos.' });
+    }
 
     if (!horaValida(hora)) {
         eliminarArchivoSeguro(rutaTemporalFoto);
@@ -1019,7 +1288,8 @@ app.post('/programar', upload.single('imagen'), (req, res) => {
 
     const { idsLineas, lineasPorGrupo, intervaloMinutos } = validacion;
     const id = crypto.randomUUID();
-    const extension = obtenerExtensionImagen(req.file.originalname);
+    const extension = detectarTipoImagen(rutaTemporalFoto)?.extension ||
+        obtenerExtensionImagen(req.file.originalname);
     const rutaImagen = path.join(CARPETA_IMAGENES_PROGRAMADAS, `${id}${extension}`);
 
     moverArchivo(rutaTemporalFoto, rutaImagen);
@@ -1027,6 +1297,8 @@ app.post('/programar', upload.single('imagen'), (req, res) => {
     const programacion = {
         id,
         hora,
+        diasSemana,
+        activa: true,
         texto: String(req.body.texto || ''),
         idsLineas,
         lineasPorGrupo,
@@ -1034,7 +1306,7 @@ app.post('/programar', upload.single('imagen'), (req, res) => {
         rutaImagen,
         nombreArchivo: req.file.originalname,
         estado: 'programado',
-        mensaje: 'Esperando la próxima ejecución diaria.',
+        mensaje: 'Esperando la próxima ejecución programada.',
         creadoEn: new Date().toISOString(),
         actualizadoEn: new Date().toISOString(),
         ultimaEjecucion: null,
@@ -1047,7 +1319,7 @@ app.post('/programar', upload.single('imagen'), (req, res) => {
         guardarProgramaciones();
 
         res.status(201).json({
-            mensaje: '✅ Estado diario programado correctamente.',
+            mensaje: 'Estado programado correctamente.',
             programacion: {
                 id,
                 hora,
@@ -1083,7 +1355,29 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
         });
     }
 
+    if (req.file) {
+        const validacionImagen = validarImagenSubida(req.file);
+        if (validacionImagen.error) {
+            eliminarArchivoSeguro(rutaTemporalFoto);
+            return res.status(400).json({ error: validacionImagen.error });
+        }
+    }
+
     const hora = String(req.body.hora || programacion.hora).trim();
+    let diasSemana = programacion.diasSemana;
+
+    if (req.body.diasSemana !== undefined) {
+        try {
+            diasSemana = normalizarDiasSemana(JSON.parse(req.body.diasSemana));
+        } catch {
+            eliminarArchivoSeguro(rutaTemporalFoto);
+            return res.status(400).json({ error: 'Los días seleccionados no son válidos.' });
+        }
+    }
+
+    const activa = req.body.activa === undefined
+        ? programacion.activa !== false
+        : String(req.body.activa) !== 'false';
 
     if (!horaValida(hora)) {
         eliminarArchivoSeguro(rutaTemporalFoto);
@@ -1094,7 +1388,8 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
     let nuevoNombreArchivo = programacion.nombreArchivo;
 
     if (req.file) {
-        const extension = obtenerExtensionImagen(req.file.originalname);
+        const extension = detectarTipoImagen(rutaTemporalFoto)?.extension ||
+            obtenerExtensionImagen(req.file.originalname);
         nuevaRutaImagen = path.join(
             CARPETA_IMAGENES_PROGRAMADAS,
             `${id}-${Date.now()}${extension}`
@@ -1105,19 +1400,29 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
 
     const rutaImagenAnterior = programacion.rutaImagen;
     const horaAnterior = programacion.hora;
+    const diasAnteriores = [...normalizarDiasSemana(programacion.diasSemana)];
+    const activaAnterior = programacion.activa !== false;
 
     try {
         programacion.hora = hora;
+        programacion.diasSemana = diasSemana;
+        programacion.activa = activa;
         programacion.texto = req.body.texto !== undefined
             ? String(req.body.texto)
             : programacion.texto;
         programacion.rutaImagen = nuevaRutaImagen;
         programacion.nombreArchivo = nuevoNombreArchivo;
-        programacion.estado = 'programado';
-        programacion.mensaje = 'Programación actualizada. Esperando la próxima hora.';
+        programacion.estado = activa ? 'programado' : 'pausado';
+        programacion.mensaje = activa
+            ? 'Programación actualizada. Esperando la próxima ejecución.'
+            : 'Programación pausada.';
         programacion.actualizadoEn = new Date().toISOString();
 
-        if (horaAnterior !== hora) {
+        if (
+            horaAnterior !== hora ||
+            JSON.stringify(diasAnteriores) !== JSON.stringify(diasSemana) ||
+            activaAnterior !== activa
+        ) {
             programarTrabajo(programacion);
         }
 
@@ -1128,7 +1433,7 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
         }
 
         res.json({
-            mensaje: '✅ Programación actualizada correctamente.'
+            mensaje: 'Programación actualizada correctamente.'
         });
     } catch (error) {
         if (req.file && nuevaRutaImagen !== rutaImagenAnterior) {
@@ -1137,6 +1442,8 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
 
         programacion.rutaImagen = rutaImagenAnterior;
         programacion.hora = horaAnterior;
+        programacion.diasSemana = diasAnteriores;
+        programacion.activa = activaAnterior;
         programarTrabajo(programacion);
 
         res.status(500).json({
@@ -1150,6 +1457,8 @@ app.get('/programaciones', (req, res) => {
         .map(item => ({
             id: item.id,
             hora: item.hora,
+            diasSemana: normalizarDiasSemana(item.diasSemana),
+            activa: item.activa !== false,
             texto: item.texto,
             cantidadLineas: item.idsLineas.length,
             nombresLineas: item.idsLineas.map(id =>
@@ -1169,6 +1478,100 @@ app.get('/programaciones', (req, res) => {
         .sort((a, b) => a.hora.localeCompare(b.hora));
 
     res.json({ programaciones: resultado });
+});
+
+
+app.patch('/programaciones/:id/estado', (req, res) => {
+    const programacion = programaciones.get(req.params.id);
+
+    if (!programacion) {
+        return res.status(404).json({ error: 'La programación no existe.' });
+    }
+
+    if (['en_cola', 'ejecutando'].includes(programacion.estado)) {
+        return res.status(409).json({
+            error: 'No se puede pausar mientras la programación se está ejecutando.'
+        });
+    }
+
+    programacion.activa = Boolean(req.body.activa);
+    programacion.estado = programacion.activa ? 'programado' : 'pausado';
+    programacion.mensaje = programacion.activa
+        ? 'Programación reanudada.'
+        : 'Programación pausada.';
+    programacion.actualizadoEn = new Date().toISOString();
+    programarTrabajo(programacion);
+    guardarProgramaciones();
+
+    res.json({
+        mensaje: programacion.mensaje,
+        activa: programacion.activa
+    });
+});
+
+app.post('/programaciones/:id/ejecutar', (req, res) => {
+    const programacion = programaciones.get(req.params.id);
+
+    if (!programacion) {
+        return res.status(404).json({ error: 'La programación no existe.' });
+    }
+
+    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+        return res.status(409).json({
+            error: 'Ya existe una publicación en curso o en espera.'
+        });
+    }
+
+    const estabaActiva = programacion.activa !== false;
+    programacion.activa = true;
+    res.status(202).json({ mensaje: 'La programación fue enviada a la cola.' });
+
+    ejecutarProgramacion(programacion.id)
+        .catch(error => console.error('No se pudo ejecutar la programación:', error))
+        .finally(() => {
+            programacion.activa = estabaActiva;
+            programacion.estado = estabaActiva ? 'programado' : 'pausado';
+            if (!estabaActiva) cancelarTrabajoProgramado(programacion.id);
+            guardarProgramaciones();
+        });
+});
+
+app.post('/programaciones/:id/duplicar', (req, res) => {
+    const original = programaciones.get(req.params.id);
+
+    if (!original) {
+        return res.status(404).json({ error: 'La programación no existe.' });
+    }
+
+    if (!fs.existsSync(original.rutaImagen)) {
+        return res.status(409).json({ error: 'La imagen original ya no existe.' });
+    }
+
+    const id = crypto.randomUUID();
+    const extension = path.extname(original.rutaImagen) || '.jpg';
+    const rutaImagen = path.join(CARPETA_IMAGENES_PROGRAMADAS, `${id}${extension}`);
+    fs.copyFileSync(original.rutaImagen, rutaImagen);
+
+    const copia = {
+        ...original,
+        id,
+        rutaImagen,
+        activa: false,
+        estado: 'pausado',
+        mensaje: 'Copia creada en pausa. Editala y activala cuando quieras.',
+        creadoEn: new Date().toISOString(),
+        actualizadoEn: new Date().toISOString(),
+        ultimaEjecucion: null,
+        ultimoResultado: null
+    };
+
+    programaciones.set(id, copia);
+    guardarProgramaciones();
+
+    res.status(201).json({
+        mensaje: 'Programación duplicada en pausa.',
+        id
+    });
 });
 
 app.get('/programaciones/:id/imagen', (req, res) => {
@@ -1203,6 +1606,184 @@ app.delete('/programaciones/:id', (req, res) => {
     res.json({ mensaje: 'Programación eliminada correctamente.' });
 });
 
+
+
+app.get('/resumen', (req, res) => {
+    const ahora = new Date();
+    const inicioHoy = new Date(
+        ahora.getFullYear(),
+        ahora.getMonth(),
+        ahora.getDate()
+    ).getTime();
+
+    const historialHoy = historialPublicaciones.filter(item => {
+        const fecha = new Date(item.fechaInicio).getTime();
+        return Number.isFinite(fecha) && fecha >= inicioHoy;
+    });
+
+    const correctasHoy = historialHoy.reduce(
+        (total, item) => total + (Number(item.correctas) || 0),
+        0
+    );
+    const procesadasHoy = historialHoy.reduce(
+        (total, item) => total + (Number(item.correctas) || 0) + (Number(item.fallidas) || 0),
+        0
+    );
+
+    const proximas = Array.from(programaciones.values())
+        .filter(item => item.activa !== false)
+        .map(item => ({
+            id: item.id,
+            hora: item.hora,
+            proximaEjecucion: proximaEjecucionISO(item.id)
+        }))
+        .filter(item => item.proximaEjecucion)
+        .sort((a, b) => new Date(a.proximaEjecucion) - new Date(b.proximaEjecucion));
+
+    res.json({
+        lineas: {
+            total: lineas.size,
+            conectadas: Array.from(lineas.values()).filter(linea => linea.estado === 'conectado').length,
+            conProblemas: Array.from(lineas.values()).filter(linea => linea.estado !== 'conectado').length
+        },
+        publicacionesHoy: historialHoy.length,
+        correctasHoy,
+        fallidasHoy: Math.max(0, procesadasHoy - correctasHoy),
+        porcentajeExitoHoy: procesadasHoy
+            ? Math.round((correctasHoy / procesadasHoy) * 100)
+            : 0,
+        proximaProgramacion: proximas[0] || null,
+        publicacionActiva: progresoPublicacion.activo,
+        progreso: progresoPublicacion
+    });
+});
+
+app.get('/historial', (req, res) => {
+    const limite = Math.min(200, Math.max(1, Number(req.query.limite) || 100));
+    res.json({
+        historial: historialPublicaciones.slice(0, limite).map(item => ({
+            ...item,
+            rutaImagen: undefined
+        }))
+    });
+});
+
+app.get('/historial/:id/imagen', (req, res) => {
+    const registro = historialPublicaciones.find(item => item.id === req.params.id);
+
+    if (!registro || !fs.existsSync(registro.rutaImagen)) {
+        return res.status(404).send('Imagen no encontrada.');
+    }
+
+    res.type(registro.mimeImagen || 'image/jpeg');
+    res.sendFile(path.resolve(registro.rutaImagen));
+});
+
+app.post('/historial/:id/reintentar-fallidas', (req, res) => {
+    const registro = historialPublicaciones.find(item => item.id === req.params.id);
+
+    if (!registro) {
+        return res.status(404).json({ error: 'El registro no existe.' });
+    }
+
+    const idsLineas = [...new Set(
+        (registro.lineasFallidas || []).map(linea => linea.id).filter(Boolean)
+    )];
+
+    if (!idsLineas.length) {
+        return res.status(409).json({ error: 'Este registro no tiene líneas fallidas.' });
+    }
+
+    if (!fs.existsSync(registro.rutaImagen)) {
+        return res.status(409).json({ error: 'La imagen del historial ya no existe.' });
+    }
+
+    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+        return res.status(409).json({
+            error: 'Ya existe una publicación en curso o en espera.'
+        });
+    }
+
+    res.status(202).json({
+        mensaje: `Reintento iniciado para ${idsLineas.length} línea(s).`
+    });
+
+    encolarPublicacion({
+        idsLineas,
+        rutaImagen: registro.rutaImagen,
+        texto: registro.texto,
+        lineasPorGrupo: Math.min(registro.lineasPorGrupo || 10, idsLineas.length),
+        intervaloMinutos: registro.intervaloMinutos || 0,
+        origen: `reintento del historial ${registro.id}`
+    }).catch(error => {
+        console.error('Falló el reintento del historial:', error);
+    });
+});
+
+app.get('/configuracion', (req, res) => {
+    res.json(configuracion);
+});
+
+app.put('/configuracion', (req, res) => {
+    const umbral = Number(req.body.umbralFallosSeguridad);
+    const lineasPorGrupo = Number(req.body.lineasPorGrupoPredeterminado);
+    const intervalo = Number(req.body.intervaloMinutosPredeterminado);
+
+    if (!Number.isFinite(umbral) || umbral < 0.1 || umbral > 1) {
+        return res.status(400).json({
+            error: 'El corte de seguridad debe estar entre 10% y 100%.'
+        });
+    }
+
+    if (!Number.isInteger(lineasPorGrupo) || lineasPorGrupo < 1 || lineasPorGrupo > 50) {
+        return res.status(400).json({
+            error: 'Las líneas por grupo deben estar entre 1 y 50.'
+        });
+    }
+
+    if (!Number.isFinite(intervalo) || intervalo < 0 || intervalo > 1440) {
+        return res.status(400).json({
+            error: 'El intervalo debe estar entre 0 y 1440 minutos.'
+        });
+    }
+
+    configuracion = {
+        umbralFallosSeguridad: umbral,
+        notificaciones: req.body.notificaciones !== false,
+        lineasPorGrupoPredeterminado: lineasPorGrupo,
+        intervaloMinutosPredeterminado: intervalo
+    };
+    guardarConfiguracion();
+
+    res.json({ mensaje: 'Configuración guardada.', configuracion });
+});
+
+app.post('/lineas/reconectar-todas', (req, res) => {
+    let cantidad = 0;
+
+    for (const linea of lineas.values()) {
+        if (linea.estado === 'conectado' || linea.eliminando || linea.reconexionManualEnCurso) {
+            continue;
+        }
+
+        linea.reconexionManualEnCurso = true;
+        linea.estado = 'reconectando';
+        cantidad += 1;
+
+        setTimeout(() => {
+            const actual = lineas.get(linea.id);
+            if (!actual || actual.eliminando) return;
+            actual.reconexionManualEnCurso = false;
+            iniciarWhatsApp(actual.id);
+        }, 250);
+    }
+
+    res.status(202).json({
+        mensaje: cantidad
+            ? `Reconexión iniciada para ${cantidad} línea(s).`
+            : 'No hay líneas pendientes de reconexión.'
+    });
+});
 
 app.patch('/lineas/:id/etiqueta', (req, res) => {
     const id = req.params.id;
@@ -1335,6 +1916,8 @@ app.delete('/lineas/:id', async (req, res) => {
 app.listen(3000, '127.0.0.1', () => {
     console.log('AutoStatues funcionando en http://127.0.0.1:3000');
 
+    cargarConfiguracion();
+    cargarHistorial();
     cargarLineasGuardadas();
 
     for (const linea of lineas.values()) {

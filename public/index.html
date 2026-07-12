@@ -2788,6 +2788,239 @@
         }
     </style>
 
+
+    <style id="features-1-0-3">
+        .dashboard-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 14px;
+        }
+        .summary-card {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 12px;
+            align-items: center;
+            min-height: 106px;
+            padding: 17px;
+            border: 1px solid rgba(255,255,255,.06);
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(18,22,38,.98), rgba(13,17,30,.96));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .summary-card.wide { grid-column: span 2; }
+        .summary-icon {
+            grid-row: span 2;
+            display: grid;
+            place-items: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 13px;
+            color: #a9fff0;
+            background: rgba(98,245,197,.10);
+            border: 1px solid rgba(98,245,197,.14);
+        }
+        .summary-icon.warning { color: #ffd895; background: rgba(255,200,87,.10); border-color: rgba(255,200,87,.14); }
+        .summary-card > span:not(.summary-icon) { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+        .summary-card strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 25px; letter-spacing: -.7px; white-space: nowrap; }
+        .summary-card.wide strong { font-size: 16px; }
+        .activity-banner {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 22px;
+            padding: 15px 17px;
+            border: 1px solid rgba(255,255,255,.06);
+            border-radius: 18px;
+            background: rgba(255,255,255,.025);
+        }
+        .activity-banner.active { border-color: rgba(98,245,197,.18); background: rgba(98,245,197,.045); }
+        .activity-icon { display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:rgba(124,114,255,.12);color:#c2bcff; }
+        .activity-banner p { margin:4px 0 0;color:var(--muted);font-size:12px; }
+        .dashboard-program-heading { margin-top: 0; }
+        .program-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .program-actions .btn-neutral { background: rgba(255,255,255,.055); border:1px solid rgba(255,255,255,.07); color:#dce4f3; }
+        .program-actions .btn-pause { background: rgba(255,200,87,.12); border:1px solid rgba(255,200,87,.14); color:#ffd991; }
+        .program-actions .btn-run { background: rgba(98,245,197,.12); border:1px solid rgba(98,245,197,.16); color:#a7ffe1; }
+        .program-actions .btn-neutral:hover,.program-actions .btn-pause:hover,.program-actions .btn-run:hover { filter:brightness(1.1); }
+        .weekday-picker { display:grid;grid-template-columns:repeat(7,1fr);gap:7px; }
+        .weekday-picker label { position:relative;cursor:pointer; }
+        .weekday-picker input { position:absolute;opacity:0;pointer-events:none; }
+        .weekday-picker span { display:grid;place-items:center;min-height:38px;border:1px solid rgba(255,255,255,.07);border-radius:11px;background:rgba(255,255,255,.035);color:#9da9c0;font-size:11px;font-weight:800; }
+        .weekday-picker input:checked + span { border-color:rgba(124,114,255,.28);background:linear-gradient(135deg,rgba(124,114,255,.24),rgba(98,245,197,.10));color:white; }
+        .history-list { display:grid;gap:12px; }
+        .history-item { display:grid;grid-template-columns:100px minmax(0,1fr) auto;gap:16px;align-items:center;padding:13px;border:1px solid rgba(255,255,255,.06);border-radius:18px;background:rgba(255,255,255,.025); }
+        .history-thumb { width:100px;height:100px;object-fit:cover;border-radius:13px;background:#080c16; }
+        .history-main { min-width:0;display:grid;gap:8px; }
+        .history-title { display:flex;align-items:center;gap:8px;flex-wrap:wrap; }
+        .history-title strong { font-size:15px; }
+        .history-meta { display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:11px; }
+        .history-status { display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:999px;background:rgba(255,255,255,.05);font-size:10px;font-weight:800; }
+        .history-status.success { color:#a7ffe1;background:rgba(98,245,197,.09); }
+        .history-status.error { color:#ffacb7;background:rgba(255,95,115,.10); }
+        .history-results { display:flex;gap:12px;color:#c7d0e1;font-size:12px; }
+        .history-actions { display:grid;gap:8px;min-width:148px; }
+        .settings-grid { display:grid;grid-template-columns:minmax(0,760px); }
+        .range-row { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center; }
+        .range-row input { width:100%;accent-color:#7c72ff; }
+        .toggle-field { display:flex;align-items:center;gap:12px;cursor:pointer;padding:12px 0; }
+        .toggle-field > input { position:absolute;opacity:0; }
+        .toggle-control { position:relative;flex:0 0 auto;width:44px;height:25px;border-radius:999px;background:rgba(255,255,255,.10);transition:.2s; }
+        .toggle-control::after { content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:white;transition:.2s; }
+        .toggle-field input:checked + .toggle-control { background:linear-gradient(90deg,#7c72ff,#62f5c5); }
+        .toggle-field input:checked + .toggle-control::after { transform:translateX(19px); }
+        .toggle-field strong,.toggle-field small { display:block; }
+        .toggle-field small { margin-top:3px;color:var(--muted);font-size:11px; }
+        .settings-actions { display:flex;justify-content:flex-end;gap:10px;margin-top:18px; }
+        .line-health { display:grid;gap:4px;margin-top:6px;color:#71819a;font-size:11px; }
+        @media (max-width: 1100px) { .dashboard-summary-grid { grid-template-columns:repeat(2,1fr); } .summary-card.wide { grid-column:span 2; } }
+        @media (max-width: 760px) {
+            .nav { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+            .nav-button { font-size: 10px; padding-inline: 4px; }
+            .dashboard-summary-grid { grid-template-columns:1fr 1fr; }
+            .history-item { grid-template-columns:72px minmax(0,1fr); }
+            .history-thumb { width:72px;height:88px; }
+            .history-actions { grid-column:1/-1;grid-template-columns:1fr; }
+            .weekday-picker { grid-template-columns:repeat(4,1fr); }
+            .program-actions { grid-template-columns:1fr 1fr; }
+        }
+        @media (max-width: 520px) { .dashboard-summary-grid { grid-template-columns:1fr; } .summary-card.wide { grid-column:auto; } .settings-actions { flex-direction:column; } }
+    </style>
+
+
+
+    <style id="create-modal-layout-fix">
+        /* Corrección del modal de creación: encabezado siempre visible y
+           separación consistente entre el título de imagen y el selector. */
+        #modal-crear {
+            overflow-y: auto;
+            align-items: flex-start;
+            padding: 12px;
+        }
+
+        #modal-crear .create-modal-card {
+            width: min(1180px, 100%);
+            max-height: calc(100dvh - 24px);
+            margin: auto;
+            overflow: hidden;
+        }
+
+        #modal-crear .modal-header {
+            flex: 0 0 auto;
+            top: 0;
+        }
+
+        #modal-crear .create-modal-body,
+        #modal-crear #formulario {
+            min-height: 0;
+        }
+
+        #modal-crear .create-layout {
+            min-height: 0;
+            height: min(700px, calc(100dvh - 98px));
+        }
+
+        #modal-crear .create-image-column {
+            min-height: 0;
+            padding: 20px;
+        }
+
+        #modal-crear .create-image-column .field {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            gap: 12px;
+            min-height: 0;
+            flex: 1 1 auto;
+        }
+
+        #modal-crear .create-image-column .field > .label-with-icon {
+            width: fit-content;
+            margin: 0;
+            line-height: 1.25;
+            align-self: start;
+        }
+
+        #modal-crear .create-image-column .upload-zone {
+            width: 100%;
+            height: auto;
+            min-height: 0;
+            margin: 0;
+            align-self: stretch;
+        }
+
+        #modal-crear .create-info-column {
+            max-height: none;
+            min-height: 0;
+        }
+
+        @media (max-width: 680px) {
+            #modal-crear {
+                padding: 8px;
+            }
+
+            #modal-crear .create-modal-card {
+                width: 100%;
+                max-height: calc(100dvh - 16px);
+                border-radius: 18px;
+                overflow-y: auto;
+            }
+
+            #modal-crear .create-layout {
+                display: block;
+                height: auto;
+                min-height: 0;
+            }
+
+            #modal-crear .create-image-column {
+                padding: 18px;
+            }
+
+            #modal-crear .create-image-column .field {
+                display: grid;
+                grid-template-rows: auto auto;
+                gap: 12px;
+                min-height: 0;
+                flex: none;
+            }
+
+            #modal-crear .create-image-column .upload-zone {
+                height: min(420px, 48dvh);
+                min-height: 260px;
+                max-height: 420px;
+            }
+
+            #modal-crear .create-info-column {
+                padding: 18px;
+                overflow: visible;
+            }
+        }
+
+        @media (max-height: 560px) {
+            #modal-crear {
+                align-items: flex-start;
+                padding: 6px;
+            }
+
+            #modal-crear .create-modal-card {
+                max-height: calc(100dvh - 12px);
+                margin: 0 auto;
+            }
+
+            #modal-crear .modal-header {
+                padding-block: 12px;
+            }
+
+            #modal-crear .create-layout {
+                height: auto;
+            }
+
+            #modal-crear .create-image-column .upload-zone {
+                min-height: 230px;
+                height: 230px;
+            }
+        }
+    </style>
+
 </head>
 <body>
 
@@ -2831,6 +3064,11 @@
         <symbol id="i-phone-call" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3.1-8.6A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.3 1.8.6 2.6a2 2 0 0 1-.4 2.1L8 9.7a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.8.3 1.7.5 2.6.6a2 2 0 0 1 2 2.3z"/><path d="M15 5h4v4M14 10l5-5"/></symbol>
         <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></symbol>
         <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></symbol>
+        <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+        <symbol id="i-percent" viewBox="0 0 24 24"><path d="m19 5-14 14"/><circle cx="7" cy="7" r="2"/><circle cx="17" cy="17" r="2"/></symbol>
+        <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
     </svg>
 
     <div class="app-shell">
@@ -2855,6 +3093,14 @@
                 <button class="nav-button" data-section="lineas">
                     <svg class="icon"><use href="#i-lines"></use></svg>
                     <span>Líneas <span class="nav-count" id="nav-line-count">0</span></span>
+                </button>
+                <button class="nav-button" data-section="historial">
+                    <svg class="icon"><use href="#i-history"></use></svg>
+                    <span>Historial</span>
+                </button>
+                <button class="nav-button" data-section="configuracion">
+                    <svg class="icon"><use href="#i-settings"></use></svg>
+                    <span>Configuración</span>
                 </button>
             </nav>
 
@@ -2888,7 +3134,7 @@
                 </button>
             </div>
 
-            <div class="sidebar-version">AutoStatues Pro</div>
+            <div class="sidebar-version">AutoStatues 1.0.3</div>
         </aside>
 
         <main class="main">
@@ -2908,6 +3154,49 @@
             </header>
 
             <section id="section-dashboard" class="section active">
+                <div class="dashboard-summary-grid">
+                    <article class="summary-card">
+                        <span class="summary-icon"><svg class="icon"><use href="#i-check-circle"></use></svg></span>
+                        <span>Líneas conectadas</span>
+                        <strong id="resumen-lineas-conectadas">0</strong>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-icon warning"><svg class="icon"><use href="#i-alert"></use></svg></span>
+                        <span>Con problemas</span>
+                        <strong id="resumen-lineas-problemas">0</strong>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-icon"><svg class="icon"><use href="#i-upload"></use></svg></span>
+                        <span>Publicaciones hoy</span>
+                        <strong id="resumen-publicaciones-hoy">0</strong>
+                    </article>
+                    <article class="summary-card">
+                        <span class="summary-icon"><svg class="icon"><use href="#i-percent"></use></svg></span>
+                        <span>Éxito de hoy</span>
+                        <strong id="resumen-exito-hoy">0%</strong>
+                    </article>
+                    <article class="summary-card wide">
+                        <span class="summary-icon"><svg class="icon"><use href="#i-calendar"></use></svg></span>
+                        <span>Próxima programación</span>
+                        <strong id="resumen-proxima">Sin programaciones activas</strong>
+                    </article>
+                </div>
+
+                <div id="resumen-actividad" class="activity-banner">
+                    <span class="activity-icon"><svg class="icon"><use href="#i-activity"></use></svg></span>
+                    <div>
+                        <strong id="resumen-actividad-titulo">Sin publicaciones activas</strong>
+                        <p id="resumen-actividad-texto">La cola está disponible para una nueva publicación.</p>
+                    </div>
+                </div>
+
+                <div class="section-heading-row dashboard-program-heading">
+                    <div>
+                        <h2 class="title-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Programaciones</span></h2>
+                        <p>Administrá, pausá, duplicá o ejecutá tus estados guardados.</p>
+                    </div>
+                </div>
+
                 <div id="lista-programaciones" class="dashboard-grid">
                     <div class="empty-state">
                         <div class="empty-state-content">
@@ -2969,7 +3258,7 @@
                         <div>
                             <strong class="title-with-icon"><svg class="icon"><use href="#i-alert"></use></svg><span>Corte automático de seguridad</span></strong>
                             <p id="detalle-seguridad">
-                                La publicación fue detenida porque falló el 80% o más del grupo.
+                                La publicación fue detenida al alcanzar el porcentaje de fallos configurado.
                             </p>
                         </div>
 
@@ -3036,6 +3325,10 @@
                             <h2 class="title-with-icon"><svg class="icon"><use href="#i-check-circle"></use></svg><span>Líneas conectadas</span></h2>
                             <p>Acá se muestran únicamente las líneas que ya están listas para publicar.</p>
                         </div>
+                        <button type="button" id="btn-reconectar-todas" class="secondary-button">
+                            <svg class="icon"><use href="#i-refresh"></use></svg>
+                            <span>Reconectar pendientes</span>
+                        </button>
                     </div>
 
                     <div class="line-toolbar" style="grid-template-columns:minmax(220px,1fr) auto; margin-bottom:12px;">
@@ -3060,6 +3353,66 @@
                     <p id="resultado-busqueda-seccion" class="help" style="margin:0 0 14px;"></p>
 
                     <div id="lista-lineas-conectadas" class="lines-grid"></div>
+                </div>
+            </section>
+
+            <section id="section-historial" class="section">
+                <div class="panel">
+                    <div class="section-heading-row">
+                        <div>
+                            <h2 class="title-with-icon"><svg class="icon"><use href="#i-history"></use></svg><span>Historial de publicaciones</span></h2>
+                            <p>Consultá resultados anteriores y reintentá únicamente las líneas fallidas.</p>
+                        </div>
+                        <button type="button" id="btn-actualizar-historial" class="secondary-button">
+                            <svg class="icon"><use href="#i-refresh"></use></svg>
+                            <span>Actualizar</span>
+                        </button>
+                    </div>
+                    <div id="lista-historial" class="history-list"></div>
+                </div>
+            </section>
+
+            <section id="section-configuracion" class="section">
+                <div class="settings-grid">
+                    <div class="panel">
+                        <h2 class="title-with-icon"><svg class="icon"><use href="#i-settings"></use></svg><span>Preferencias de publicación</span></h2>
+                        <div class="form-grid">
+                            <div class="field">
+                                <label for="config-lineas-grupo">Líneas por grupo predeterminadas</label>
+                                <input id="config-lineas-grupo" class="input" type="number" min="1" max="50" step="1">
+                            </div>
+                            <div class="field">
+                                <label for="config-intervalo">Minutos entre grupos</label>
+                                <input id="config-intervalo" class="input" type="number" min="0" max="1440" step="0.5">
+                            </div>
+                            <div class="field full">
+                                <label for="config-umbral">Corte de seguridad</label>
+                                <div class="range-row">
+                                    <input id="config-umbral" type="range" min="10" max="100" step="5">
+                                    <strong id="config-umbral-valor">80%</strong>
+                                </div>
+                                <span class="help">La publicación se detiene si un grupo alcanza este porcentaje de fallos.</span>
+                            </div>
+                            <label class="toggle-field field full">
+                                <input id="config-notificaciones" type="checkbox">
+                                <span class="toggle-control"></span>
+                                <span>
+                                    <strong>Notificaciones de Windows</strong>
+                                    <small>Avisar cuando una publicación termine, falle o se detenga.</small>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-actions">
+                            <button type="button" id="btn-probar-notificacion" class="secondary-button">
+                                <svg class="icon"><use href="#i-bell"></use></svg>
+                                <span>Probar notificación</span>
+                            </button>
+                            <button type="button" id="btn-guardar-configuracion" class="primary-button">
+                                <svg class="icon"><use href="#i-save"></use></svg>
+                                <span>Guardar configuración</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
@@ -3142,9 +3495,21 @@
                                 </div>
 
                                 <div class="field full">
-                                    <label for="hora-programada" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora diaria</span></label>
+                                    <label for="hora-programada" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora de publicación</span></label>
                                     <input type="time" id="hora-programada" class="input">
-                                    <span class="help">Solo se usa al programar diariamente.</span>
+                                    <span class="help">Se utiliza únicamente al guardar una programación.</span>
+                                </div>
+                                <div class="field full">
+                                    <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                                    <div id="dias-programados" class="weekday-picker">
+                                        <label><input type="checkbox" value="1" checked><span>Lun</span></label>
+                                        <label><input type="checkbox" value="2" checked><span>Mar</span></label>
+                                        <label><input type="checkbox" value="3" checked><span>Mié</span></label>
+                                        <label><input type="checkbox" value="4" checked><span>Jue</span></label>
+                                        <label><input type="checkbox" value="5" checked><span>Vie</span></label>
+                                        <label><input type="checkbox" value="6" checked><span>Sáb</span></label>
+                                        <label><input type="checkbox" value="0" checked><span>Dom</span></label>
+                                    </div>
                                 </div>
                             </div>
 
@@ -3190,7 +3555,7 @@
 
                                 <button type="button" id="btn-programar" class="secondary-button">
                                     <svg class="icon"><use href="#i-clock"></use></svg>
-                                    <span>Programar diariamente</span>
+                                    <span>Guardar programación</span>
                                 </button>
                             </div>
 
@@ -3239,9 +3604,28 @@
                 </div>
 
                 <div class="field" style="margin-top:14px;">
-                    <label for="editar-hora" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora diaria</span></label>
+                    <label for="editar-hora" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora de publicación</span></label>
                     <input type="time" id="editar-hora" class="input">
                 </div>
+
+                <div class="field" style="margin-top:14px;">
+                    <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                    <div id="editar-dias-programados" class="weekday-picker">
+                        <label><input type="checkbox" value="1"><span>Lun</span></label>
+                        <label><input type="checkbox" value="2"><span>Mar</span></label>
+                        <label><input type="checkbox" value="3"><span>Mié</span></label>
+                        <label><input type="checkbox" value="4"><span>Jue</span></label>
+                        <label><input type="checkbox" value="5"><span>Vie</span></label>
+                        <label><input type="checkbox" value="6"><span>Sáb</span></label>
+                        <label><input type="checkbox" value="0"><span>Dom</span></label>
+                    </div>
+                </div>
+
+                <label class="toggle-field" style="margin-top:14px;">
+                    <input id="editar-activa" type="checkbox">
+                    <span class="toggle-control"></span>
+                    <span><strong>Programación activa</strong><small>Desactivala para conservarla sin ejecutarla.</small></span>
+                </label>
 
                 <p id="mensaje-edicion" class="modal-message"></p>
 
@@ -3271,11 +3655,14 @@
         let vistaProgramaciones = 'grid';
         let urlPreviewActual = null;
         let selectorEtiquetaAbiertoId = null;
+        let configuracionActual = null;
 
         const titulos = {
-            dashboard: 'Mis Estados Programados',
+            dashboard: 'Panel general',
             estados: 'Actividad de Estados',
-            lineas: 'Líneas conectadas'
+            lineas: 'Líneas conectadas',
+            historial: 'Historial de publicaciones',
+            configuracion: 'Configuración'
         };
 
         function escaparHTML(texto) {
@@ -3294,6 +3681,32 @@
 
         function iconoSVG(nombre, clase = '') {
             return `<svg class="icon ${clase}" aria-hidden="true"><use href="#i-${nombre}"></use></svg>`;
+        }
+
+        function formatearFecha(valor, reemplazo = 'No disponible') {
+            if (!valor) return reemplazo;
+            const fecha = new Date(valor);
+            return Number.isNaN(fecha.getTime()) ? reemplazo : fecha.toLocaleString();
+        }
+
+        function obtenerDiasSeleccionados(contenedorId) {
+            return Array.from(
+                document.querySelectorAll(`#${contenedorId} input:checked`)
+            ).map(input => Number(input.value));
+        }
+
+        function marcarDiasSeleccionados(contenedorId, dias) {
+            const seleccionados = new Set((dias || []).map(Number));
+            document.querySelectorAll(`#${contenedorId} input`).forEach(input => {
+                input.checked = seleccionados.has(Number(input.value));
+            });
+        }
+
+        function describirDias(dias) {
+            const valores = [...new Set((dias || []).map(Number))].sort((a,b) => a-b);
+            if (valores.length === 7) return 'Todos los días';
+            const nombres = { 0:'Dom',1:'Lun',2:'Mar',3:'Mié',4:'Jue',5:'Vie',6:'Sáb' };
+            return valores.map(dia => nombres[dia]).filter(Boolean).join(', ') || 'Sin días';
         }
 
         function toast(mensaje, tipo = '') {
@@ -3340,10 +3753,13 @@
                 );
             });
 
-            document.getElementById('page-title').textContent = titulos[nombre];
-
+            document.getElementById('page-title').textContent = titulos[nombre] || 'AutoStatues';
             document.getElementById('view-controls').style.display =
                 nombre === 'dashboard' ? 'flex' : 'none';
+
+            if (nombre === 'dashboard') actualizarResumen();
+            if (nombre === 'historial') actualizarHistorial();
+            if (nombre === 'configuracion') cargarConfiguracion();
         }
 
         function actualizarCheckboxGeneral() {
@@ -3457,7 +3873,8 @@
 
         function mostrarEstadoProgramacion(estado) {
             const estados = {
-                programado: 'Programado diariamente',
+                programado: 'Programado',
+                pausado: 'En pausa',
                 en_cola: 'En cola',
                 ejecutando: 'Publicando'
             };
@@ -3587,6 +4004,11 @@
                             <div class="line-details">
                                 <span class="line-status">${iconoSVG('check-circle')}<span>Conectado</span></span>
                                 ${linea.numero ? `<span class="meta-with-icon">${iconoSVG('phone-call')}<span>${escaparHTML(linea.numero)}</span></span>` : ''}
+                                <span class="line-health">
+                                    <span>Última conexión: ${escaparHTML(formatearFecha(linea.ultimaConexion, 'Sin registro'))}</span>
+                                    <span>Última publicación: ${escaparHTML(formatearFecha(linea.ultimaPublicacion, 'Sin registro'))}</span>
+                                    ${linea.ultimoError ? `<span>Último error: ${escaparHTML(linea.ultimoError)}</span>` : ''}
+                                </span>
                             </div>
                         </div>
                         <div class="line-actions">
@@ -3642,6 +4064,10 @@
                             <div class="line-details">
                                 <span class="line-status ${claseEstadoLinea(linea.estado)}">
                                     ${mostrarEstado(linea.estado)}
+                                </span>
+                                <span class="line-health">
+                                    <span>Última conexión: ${escaparHTML(formatearFecha(linea.ultimaConexion, 'Sin registro'))}</span>
+                                    ${linea.ultimoError ? `<span>Detalle: ${escaparHTML(linea.ultimoError)}</span>` : ''}
                                 </span>
                             </div>
                         </div>
@@ -3977,78 +4403,44 @@
         function validarDatosFormulario(paraProgramar) {
             const archivo = document.getElementById('foto').files[0];
             const texto = document.getElementById('texto').value;
-            const lineasPorGrupo = Number(
-                document.getElementById('lineas-por-grupo').value
-            );
-            const intervaloMinutos = Number(
-                document.getElementById('intervalo-minutos').value
-            );
+            const lineasPorGrupo = Number(document.getElementById('lineas-por-grupo').value);
+            const intervaloMinutos = Number(document.getElementById('intervalo-minutos').value);
             const hora = document.getElementById('hora-programada').value;
+            const diasSemana = obtenerDiasSeleccionados('dias-programados');
 
-            if (!lineasSeleccionadas.size) {
-                throw new Error('Seleccioná al menos una línea conectada.');
+            if (!lineasSeleccionadas.size) throw new Error('Seleccioná al menos una línea conectada.');
+            if (!archivo) throw new Error('Seleccioná una imagen.');
+
+            if (!Number.isInteger(lineasPorGrupo) || lineasPorGrupo < 1 || lineasPorGrupo > 50) {
+                throw new Error('Indicá una cantidad entre 1 y 50 líneas por envío.');
             }
 
-            if (!archivo) {
-                throw new Error('Seleccioná una imagen.');
+            if (!Number.isFinite(intervaloMinutos) || intervaloMinutos < 0 || intervaloMinutos > 1440) {
+                throw new Error('Indicá un intervalo entre 0 y 1440 minutos.');
             }
 
-            if (
-                !Number.isInteger(lineasPorGrupo) ||
-                lineasPorGrupo < 1 ||
-                lineasPorGrupo > 50
-            ) {
-                throw new Error(
-                    'Indicá una cantidad entre 1 y 50 líneas por envío.'
-                );
+            if (paraProgramar && !/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)) {
+                throw new Error('Elegí una hora válida.');
             }
 
-            if (
-                !Number.isFinite(intervaloMinutos) ||
-                intervaloMinutos < 0 ||
-                intervaloMinutos > 1440
-            ) {
-                throw new Error(
-                    'Indicá un intervalo entre 0 y 1440 minutos.'
-                );
+            if (paraProgramar && !diasSemana.length) {
+                throw new Error('Seleccioná al menos un día de la semana.');
             }
 
-            if (
-                paraProgramar &&
-                !/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)
-            ) {
-                throw new Error('Elegí una hora diaria válida.');
-            }
-
-            return {
-                archivo,
-                texto,
-                lineasPorGrupo,
-                intervaloMinutos,
-                hora
-            };
+            return { archivo, texto, lineasPorGrupo, intervaloMinutos, hora, diasSemana };
         }
 
         function crearFormData(datos, incluirHora) {
             const formData = new FormData();
-
             formData.append('imagen', datos.archivo);
             formData.append('texto', datos.texto);
-            formData.append(
-                'lineas',
-                JSON.stringify(Array.from(lineasSeleccionadas))
-            );
-            formData.append(
-                'lineasPorGrupo',
-                String(datos.lineasPorGrupo)
-            );
-            formData.append(
-                'intervaloMinutos',
-                String(datos.intervaloMinutos)
-            );
+            formData.append('lineas', JSON.stringify(Array.from(lineasSeleccionadas)));
+            formData.append('lineasPorGrupo', String(datos.lineasPorGrupo));
+            formData.append('intervaloMinutos', String(datos.intervaloMinutos));
 
             if (incluirHora) {
                 formData.append('hora', datos.hora);
+                formData.append('diasSemana', JSON.stringify(datos.diasSemana));
             }
 
             return formData;
@@ -4060,8 +4452,9 @@
 
             document.getElementById('editar-id').value = item.id;
             document.getElementById('editar-hora').value = item.hora;
-            document.getElementById('editar-texto').value =
-                item.texto || '';
+            document.getElementById('editar-texto').value = item.texto || '';
+            document.getElementById('editar-activa').checked = item.activa !== false;
+            marcarDiasSeleccionados('editar-dias-programados', item.diasSemana || [0,1,2,3,4,5,6]);
             document.getElementById('editar-foto').value = '';
             document.getElementById('mensaje-edicion').textContent = '';
             document.getElementById('editar-imagen-actual').src =
@@ -4078,174 +4471,210 @@
         }
 
         function tarjetaProgramacion(item) {
-            const puedeModificar =
-                !['en_cola', 'ejecutando'].includes(item.estado);
-
-            const proxima = item.proximaEjecucion
-                ? new Date(item.proximaEjecucion).toLocaleString()
-                : 'No disponible';
-
-            const ultima = item.ultimaEjecucion
-                ? new Date(item.ultimaEjecucion).toLocaleString()
-                : 'Todavía no se ejecutó';
-
+            const puedeModificar = !['en_cola', 'ejecutando'].includes(item.estado);
+            const proxima = formatearFecha(item.proximaEjecucion, item.activa === false ? 'En pausa' : 'No disponible');
+            const ultima = formatearFecha(item.ultimaEjecucion, 'Todavía no se ejecutó');
             const textoVisible = item.texto
                 ? escaparHTML(item.texto)
                 : '<em style="color:#8091a8;">Sin texto.</em>';
+            const dias = describirDias(item.diasSemana);
 
             return `
-                <article class="program-card">
-                    <img
-                        class="program-card-image"
-                        src="/programaciones/${item.id}/imagen?v=${encodeURIComponent(item.actualizadoEn || '')}"
-                        alt="Imagen programada"
-                    >
-
+                <article class="program-card ${item.activa === false ? 'program-paused' : ''}">
+                    <img class="program-card-image" src="/programaciones/${item.id}/imagen?v=${encodeURIComponent(item.actualizadoEn || '')}" alt="Imagen programada">
                     <div class="program-card-body">
                         <div class="program-card-time title-with-icon">
                             ${iconoSVG('clock')}
-                            <span>Todos los días a las ${escaparHTML(item.hora)}</span>
+                            <span>${escaparHTML(dias)} · ${escaparHTML(item.hora)}</span>
                         </div>
-
                         <div class="program-meta">
-                            <span class="chip success">
-                                ${iconoSVG('calendar')}
-                                <span>${mostrarEstadoProgramacion(item.estado)}</span>
-                            </span>
-                            <span class="chip">
-                                ${iconoSVG('users')}
-                                <span>${item.cantidadLineas} líneas</span>
-                            </span>
-                            <span class="chip">
-                                ${iconoSVG('layers')}
-                                <span>Grupos de ${item.lineasPorGrupo}</span>
-                            </span>
-                            <span class="chip">
-                                ${iconoSVG('timer')}
-                                <span>${item.intervaloMinutos} min</span>
-                            </span>
+                            <span class="chip ${item.activa === false ? '' : 'success'}">${iconoSVG(item.activa === false ? 'pause' : 'calendar')}<span>${mostrarEstadoProgramacion(item.estado)}</span></span>
+                            <span class="chip">${iconoSVG('users')}<span>${item.cantidadLineas} líneas</span></span>
+                            <span class="chip">${iconoSVG('layers')}<span>Grupos de ${item.lineasPorGrupo}</span></span>
+                            <span class="chip">${iconoSVG('timer')}<span>${item.intervaloMinutos} min</span></span>
                         </div>
-
                         <p class="program-card-text">${textoVisible}</p>
-
                         <div class="program-dates">
                             <span class="meta-with-icon">${iconoSVG('calendar')}<span>Próxima: ${escaparHTML(proxima)}</span></span>
                             <span class="meta-with-icon">${iconoSVG('history')}<span>Última: ${escaparHTML(ultima)}</span></span>
                         </div>
-
                         <div class="program-actions">
-                            <button
-                                type="button"
-                                class="btn-edit btn-editar-programacion"
-                                data-id="${item.id}"
-                                ${puedeModificar ? '' : 'disabled'}
-                            >
-                                ${iconoSVG('edit')}
-                                <span>Editar</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                class="btn-delete btn-eliminar-programacion"
-                                data-id="${item.id}"
-                                ${puedeModificar ? '' : 'disabled'}
-                            >
-                                ${iconoSVG('trash')}
-                                <span>Eliminar</span>
-                            </button>
+                            <button type="button" class="btn-edit btn-editar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('edit')}<span>Editar</span></button>
+                            <button type="button" class="btn-run btn-ejecutar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('play')}<span>Ejecutar</span></button>
+                            <button type="button" class="btn-pause btn-estado-programacion" data-id="${item.id}" data-activa="${item.activa === false ? 'true' : 'false'}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG(item.activa === false ? 'play' : 'pause')}<span>${item.activa === false ? 'Activar' : 'Pausar'}</span></button>
+                            <button type="button" class="btn-neutral btn-duplicar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('copy')}<span>Duplicar</span></button>
+                            <button type="button" class="btn-delete btn-eliminar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('trash')}<span>Eliminar</span></button>
                         </div>
                     </div>
-                </article>
-            `;
+                </article>`;
         }
 
         async function actualizarProgramaciones() {
             try {
                 const respuesta = await fetch('/programaciones');
                 const data = await respuesta.json();
-                const contenedor =
-                    document.getElementById('lista-programaciones');
+                const contenedor = document.getElementById('lista-programaciones');
 
                 programacionesCache.clear();
-
-                for (const item of data.programaciones) {
-                    programacionesCache.set(item.id, item);
-                }
-
-                contenedor.classList.toggle(
-                    'list-view',
-                    vistaProgramaciones === 'list'
-                );
+                for (const item of data.programaciones) programacionesCache.set(item.id, item);
+                contenedor.classList.toggle('list-view', vistaProgramaciones === 'list');
 
                 if (!data.programaciones.length) {
-                    contenedor.innerHTML = `
-                        <div class="empty-state">
-                            <div class="empty-state-content">
-                                <span class="empty-state-icon">${iconoSVG('calendar')}</span>
-                                <strong>Aún no hay estados programados</strong>
-                                <span>Tocá el botón de agregar para crear el primero.</span>
-                            </div>
-                        </div>
-                    `;
+                    contenedor.innerHTML = `<div class="empty-state"><div class="empty-state-content"><span class="empty-state-icon">${iconoSVG('calendar')}</span><strong>Aún no hay estados programados</strong><span>Tocá el botón de agregar para crear el primero.</span></div></div>`;
+                    actualizarResumen();
                     return;
                 }
 
-                contenedor.innerHTML = data.programaciones
-                    .map(tarjetaProgramacion)
-                    .join('');
+                contenedor.innerHTML = data.programaciones.map(tarjetaProgramacion).join('');
 
-                document
-                    .querySelectorAll('.btn-editar-programacion')
-                    .forEach(boton => {
-                        boton.addEventListener('click', evento => {
-                            abrirEditorProgramacion(
-                                evento.currentTarget.dataset.id
-                            );
-                        });
-                    });
+                document.querySelectorAll('.btn-editar-programacion').forEach(boton => {
+                    boton.addEventListener('click', evento => abrirEditorProgramacion(evento.currentTarget.dataset.id));
+                });
 
-                document
-                    .querySelectorAll('.btn-eliminar-programacion')
-                    .forEach(boton => {
-                        boton.addEventListener('click', async evento => {
-                            const id = evento.currentTarget.dataset.id;
-
-                            if (!confirm('¿Querés eliminar esta programación diaria?')) {
-                                return;
-                            }
-
-                            const respuestaEliminar = await fetch(
-                                `/programaciones/${id}`,
-                                { method: 'DELETE' }
-                            );
-
-                            const dataEliminar = await leerRespuesta(
-                                respuestaEliminar
-                            );
-
-                            if (!respuestaEliminar.ok) {
-                                toast(
-                                    dataEliminar.error ||
-                                    'No se pudo eliminar la programación.',
-                                    'error'
-                                );
-                                return;
-                            }
-
-                            toast(
-                                dataEliminar.mensaje ||
-                                'Programación eliminada.',
-                                'success'
-                            );
-
+                document.querySelectorAll('.btn-estado-programacion').forEach(boton => {
+                    boton.addEventListener('click', async evento => {
+                        const actual = evento.currentTarget;
+                        try {
+                            const respuestaEstado = await fetch(`/programaciones/${actual.dataset.id}/estado`, {
+                                method: 'PATCH',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ activa: actual.dataset.activa === 'true' })
+                            });
+                            const datos = await leerRespuesta(respuestaEstado);
+                            if (!respuestaEstado.ok) throw new Error(datos.error || 'No se pudo cambiar el estado.');
+                            toast(datos.mensaje, 'success');
                             actualizarProgramaciones();
-                        });
+                        } catch (error) { toast(error.message, 'error'); }
                     });
+                });
+
+                document.querySelectorAll('.btn-ejecutar-programacion').forEach(boton => {
+                    boton.addEventListener('click', async evento => {
+                        try {
+                            const respuestaEjecucion = await fetch(`/programaciones/${evento.currentTarget.dataset.id}/ejecutar`, { method: 'POST' });
+                            const datos = await leerRespuesta(respuestaEjecucion);
+                            if (!respuestaEjecucion.ok) throw new Error(datos.error || 'No se pudo ejecutar.');
+                            toast(datos.mensaje, 'success');
+                            mostrarSeccion('estados');
+                            iniciarSeguimientoProgreso();
+                        } catch (error) { toast(error.message, 'error'); }
+                    });
+                });
+
+                document.querySelectorAll('.btn-duplicar-programacion').forEach(boton => {
+                    boton.addEventListener('click', async evento => {
+                        try {
+                            const respuestaCopia = await fetch(`/programaciones/${evento.currentTarget.dataset.id}/duplicar`, { method: 'POST' });
+                            const datos = await leerRespuesta(respuestaCopia);
+                            if (!respuestaCopia.ok) throw new Error(datos.error || 'No se pudo duplicar.');
+                            toast(datos.mensaje, 'success');
+                            actualizarProgramaciones();
+                        } catch (error) { toast(error.message, 'error'); }
+                    });
+                });
+
+                document.querySelectorAll('.btn-eliminar-programacion').forEach(boton => {
+                    boton.addEventListener('click', async evento => {
+                        const id = evento.currentTarget.dataset.id;
+                        if (!confirm('¿Querés eliminar esta programación?')) return;
+                        const respuestaEliminar = await fetch(`/programaciones/${id}`, { method: 'DELETE' });
+                        const datos = await leerRespuesta(respuestaEliminar);
+                        if (!respuestaEliminar.ok) return toast(datos.error || 'No se pudo eliminar.', 'error');
+                        toast(datos.mensaje || 'Programación eliminada.', 'success');
+                        actualizarProgramaciones();
+                    });
+                });
+
+                actualizarResumen();
             } catch (error) {
-                console.error(
-                    'No se pudieron cargar las programaciones:',
-                    error
-                );
+                console.error('No se pudieron cargar las programaciones:', error);
+            }
+        }
+
+        async function actualizarResumen() {
+            try {
+                const respuesta = await fetch('/resumen');
+                const data = await respuesta.json();
+                document.getElementById('resumen-lineas-conectadas').textContent = data.lineas?.conectadas || 0;
+                document.getElementById('resumen-lineas-problemas').textContent = data.lineas?.conProblemas || 0;
+                document.getElementById('resumen-publicaciones-hoy').textContent = data.publicacionesHoy || 0;
+                document.getElementById('resumen-exito-hoy').textContent = `${data.porcentajeExitoHoy || 0}%`;
+                document.getElementById('resumen-proxima').textContent = data.proximaProgramacion?.proximaEjecucion
+                    ? formatearFecha(data.proximaProgramacion.proximaEjecucion)
+                    : 'Sin programaciones activas';
+
+                const banner = document.getElementById('resumen-actividad');
+                banner.classList.toggle('active', Boolean(data.publicacionActiva));
+                document.getElementById('resumen-actividad-titulo').textContent = data.publicacionActiva
+                    ? 'Publicación en curso'
+                    : 'Sin publicaciones activas';
+                document.getElementById('resumen-actividad-texto').textContent = data.publicacionActiva
+                    ? (data.progreso?.mensaje || 'Procesando líneas seleccionadas.')
+                    : 'La cola está disponible para una nueva publicación.';
+            } catch (error) {
+                console.error('No se pudo cargar el resumen:', error);
+            }
+        }
+
+        async function actualizarHistorial() {
+            const contenedor = document.getElementById('lista-historial');
+            try {
+                const respuesta = await fetch('/historial?limite=100');
+                const data = await respuesta.json();
+                if (!data.historial?.length) {
+                    contenedor.innerHTML = `<div class="empty-state"><div class="empty-state-content"><span class="empty-state-icon">${iconoSVG('history')}</span><strong>Todavía no hay publicaciones</strong><span>Los resultados aparecerán acá después del primer envío.</span></div></div>`;
+                    return;
+                }
+
+                contenedor.innerHTML = data.historial.map(item => {
+                    const estadoError = ['error','cancelado'].includes(item.estado);
+                    const puedeReintentar = (item.lineasFallidas || []).length > 0 && item.estado !== 'ejecutando';
+                    return `<article class="history-item">
+                        <img class="history-thumb" src="/historial/${item.id}/imagen?v=${encodeURIComponent(item.fechaInicio || '')}" alt="Estado publicado">
+                        <div class="history-main">
+                            <div class="history-title">
+                                <strong>${escaparHTML(item.origen || 'Publicación')}</strong>
+                                <span class="history-status ${estadoError ? 'error' : item.estado === 'completado' ? 'success' : ''}">${iconoSVG(estadoError ? 'x-circle' : item.estado === 'completado' ? 'check-circle' : 'loader')}<span>${escaparHTML(item.estado)}</span></span>
+                            </div>
+                            <div class="history-meta"><span>${escaparHTML(formatearFecha(item.fechaInicio))}</span><span>${item.total || 0} líneas</span><span>Grupos de ${item.lineasPorGrupo || 0}</span></div>
+                            <div class="history-results"><span>Correctas: <strong>${item.correctas || 0}</strong></span><span>Fallidas: <strong>${item.fallidas || 0}</strong></span></div>
+                            ${item.error ? `<span class="help">${escaparHTML(item.error)}</span>` : ''}
+                        </div>
+                        <div class="history-actions">
+                            <button type="button" class="secondary-button btn-reintentar-historial" data-id="${item.id}" ${puedeReintentar ? '' : 'disabled'}>${iconoSVG('refresh')}<span>Reintentar fallidas</span></button>
+                        </div>
+                    </article>`;
+                }).join('');
+
+                document.querySelectorAll('.btn-reintentar-historial').forEach(boton => {
+                    boton.addEventListener('click', async evento => {
+                        try {
+                            const respuestaReintento = await fetch(`/historial/${evento.currentTarget.dataset.id}/reintentar-fallidas`, { method: 'POST' });
+                            const datos = await leerRespuesta(respuestaReintento);
+                            if (!respuestaReintento.ok) throw new Error(datos.error || 'No se pudo reintentar.');
+                            toast(datos.mensaje, 'success');
+                            mostrarSeccion('estados');
+                            iniciarSeguimientoProgreso();
+                        } catch (error) { toast(error.message, 'error'); }
+                    });
+                });
+            } catch (error) {
+                contenedor.innerHTML = `<div class="empty-state"><strong>No se pudo cargar el historial</strong></div>`;
+            }
+        }
+
+        async function cargarConfiguracion() {
+            try {
+                const respuesta = await fetch('/configuracion');
+                const data = await respuesta.json();
+                configuracionActual = data;
+                document.getElementById('config-lineas-grupo').value = data.lineasPorGrupoPredeterminado || 10;
+                document.getElementById('config-intervalo').value = data.intervaloMinutosPredeterminado ?? 5;
+                document.getElementById('config-umbral').value = Math.round((data.umbralFallosSeguridad || .8) * 100);
+                document.getElementById('config-umbral-valor').textContent = `${document.getElementById('config-umbral').value}%`;
+                document.getElementById('config-notificaciones').checked = data.notificaciones !== false;
+            } catch (error) {
+                toast('No se pudo cargar la configuración.', 'error');
             }
         }
 
@@ -4283,7 +4712,12 @@
             });
         });
 
-        document.getElementById('btn-nuevo-estado').onclick = () => {
+        document.getElementById('btn-nuevo-estado').onclick = async () => {
+            if (!configuracionActual) await cargarConfiguracion();
+            if (configuracionActual) {
+                document.getElementById('lineas-por-grupo').value = configuracionActual.lineasPorGrupoPredeterminado || 10;
+                document.getElementById('intervalo-minutos').value = configuracionActual.intervaloMinutosPredeterminado ?? 5;
+            }
             actualizarCantidadSeleccionadas();
             actualizarLineas();
             abrirModal('modal-crear');
@@ -4460,7 +4894,7 @@
             try {
                 const datos = validarDatosFormulario(true);
 
-                mensaje.textContent = 'Guardando programación diaria...';
+                mensaje.textContent = 'Guardando programación...';
                 mensaje.style.color = '#fbbf24';
                 boton.disabled = true;
 
@@ -4502,6 +4936,8 @@
             const hora = document.getElementById('editar-hora').value;
             const texto = document.getElementById('editar-texto').value;
             const archivo = document.getElementById('editar-foto').files[0];
+            const diasSemana = obtenerDiasSeleccionados('editar-dias-programados');
+            const activa = document.getElementById('editar-activa').checked;
             const mensaje = document.getElementById('mensaje-edicion');
             const boton = document.getElementById('btn-guardar-edicion');
 
@@ -4511,9 +4947,17 @@
                 return;
             }
 
+            if (!diasSemana.length) {
+                mensaje.textContent = 'Seleccioná al menos un día de la semana.';
+                mensaje.style.color = '#fb7185';
+                return;
+            }
+
             const formData = new FormData();
             formData.append('hora', hora);
             formData.append('texto', texto);
+            formData.append('diasSemana', JSON.stringify(diasSemana));
+            formData.append('activa', String(activa));
 
             if (archivo) {
                 formData.append('imagen', archivo);
@@ -4586,6 +5030,49 @@
                 botonCancelar.disabled = false;
             }
         }
+
+        document.getElementById('btn-reconectar-todas').onclick = async () => {
+            try {
+                const respuesta = await fetch('/lineas/reconectar-todas', { method: 'POST' });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) throw new Error(data.error || 'No se pudo iniciar la reconexión.');
+                toast(data.mensaje, 'success');
+                setTimeout(actualizarLineas, 700);
+            } catch (error) { toast(error.message, 'error'); }
+        };
+
+        document.getElementById('btn-actualizar-historial').onclick = actualizarHistorial;
+        document.getElementById('config-umbral').addEventListener('input', evento => {
+            document.getElementById('config-umbral-valor').textContent = `${evento.target.value}%`;
+        });
+
+        document.getElementById('btn-guardar-configuracion').onclick = async () => {
+            try {
+                const respuesta = await fetch('/configuracion', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lineasPorGrupoPredeterminado: Number(document.getElementById('config-lineas-grupo').value),
+                        intervaloMinutosPredeterminado: Number(document.getElementById('config-intervalo').value),
+                        umbralFallosSeguridad: Number(document.getElementById('config-umbral').value) / 100,
+                        notificaciones: document.getElementById('config-notificaciones').checked
+                    })
+                });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) throw new Error(data.error || 'No se pudo guardar.');
+                configuracionActual = data.configuracion;
+                toast(data.mensaje, 'success');
+            } catch (error) { toast(error.message, 'error'); }
+        };
+
+        document.getElementById('btn-probar-notificacion').onclick = async () => {
+            if (window.sistema?.notificar) {
+                await window.sistema.notificar('AutoStatues', 'Las notificaciones están funcionando correctamente.');
+                toast('Notificación enviada.', 'success');
+            } else {
+                toast('Las notificaciones solo están disponibles en la aplicación instalada.', 'error');
+            }
+        };
 
         document.getElementById('btn-reanudar-seguridad').onclick = () => {
             ejecutarAccionSeguridad('reanudar');
@@ -4752,11 +5239,15 @@
 
         actualizarLineas();
         actualizarProgramaciones();
+        actualizarResumen();
+        actualizarHistorial();
+        cargarConfiguracion();
         iniciarSeguimientoProgreso();
         consultarEstadoActualizacion();
 
         setInterval(actualizarLineas, 2000);
         setInterval(actualizarProgramaciones, 5000);
+        setInterval(actualizarResumen, 3000);
         setInterval(consultarEstadoActualizacion, 5000);
     </script>
 </body>

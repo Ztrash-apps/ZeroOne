@@ -1,7 +1,8 @@
 const {
     app,
     BrowserWindow,
-    ipcMain
+    ipcMain,
+    Notification
 } = require('electron');
 
 const path = require('path');
@@ -237,6 +238,29 @@ function instalarActualizacion() {
     };
 }
 
+
+function mostrarNotificacion(titulo, cuerpo) {
+    if (!Notification.isSupported()) {
+        return { correcto: false, mensaje: 'Las notificaciones no están disponibles.' };
+    }
+
+    const notificacion = new Notification({
+        title: String(titulo || 'AutoStatues'),
+        body: String(cuerpo || ''),
+        silent: false
+    });
+
+    notificacion.on('click', () => {
+        if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) return;
+        if (ventanaPrincipal.isMinimized()) ventanaPrincipal.restore();
+        ventanaPrincipal.show();
+        ventanaPrincipal.focus();
+    });
+
+    notificacion.show();
+    return { correcto: true };
+}
+
 function configurarIPC() {
     ipcMain.handle('actualizacion:obtener-estado', () => {
         return obtenerEstadoActualizacion();
@@ -253,6 +277,12 @@ function configurarIPC() {
     ipcMain.handle('actualizacion:instalar', () => {
         return instalarActualizacion();
     });
+
+    ipcMain.handle('sistema:notificar', (_evento, datos = {}) => {
+        return mostrarNotificacion(datos.titulo, datos.cuerpo);
+    });
+
+    ipcMain.handle('sistema:obtener-version', () => app.getVersion());
 }
 
 function exponerActualizadorAlServidor() {
@@ -262,10 +292,17 @@ function exponerActualizadorAlServidor() {
         descargar: descargarActualizacion,
         instalar: instalarActualizacion
     };
+
+    global.autostatuesDesktop = {
+        notificar: mostrarNotificacion,
+        obtenerVersion: () => app.getVersion()
+    };
 }
 
 function crearVentana() {
-    const rutaPreload = path.join(__dirname, 'preload.js');
+    const rutaPreload = app.isPackaged
+        ? path.join(process.resourcesPath, 'preload.js')
+        : path.join(__dirname, 'preload.js');
 
     ventanaPrincipal = new BrowserWindow({
         width: 1200,
@@ -275,7 +312,7 @@ function crearVentana() {
         show: false,
         autoHideMenuBar: true,
         title: 'AutoStatues',
-        backgroundColor: '#0f1726',
+        backgroundColor: '#080c16',
 
         webPreferences: {
             preload: rutaPreload,
