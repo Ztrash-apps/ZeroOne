@@ -850,7 +850,13 @@ app.get('/progreso', (req, res) => {
 });
 
 function obtenerActualizador() {
-    return global.autostatuesUpdater || null;
+    const actualizador = global.autostatuesUpdater;
+
+    if (!actualizador || typeof actualizador.obtenerEstado !== 'function') {
+        return null;
+    }
+
+    return actualizador;
 }
 
 app.get('/actualizacion/estado', (req, res) => {

@@ -1,6 +1,6 @@
 {
   "name": "autostatues",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Aplicación de escritorio para gestionar estados de WhatsApp",
   "main": "main.js",
@@ -46,9 +46,13 @@
       "!sesiones/**/*",
       "!uploads/**/*",
       "!programados/**/*",
-      "!**/*.log",
-      "!.git/**/*",
-      "!.github/**/*"
+      "!**/*.log"
+    ],
+    "extraResources": [
+      {
+        "from": "preload.js",
+        "to": "preload.js"
+      }
     ],
     "win": {
       "target": [
@@ -74,8 +78,7 @@
       {
         "provider": "github",
         "owner": "Ztrash-apps",
-        "repo": "AutoStatues",
-        "releaseType": "release"
+        "repo": "AutoStatues"
       }
     ]
   }

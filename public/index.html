@@ -3096,8 +3096,20 @@
             botonInstalar.disabled = estado.estado !== 'descargada';
         }
 
+        const puenteActualizador = window.actualizador || null;
+        let dejarDeEscucharActualizador = null;
+
         async function consultarEstadoActualizacion() {
             try {
+                if (
+                    puenteActualizador &&
+                    typeof puenteActualizador.obtenerEstado === 'function'
+                ) {
+                    const data = await puenteActualizador.obtenerEstado();
+                    mostrarEstadoActualizacion(data);
+                    return;
+                }
+
                 const respuesta = await fetch('/actualizacion/estado');
                 const data = await leerRespuesta(respuesta);
 
@@ -3109,28 +3121,57 @@
 
                 mostrarEstadoActualizacion(data);
             } catch (error) {
-                document.getElementById('update-message').textContent = error.message;
+                document.getElementById('update-message').textContent =
+                    error.message || 'No se pudo consultar el actualizador.';
             }
         }
 
         async function ejecutarAccionActualizacion(accion) {
             try {
-                const respuesta = await fetch(`/actualizacion/${accion}`, {
-                    method: 'POST'
-                });
-                const data = await leerRespuesta(respuesta);
+                let data;
 
-                if (!respuesta.ok) {
-                    throw new Error(
-                        data.error || data.mensaje || 'No se pudo procesar la actualización.'
-                    );
+                if (
+                    puenteActualizador &&
+                    typeof puenteActualizador[accion] === 'function'
+                ) {
+                    data = await puenteActualizador[accion]();
+                } else {
+                    const respuesta = await fetch(`/actualizacion/${accion}`, {
+                        method: 'POST'
+                    });
+                    data = await leerRespuesta(respuesta);
+
+                    if (!respuesta.ok) {
+                        throw new Error(
+                            data.error || data.mensaje || 'No se pudo procesar la actualización.'
+                        );
+                    }
                 }
 
                 mostrarEstadoActualizacion(data);
             } catch (error) {
-                toast(error.message, 'error');
+                toast(
+                    error.message || 'No se pudo procesar la actualización.',
+                    'error'
+                );
                 consultarEstadoActualizacion();
             }
+        }
+
+        if (
+            puenteActualizador &&
+            typeof puenteActualizador.alCambiarEstado === 'function'
+        ) {
+            dejarDeEscucharActualizador =
+                puenteActualizador.alCambiarEstado(estado => {
+                    mostrarEstadoActualizacion(estado);
+                });
+
+            window.addEventListener('beforeunload', () => {
+                if (typeof dejarDeEscucharActualizador === 'function') {
+                    dejarDeEscucharActualizador();
+                }
+            });
         }
 
         document.getElementById('btn-update-search').onclick = () => {

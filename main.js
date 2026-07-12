@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
-const URL_APLICACION = 'http://localhost:3000';
+const URL_APLICACION = 'http://127.0.0.1:3000';
 const INTERVALO_ACTUALIZACIONES = 5 * 60 * 60 * 1000;
 
 let ventanaPrincipal = null;
@@ -24,6 +24,13 @@ let estadoActualizacion = {
     porcentaje: 0
 };
 
+function obtenerEstadoActualizacion() {
+    return {
+        ...estadoActualizacion,
+        versionActual: app.getVersion()
+    };
+}
+
 function enviarEstadoActualizacion(datos = {}) {
     estadoActualizacion = {
         ...estadoActualizacion,
@@ -38,11 +45,11 @@ function enviarEstadoActualizacion(datos = {}) {
     ) {
         ventanaPrincipal.webContents.send(
             'actualizacion:estado',
-            estadoActualizacion
+            obtenerEstadoActualizacion()
         );
     }
 
-    return estadoActualizacion;
+    return obtenerEstadoActualizacion();
 }
 
 function configurarActualizador() {
@@ -82,12 +89,10 @@ function configurarActualizador() {
     });
 
     autoUpdater.on('download-progress', progreso => {
-        const porcentaje = Math.round(progreso.percent || 0);
-
         enviarEstadoActualizacion({
             estado: 'descargando',
-            mensaje: `Descargando actualización: ${porcentaje}%`,
-            porcentaje
+            mensaje: `Descargando actualización: ${Math.round(progreso.percent || 0)}%`,
+            porcentaje: Math.round(progreso.percent || 0)
         });
     });
 
@@ -96,8 +101,7 @@ function configurarActualizador() {
 
         enviarEstadoActualizacion({
             estado: 'descargada',
-            mensaje:
-                `La versión ${informacion.version} está lista para instalar.`,
+            mensaje: `La versión ${informacion.version} está lista para instalar.`,
             versionDisponible: informacion.version,
             porcentaje: 100
         });
@@ -154,7 +158,7 @@ async function buscarActualizacion(origen = 'manual') {
 
     try {
         await autoUpdater.checkForUpdates();
-        return estadoActualizacion;
+        return obtenerEstadoActualizacion();
     } catch (error) {
         busquedaEnCurso = false;
 
@@ -177,7 +181,7 @@ async function descargarActualizacion() {
     }
 
     if (descargaEnCurso) {
-        return estadoActualizacion;
+        return obtenerEstadoActualizacion();
     }
 
     if (estadoActualizacion.estado !== 'disponible') {
@@ -196,7 +200,7 @@ async function descargarActualizacion() {
 
     try {
         await autoUpdater.downloadUpdate();
-        return estadoActualizacion;
+        return obtenerEstadoActualizacion();
     } catch (error) {
         descargaEnCurso = false;
 
@@ -212,12 +216,13 @@ async function descargarActualizacion() {
 function instalarActualizacion() {
     if (estadoActualizacion.estado !== 'descargada') {
         return {
+            ...obtenerEstadoActualizacion(),
             correcto: false,
             mensaje: 'Todavía no hay una actualización descargada.'
         };
     }
 
-    enviarEstadoActualizacion({
+    const respuesta = enviarEstadoActualizacion({
         estado: 'instalando',
         mensaje: 'Cerrando la aplicación para instalar la actualización...'
     });
@@ -227,14 +232,14 @@ function instalarActualizacion() {
     }, 600);
 
     return {
-        correcto: true,
-        mensaje: 'La actualización se instalará ahora.'
+        ...respuesta,
+        correcto: true
     };
 }
 
 function configurarIPC() {
     ipcMain.handle('actualizacion:obtener-estado', () => {
-        return estadoActualizacion;
+        return obtenerEstadoActualizacion();
     });
 
     ipcMain.handle('actualizacion:buscar', () => {
@@ -250,7 +255,18 @@ function configurarIPC() {
     });
 }
 
+function exponerActualizadorAlServidor() {
+    global.autostatuesUpdater = {
+        obtenerEstado: obtenerEstadoActualizacion,
+        buscar: () => buscarActualizacion('manual'),
+        descargar: descargarActualizacion,
+        instalar: instalarActualizacion
+    };
+}
+
 function crearVentana() {
+    const rutaPreload = path.join(__dirname, 'preload.js');
+
     ventanaPrincipal = new BrowserWindow({
         width: 1200,
         height: 800,
@@ -262,7 +278,7 @@ function crearVentana() {
         backgroundColor: '#0f1726',
 
         webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
+            preload: rutaPreload,
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: false
@@ -271,31 +287,30 @@ function crearVentana() {
 
     ventanaPrincipal.maximize();
 
+    ventanaPrincipal.webContents.on('preload-error', (_evento, ruta, error) => {
+        console.error('Error cargando preload:', ruta, error);
+    });
+
     ventanaPrincipal.webContents.on('did-finish-load', () => {
         enviarEstadoActualizacion();
     });
 
     async function cargarAplicacion() {
-        if (
-            !ventanaPrincipal ||
-            ventanaPrincipal.isDestroyed()
-        ) {
+        if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) {
             return;
         }
 
         try {
             await ventanaPrincipal.loadURL(URL_APLICACION);
 
-            if (
-                ventanaPrincipal &&
-                !ventanaPrincipal.isDestroyed()
-            ) {
+            if (ventanaPrincipal && !ventanaPrincipal.isDestroyed()) {
                 ventanaPrincipal.maximize();
                 ventanaPrincipal.show();
             }
         } catch (error) {
             console.log(
-                'El servidor todavía no está listo. Reintentando...'
+                'El servidor todavía no está listo. Reintentando...',
+                error.message
             );
 
             setTimeout(cargarAplicacion, 1000);
@@ -347,16 +362,14 @@ if (!bloqueoObtenido) {
             recursive: true
         });
 
-        /*
-         * bot.js utilizará esta carpeta para sesiones,
-         * imágenes, programaciones y archivos persistentes.
-         */
         process.env.AUTOSTATUES_DATA_DIR = carpetaDatos;
-
-        require('./src/bot.js');
 
         configurarActualizador();
         configurarIPC();
+        exponerActualizadorAlServidor();
+
+        require('./src/bot.js');
+
         crearVentana();
         iniciarComprobacionesAutomaticas();
 
