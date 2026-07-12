@@ -1,0 +1,3160 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoStatues Dashboard</title>
+    <style>
+        :root {
+            --bg: #0f1726;
+            --sidebar: #1e2939;
+            --sidebar-active: #3a4659;
+            --surface: #152033;
+            --surface-2: #1b283c;
+            --surface-3: #223047;
+            --border: #33445e;
+            --border-soft: #293950;
+            --text: #f8fafc;
+            --muted: #8fa1b8;
+            --green: #22d66f;
+            --green-dark: #15b85a;
+            --blue: #3b82f6;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --shadow: 0 18px 45px rgba(0, 0, 0, 0.28);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            min-height: 100%;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+        }
+
+        button,
+        input,
+        textarea {
+            font: inherit;
+        }
+
+        button {
+            border: 0;
+        }
+
+        .app-shell {
+            display: grid;
+            grid-template-columns: 224px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            padding: 22px 20px 18px;
+            background: var(--sidebar);
+            border-right: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 4px 4px 34px;
+            font-size: 18px;
+            font-weight: 800;
+            color: var(--green);
+        }
+
+        .brand-icon {
+            display: grid;
+            place-items: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            background: rgba(34, 214, 111, 0.12);
+        }
+
+        .nav {
+            display: grid;
+            gap: 12px;
+        }
+
+        .nav-button {
+            width: 100%;
+            padding: 13px 12px;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text);
+            text-align: left;
+            cursor: pointer;
+            font-weight: 650;
+            transition: 0.18s ease;
+        }
+
+        .nav-button:hover {
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .nav-button.active {
+            background: var(--sidebar-active);
+        }
+
+        .update-panel {
+            display: grid;
+            gap: 8px;
+            margin-top: auto;
+            padding: 12px;
+            border: 1px solid var(--border-soft);
+            border-radius: 10px;
+            background: rgba(15, 25, 41, 0.72);
+        }
+
+        .update-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .update-panel-title {
+            color: #dce6f2;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .update-version {
+            color: #67e89d;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .update-message {
+            margin: 0;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.35;
+        }
+
+        .update-progress {
+            display: none;
+            height: 6px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #27354b;
+        }
+
+        .update-progress.visible {
+            display: block;
+        }
+
+        .update-progress-bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--green);
+            transition: width 0.25s ease;
+        }
+
+        .update-button {
+            min-height: 34px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: #1b2b42;
+            color: #dbeafe;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .update-button:hover {
+            background: #263a57;
+        }
+
+        .update-button.primary {
+            border-color: transparent;
+            background: var(--green);
+            color: #052313;
+        }
+
+        .update-button.install {
+            border-color: transparent;
+            background: #f59e0b;
+            color: #2b1800;
+        }
+
+        .update-button[hidden] {
+            display: none;
+        }
+
+        .sidebar-version {
+            margin-top: 10px;
+            color: #687a92;
+            font-size: 11px;
+        }
+
+        .main {
+            min-width: 0;
+            height: 100vh;
+            overflow-y: auto;
+            padding: 28px 30px 100px;
+            background: var(--bg);
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            margin-bottom: 26px;
+        }
+
+        .topbar h1 {
+            margin: 0;
+            font-size: 25px;
+            letter-spacing: -0.4px;
+        }
+
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .view-button,
+        .secondary-button,
+        .ghost-button,
+        .danger-button,
+        .primary-button {
+            min-height: 40px;
+            padding: 0 16px;
+            border-radius: 8px;
+            color: var(--text);
+            cursor: pointer;
+            font-weight: 700;
+            transition: 0.18s ease;
+        }
+
+        .view-button,
+        .secondary-button,
+        .ghost-button {
+            background: #182437;
+            border: 1px solid var(--border);
+        }
+
+        .view-button.active,
+        .view-button:hover,
+        .secondary-button:hover,
+        .ghost-button:hover {
+            background: #23324a;
+        }
+
+        .primary-button {
+            background: var(--green);
+            color: #052313;
+        }
+
+        .primary-button:hover {
+            background: var(--green-dark);
+        }
+
+        .danger-button {
+            background: var(--danger);
+        }
+
+        .danger-button:hover {
+            filter: brightness(0.9);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 335px));
+            gap: 18px;
+            align-items: start;
+        }
+
+        .dashboard-grid.list-view {
+            grid-template-columns: 1fr;
+        }
+
+        .empty-state {
+            display: grid;
+            place-items: center;
+            min-height: 170px;
+            padding: 28px;
+            border: 2px dashed #3c4c63;
+            border-radius: 12px;
+            color: #52657e;
+            text-align: center;
+        }
+
+        .empty-state strong {
+            display: block;
+            margin-bottom: 6px;
+            color: #73859c;
+        }
+
+        .program-card {
+            position: relative;
+            display: grid;
+            gap: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            background: var(--surface);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
+        }
+
+        .program-card-image {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+            object-fit: cover;
+            background: #0a111e;
+        }
+
+        .program-card-body {
+            display: grid;
+            gap: 9px;
+            padding: 0 16px 16px;
+        }
+
+        .program-card-time {
+            font-size: 18px;
+            font-weight: 800;
+        }
+
+        .program-card-text {
+            min-height: 38px;
+            margin: 0;
+            color: #c2ccda;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .program-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            min-height: 27px;
+            padding: 0 9px;
+            border-radius: 999px;
+            background: var(--surface-3);
+            color: #b9c7d8;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .chip.success {
+            background: rgba(34, 214, 111, 0.12);
+            color: #6ee7a2;
+        }
+
+
+        .line-tag {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 18px;
+            padding: 0 7px;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 0.45px;
+            line-height: 1;
+            text-transform: uppercase;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+
+        .line-tag.activa {
+            background: #16d66f;
+            border-color: #45f298;
+            color: #032515;
+            box-shadow: 0 0 12px rgba(22, 214, 111, 0.25);
+        }
+
+        .line-tag.indefinida {
+            background: #3b1018;
+            border-color: #6f1d2b;
+            color: #ffc2cc;
+        }
+
+        .line-tag.caida {
+            background: #ef3340;
+            border-color: #ff6b75;
+            color: #ffffff;
+        }
+
+        .line-tag.reposo {
+            background: #facc15;
+            border-color: #fde047;
+            color: #352500;
+        }
+
+        .tag-picker {
+            position: relative;
+            display: inline-flex;
+            justify-content: flex-end;
+        }
+
+        .tag-picker-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 32px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: #111b2c;
+            color: #b9c7d8;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 750;
+        }
+
+        .tag-picker-button:hover,
+        .tag-picker.open .tag-picker-button {
+            border-color: #4b6382;
+            background: #182740;
+            color: #ffffff;
+        }
+
+        .tag-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 7px);
+            right: 0;
+            z-index: 80;
+            min-width: 145px;
+            padding: 10px;
+            border: 1px solid #33445e;
+            border-radius: 8px;
+            background: #0c1525;
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+        }
+
+        .tag-picker.open .tag-menu {
+            display: grid;
+            gap: 8px;
+        }
+
+        .tag-option {
+            width: max-content;
+            max-width: 100%;
+            cursor: pointer;
+        }
+
+        .tag-option:hover {
+            filter: brightness(1.12);
+            transform: translateY(-1px);
+        }
+
+        .security-alert {
+            display: none;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 16px;
+            align-items: center;
+            margin-top: 16px;
+            padding: 15px;
+            border: 1px solid rgba(245, 158, 11, 0.55);
+            border-radius: 11px;
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .security-alert.visible {
+            display: grid;
+        }
+
+        .security-alert strong {
+            display: block;
+            margin-bottom: 5px;
+            color: #fcd34d;
+        }
+
+        .security-alert p {
+            margin: 0;
+            color: #f8e2a6;
+            font-size: 13px;
+        }
+
+        .security-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .warning-button {
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: 8px;
+            background: #f59e0b;
+            color: #2d1a00;
+            cursor: pointer;
+            font-weight: 850;
+        }
+
+        .program-dates {
+            display: grid;
+            gap: 4px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .program-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .program-actions button {
+            min-height: 38px;
+            border-radius: 8px;
+            cursor: pointer;
+            color: var(--text);
+            font-weight: 750;
+        }
+
+        .btn-edit {
+            background: var(--blue);
+        }
+
+        .btn-delete {
+            background: var(--danger);
+        }
+
+        .list-view .program-card {
+            grid-template-columns: 150px minmax(0, 1fr);
+        }
+
+        .list-view .program-card-image {
+            height: 100%;
+            min-height: 190px;
+            aspect-ratio: auto;
+        }
+
+        .list-view .program-card-body {
+            padding: 16px 16px 16px 0;
+        }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 18px;
+        }
+
+        .stat-card,
+        .panel {
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            background: var(--surface);
+        }
+
+        .stat-card {
+            padding: 18px;
+        }
+
+        .stat-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .stat-card strong {
+            display: block;
+            margin-top: 7px;
+            font-size: 26px;
+        }
+
+        .panel {
+            padding: 20px;
+        }
+
+        .panel + .panel {
+            margin-top: 18px;
+        }
+
+        .panel h2,
+        .panel h3 {
+            margin: 0 0 16px;
+        }
+
+        .progress-track {
+            height: 12px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #27354b;
+        }
+
+        .progress-bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: var(--green);
+            transition: width 0.3s ease;
+        }
+
+        .progress-message {
+            margin: 12px 0 0;
+            color: var(--muted);
+        }
+
+        .result-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-top: 18px;
+        }
+
+        .result-box {
+            min-height: 140px;
+            max-height: 280px;
+            overflow-y: auto;
+            padding: 14px;
+            border-radius: 10px;
+            background: #111b2c;
+            border: 1px solid var(--border-soft);
+        }
+
+        .result-box h4 {
+            margin: 0 0 10px;
+        }
+
+        .result-box ul {
+            margin: 0;
+            padding-left: 18px;
+            color: #c4cfdd;
+        }
+
+        .line-toolbar {
+            display: grid;
+            grid-template-columns: minmax(220px, 1fr) auto auto;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .input,
+        .textarea {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            outline: 0;
+            background: #111b2c;
+            color: var(--text);
+        }
+
+        .input {
+            min-height: 42px;
+            padding: 0 13px;
+        }
+
+        .textarea {
+            min-height: 96px;
+            padding: 12px 13px;
+            resize: vertical;
+        }
+
+        .input:focus,
+        .textarea:focus {
+            border-color: var(--green);
+            box-shadow: 0 0 0 3px rgba(34, 214, 111, 0.12);
+        }
+
+        .line-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin: 10px 0 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .check-all {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            color: #d8e2ee;
+            font-weight: 700;
+        }
+
+        .check-all input,
+        .line-check {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--green);
+        }
+
+        .lines-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 14px;
+        }
+
+        .line-card {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: center;
+            padding: 16px;
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            background: var(--surface);
+        }
+
+        .line-title {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin: 0 0 8px;
+        }
+
+        .line-details {
+            display: grid;
+            gap: 5px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .line-status {
+            color: #67e89d;
+            font-weight: 800;
+        }
+
+        .line-status.waiting {
+            color: #fbbf24;
+        }
+
+        .line-status.error {
+            color: #fb7185;
+        }
+
+        .line-actions {
+            display: grid;
+            gap: 8px;
+            justify-items: end;
+        }
+
+        .qr {
+            width: 120px;
+            height: 120px;
+            padding: 6px;
+            border-radius: 8px;
+            background: white;
+        }
+
+        .small-secondary {
+            min-height: 34px;
+            padding: 0 11px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            background: #1b2b42;
+            color: #b9d7ff;
+            cursor: pointer;
+            font-weight: 750;
+        }
+
+        .small-secondary:hover {
+            background: #263a57;
+        }
+
+        .small-secondary:disabled {
+            opacity: 0.65;
+            cursor: wait;
+        }
+
+        .small-danger {
+            min-height: 34px;
+            padding: 0 11px;
+            border-radius: 7px;
+            background: #3b1c27;
+            color: #ff8da0;
+            cursor: pointer;
+            font-weight: 750;
+        }
+
+        .fab {
+            position: fixed;
+            right: 26px;
+            bottom: 26px;
+            z-index: 20;
+            display: grid;
+            place-items: center;
+            width: 58px;
+            height: 58px;
+            border-radius: 50%;
+            background: var(--green);
+            color: white;
+            cursor: pointer;
+            font-size: 34px;
+            font-weight: 300;
+            box-shadow: 0 14px 32px rgba(34, 214, 111, 0.28);
+            transition: 0.18s ease;
+        }
+
+        .fab:hover {
+            transform: translateY(-2px) scale(1.03);
+            background: var(--green-dark);
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            padding: 22px;
+            background: rgba(2, 7, 16, 0.78);
+            backdrop-filter: blur(5px);
+        }
+
+        .modal.open {
+            display: flex;
+        }
+
+        .modal-card {
+            width: min(760px, 96vw);
+            max-height: 92vh;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: #131f31;
+            box-shadow: var(--shadow);
+        }
+
+        .modal-header {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 18px 20px;
+            background: #131f31;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .icon-button {
+            display: grid;
+            place-items: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            background: #213048;
+            color: white;
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        .field {
+            display: grid;
+            gap: 7px;
+        }
+
+        .field.full {
+            grid-column: 1 / -1;
+        }
+
+        .field label {
+            font-size: 13px;
+            font-weight: 800;
+            color: #dce6f2;
+        }
+
+        .help {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .upload-zone {
+            position: relative;
+            display: grid;
+            place-items: center;
+            min-height: 230px;
+            overflow: hidden;
+            border: 2px dashed #3b4c65;
+            border-radius: 12px;
+            background: #0f1929;
+            cursor: pointer;
+            text-align: center;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--green);
+        }
+
+        .upload-zone input {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .upload-placeholder {
+            display: grid;
+            gap: 7px;
+            justify-items: center;
+            color: var(--muted);
+        }
+
+        .upload-placeholder b {
+            color: #d9e3ef;
+        }
+
+        .preview-image {
+            display: none;
+            width: 100%;
+            max-height: 380px;
+            object-fit: contain;
+            background: #09111e;
+        }
+
+        .selected-lines-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 13px;
+            border-radius: 9px;
+            background: #0f1929;
+            border: 1px solid var(--border-soft);
+        }
+
+        .modal-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        .modal-message {
+            min-height: 22px;
+            margin: 12px 0 0;
+            font-weight: 700;
+            text-align: center;
+        }
+
+        .modal-card.create-modal-card {
+            width: min(1180px, 96vw);
+            max-height: 94vh;
+            overflow: hidden;
+        }
+
+        .create-modal-body {
+            padding: 0;
+        }
+
+        .create-layout {
+            display: grid;
+            grid-template-columns: minmax(340px, 0.9fr) minmax(520px, 1.35fr);
+            min-height: 650px;
+        }
+
+        .create-image-column {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 20px;
+            background: #0d1727;
+            border-right: 1px solid var(--border-soft);
+        }
+
+        .create-image-column .field {
+            flex: 1;
+        }
+
+        .create-image-column .upload-zone {
+            min-height: 540px;
+            height: 100%;
+        }
+
+        .create-image-column .preview-image {
+            width: 100%;
+            height: 100%;
+            max-height: none;
+            object-fit: contain;
+        }
+
+        .create-info-column {
+            min-width: 0;
+            max-height: calc(94vh - 74px);
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .create-info-column .form-grid {
+            margin-top: 14px;
+        }
+
+        .line-selector-panel {
+            margin-top: 16px;
+            padding: 14px;
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            background: #0f1929;
+        }
+
+        .line-selector-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .line-selector-header h3 {
+            margin: 0;
+            font-size: 15px;
+        }
+
+        .selected-count {
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(34, 214, 111, 0.12);
+            color: #67e89d;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .line-selector-toolbar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+        }
+
+        .line-selector-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 10px 0;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .selector-lines-list {
+            display: grid;
+            gap: 8px;
+            max-height: 235px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .selector-line {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 11px;
+            border: 1px solid var(--border-soft);
+            border-radius: 9px;
+            background: #142136;
+            cursor: pointer;
+        }
+
+        .selector-line:hover {
+            border-color: #45617f;
+            background: #182740;
+        }
+
+        .selector-line-info {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .selector-line-info strong,
+        .selector-line-info span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .selector-line-info span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .section-heading-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .section-heading-row h2 {
+            margin: 0 0 5px;
+        }
+
+        .section-heading-row p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .pending-title {
+            margin: 18px 0 10px;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 800;
+        }
+
+        .toast-container {
+            position: fixed;
+            top: 22px;
+            right: 22px;
+            z-index: 200;
+            display: grid;
+            gap: 10px;
+        }
+
+        .toast {
+            min-width: 260px;
+            max-width: 380px;
+            padding: 13px 15px;
+            border-radius: 10px;
+            background: #1a2a3f;
+            border: 1px solid var(--border);
+            box-shadow: var(--shadow);
+            color: var(--text);
+            animation: toastIn 0.2s ease;
+        }
+
+        .toast.success {
+            border-color: rgba(34, 214, 111, 0.45);
+        }
+
+        .toast.error {
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        @keyframes toastIn {
+            from {
+                opacity: 0;
+                transform: translateY(-8px);
+            }
+        }
+
+        @media (max-width: 900px) {
+            .app-shell {
+                grid-template-columns: 180px minmax(0, 1fr);
+            }
+
+            .sidebar {
+                padding-inline: 14px;
+            }
+
+            .main {
+                padding-inline: 20px;
+            }
+
+            .stats-row {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 680px) {
+            body {
+                overflow: auto;
+            }
+
+            .app-shell {
+                display: block;
+            }
+
+            .sidebar {
+                min-height: auto;
+                position: sticky;
+                top: 0;
+                z-index: 30;
+                padding: 12px;
+            }
+
+            .brand {
+                margin: 0 0 10px;
+            }
+
+            .nav {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 6px;
+            }
+
+            .nav-button {
+                padding: 9px 6px;
+                text-align: center;
+                font-size: 12px;
+            }
+
+            .sidebar-version {
+                display: none;
+            }
+
+            .main {
+                height: auto;
+                min-height: calc(100vh - 110px);
+                padding: 20px 14px 92px;
+            }
+
+            .topbar {
+                align-items: flex-start;
+            }
+
+            .topbar-actions {
+                display: none;
+            }
+
+            .stats-row,
+            .result-columns,
+            .form-grid,
+            .modal-actions,
+            .line-toolbar,
+            .line-selector-toolbar {
+                grid-template-columns: 1fr;
+            }
+
+            .modal-card.create-modal-card {
+                overflow-y: auto;
+            }
+
+            .create-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .create-image-column {
+                border-right: 0;
+                border-bottom: 1px solid var(--border-soft);
+            }
+
+            .create-image-column .upload-zone {
+                min-height: 360px;
+            }
+
+            .create-info-column {
+                max-height: none;
+                overflow: visible;
+            }
+
+            .dashboard-grid,
+            .lines-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .list-view .program-card {
+                grid-template-columns: 1fr;
+            }
+
+            .list-view .program-card-body {
+                padding: 0 16px 16px;
+            }
+
+            .fab {
+                right: 18px;
+                bottom: 18px;
+            }
+
+            .security-alert {
+                grid-template-columns: 1fr;
+            }
+
+            .security-actions {
+                justify-content: stretch;
+            }
+
+            .security-actions button {
+                flex: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="brand-icon">📱</span>
+                <span>AutoStatues</span>
+            </div>
+
+            <nav class="nav">
+                <button class="nav-button active" data-section="dashboard">
+                    Dashboard
+                </button>
+                <button class="nav-button" data-section="estados">
+                    Estados
+                </button>
+                <button class="nav-button" data-section="lineas">
+                    Líneas (<span id="nav-line-count">0</span>)
+                </button>
+            </nav>
+
+            <div class="update-panel">
+                <div class="update-panel-header">
+                    <span class="update-panel-title">Actualizaciones</span>
+                    <span id="update-version" class="update-version">v1.0.0</span>
+                </div>
+
+                <p id="update-message" class="update-message">
+                    Comprobando el estado de la aplicación...
+                </p>
+
+                <div id="update-progress" class="update-progress">
+                    <div id="update-progress-bar" class="update-progress-bar"></div>
+                </div>
+
+                <button type="button" id="btn-update-search" class="update-button">
+                    Buscar actualización
+                </button>
+
+                <button type="button" id="btn-update-download" class="update-button primary" hidden>
+                    Descargar actualización
+                </button>
+
+                <button type="button" id="btn-update-install" class="update-button install" hidden>
+                    Reiniciar e instalar
+                </button>
+            </div>
+
+            <div class="sidebar-version">AutoStatues Pro</div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <h1 id="page-title">Mis Estados Programados</h1>
+
+                <div class="topbar-actions" id="view-controls">
+                    <button class="view-button active" data-view="grid">
+                        Cuadrado
+                    </button>
+                    <button class="view-button" data-view="list">
+                        Lista
+                    </button>
+                </div>
+            </header>
+
+            <section id="section-dashboard" class="section active">
+                <div id="lista-programaciones" class="dashboard-grid">
+                    <div class="empty-state">
+                        <div>
+                            <strong>Aún no hay estados programados</strong>
+                            Tocá el botón + para crear el primero.
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-estados" class="section">
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <span>Publicadas</span>
+                        <strong id="progreso-procesadas">0</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Total</span>
+                        <strong id="progreso-total">0</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Correctas</span>
+                        <strong id="progreso-correctas">0</strong>
+                    </div>
+                    <div class="stat-card">
+                        <span>Fallidas</span>
+                        <strong id="progreso-fallidas">0</strong>
+                    </div>
+                </div>
+
+                <div id="panel-progreso" class="panel">
+                    <h2>Progreso de publicación</h2>
+
+                    <div class="line-summary">
+                        <span>
+                            Grupo:
+                            <strong id="progreso-grupo">0 de 0</strong>
+                        </span>
+                        <span>
+                            Próximo envío:
+                            <strong id="progreso-proximo">--</strong>
+                        </span>
+                    </div>
+
+                    <div class="progress-track">
+                        <div id="barra-progreso" class="progress-bar"></div>
+                    </div>
+
+                    <p id="progreso-mensaje" class="progress-message">
+                        No hay una publicación activa.
+                    </p>
+
+                    <div id="alerta-seguridad" class="security-alert">
+                        <div>
+                            <strong>⚠️ Corte automático de seguridad</strong>
+                            <p id="detalle-seguridad">
+                                La publicación fue detenida porque falló el 80% o más del grupo.
+                            </p>
+                        </div>
+
+                        <div class="security-actions">
+                            <button
+                                type="button"
+                                id="btn-reanudar-seguridad"
+                                class="warning-button"
+                            >
+                                Reanudar
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-cancelar-seguridad"
+                                class="small-danger"
+                            >
+                                Cancelar
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="result-columns">
+                        <div class="result-box">
+                            <h4>✅ Líneas publicadas</h4>
+                            <ul id="lista-correctas"></ul>
+                        </div>
+
+                        <div class="result-box">
+                            <h4>❌ Líneas fallidas</h4>
+                            <ul id="lista-fallidas"></ul>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="section-lineas" class="section">
+                <div class="panel">
+                    <h2>Conectar una nueva línea</h2>
+
+                    <div class="line-toolbar" style="grid-template-columns:minmax(220px,1fr) auto;">
+                        <input
+                            type="text"
+                            id="nombre-linea"
+                            class="input"
+                            placeholder="Nombre de la línea"
+                        >
+
+                        <button type="button" id="btn-conectar" class="primary-button">
+                            Conectar línea
+                        </button>
+                    </div>
+
+                    <p id="mensaje-linea"></p>
+                    <div class="pending-title">Líneas pendientes de vinculación</div>
+                    <div id="lista-lineas-pendientes" class="lines-grid"></div>
+                </div>
+
+                <div class="panel">
+                    <div class="section-heading-row">
+                        <div>
+                            <h2>Líneas conectadas</h2>
+                            <p>Acá se muestran únicamente las líneas que ya están listas para publicar.</p>
+                        </div>
+                    </div>
+
+                    <div class="line-toolbar" style="grid-template-columns:minmax(220px,1fr) auto; margin-bottom:12px;">
+                        <input
+                            type="search"
+                            id="buscar-lineas-seccion"
+                            class="input"
+                            placeholder="Buscar por nombre o número"
+                            autocomplete="off"
+                        >
+
+                        <button
+                            type="button"
+                            id="btn-limpiar-busqueda-seccion"
+                            class="secondary-button"
+                        >
+                            Limpiar
+                        </button>
+                    </div>
+
+                    <p id="resultado-busqueda-seccion" class="help" style="margin:0 0 14px;"></p>
+
+                    <div id="lista-lineas-conectadas" class="lines-grid"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <button id="btn-nuevo-estado" class="fab" title="Crear nuevo estado">+</button>
+
+    <div id="modal-crear" class="modal">
+        <div class="modal-card create-modal-card">
+            <div class="modal-header">
+                <h2>Nuevo estado</h2>
+                <button type="button" id="cerrar-modal-crear" class="icon-button">×</button>
+            </div>
+
+            <div class="modal-body create-modal-body">
+                <form id="formulario">
+                    <div class="create-layout">
+                        <section class="create-image-column">
+                            <div class="field">
+                                <label>Imagen del estado</label>
+
+                                <label class="upload-zone" for="foto">
+                                    <input
+                                        type="file"
+                                        id="foto"
+                                        accept="image/png, image/jpeg"
+                                        required
+                                    >
+
+                                    <div id="upload-placeholder" class="upload-placeholder">
+                                        <span style="font-size: 46px;">🖼️</span>
+                                        <b>Elegir una imagen</b>
+                                        <span>PNG o JPG</span>
+                                    </div>
+
+                                    <img id="preview-imagen" class="preview-image" alt="Vista previa">
+                                </label>
+                            </div>
+                        </section>
+
+                        <section class="create-info-column">
+                            <div class="field">
+                                <label for="texto">Texto opcional</label>
+                                <textarea
+                                    id="texto"
+                                    class="textarea"
+                                    placeholder="Podés dejarlo vacío para publicar solamente la imagen."
+                                ></textarea>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="field">
+                                    <label for="lineas-por-grupo">Líneas por envío</label>
+                                    <input
+                                        type="number"
+                                        id="lineas-por-grupo"
+                                        class="input"
+                                        min="1"
+                                        max="50"
+                                        step="1"
+                                        value="10"
+                                        required
+                                    >
+                                    <span class="help">Cantidad de líneas procesadas por grupo.</span>
+                                </div>
+
+                                <div class="field">
+                                    <label for="intervalo-minutos">Minutos entre envíos</label>
+                                    <input
+                                        type="number"
+                                        id="intervalo-minutos"
+                                        class="input"
+                                        min="0"
+                                        max="1440"
+                                        step="0.5"
+                                        value="5"
+                                        required
+                                    >
+                                    <span class="help">Usá 0 para continuar sin espera.</span>
+                                </div>
+
+                                <div class="field full">
+                                    <label for="hora-programada">Hora diaria</label>
+                                    <input type="time" id="hora-programada" class="input">
+                                    <span class="help">Solo se usa al programar diariamente.</span>
+                                </div>
+                            </div>
+
+                            <div class="line-selector-panel">
+                                <div class="line-selector-header">
+                                    <h3>Elegir líneas</h3>
+                                    <span id="cantidad-lineas-seleccionadas" class="selected-count">0 línea(s)</span>
+                                </div>
+
+                                <div class="line-selector-toolbar">
+                                    <input
+                                        type="search"
+                                        id="buscar-lineas"
+                                        class="input"
+                                        placeholder="Buscar por nombre o número"
+                                        autocomplete="off"
+                                    >
+
+                                    <button type="button" id="btn-limpiar-busqueda" class="secondary-button">
+                                        Limpiar
+                                    </button>
+                                </div>
+
+                                <div class="line-selector-summary">
+                                    <label class="check-all">
+                                        <input type="checkbox" id="seleccionar-todas">
+                                        Seleccionar todas
+                                    </label>
+
+                                    <span id="resultado-busqueda">0 líneas conectadas.</span>
+                                </div>
+
+                                <div id="lista-lineas" class="selector-lines-list"></div>
+                            </div>
+
+                            <div class="modal-actions">
+                                <button type="submit" id="btn-publicar" class="primary-button">
+                                    🚀 Subir ahora
+                                </button>
+
+                                <button type="button" id="btn-programar" class="secondary-button">
+                                    🕒 Programar diariamente
+                                </button>
+                            </div>
+
+                            <p id="mensaje" class="modal-message"></p>
+                        </section>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-editar" class="modal">
+        <div class="modal-card" style="width: min(600px, 96vw);">
+            <div class="modal-header">
+                <h2>Editar estado programado</h2>
+                <button type="button" id="cerrar-modal-editar" class="icon-button">×</button>
+            </div>
+
+            <div class="modal-body">
+                <input type="hidden" id="editar-id">
+
+                <img
+                    id="editar-imagen-actual"
+                    alt="Imagen actualmente programada"
+                    style="display:block;width:180px;height:220px;object-fit:cover;margin:0 auto 16px;border-radius:10px;background:#0b1422;"
+                >
+
+                <div class="field">
+                    <label for="editar-foto">Cambiar imagen</label>
+                    <input
+                        type="file"
+                        id="editar-foto"
+                        class="input"
+                        accept="image/png, image/jpeg"
+                    >
+                    <span class="help">Dejalo vacío para conservar la imagen actual.</span>
+                </div>
+
+                <div class="field" style="margin-top:14px;">
+                    <label for="editar-texto">Texto opcional</label>
+                    <textarea
+                        id="editar-texto"
+                        class="textarea"
+                        placeholder="Podés dejarlo vacío."
+                    ></textarea>
+                </div>
+
+                <div class="field" style="margin-top:14px;">
+                    <label for="editar-hora">Hora diaria</label>
+                    <input type="time" id="editar-hora" class="input">
+                </div>
+
+                <p id="mensaje-edicion" class="modal-message"></p>
+
+                <div class="modal-actions">
+                    <button type="button" id="btn-guardar-edicion" class="primary-button">
+                        Guardar cambios
+                    </button>
+
+                    <button type="button" id="btn-cancelar-edicion" class="secondary-button">
+                        Cancelar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script>
+        const lineasSeleccionadas = new Set();
+        const programacionesCache = new Map();
+
+        let idsLineasConectadas = [];
+        let intervaloProgreso = null;
+        let vistaProgramaciones = 'grid';
+        let urlPreviewActual = null;
+        let selectorEtiquetaAbiertoId = null;
+
+        const titulos = {
+            dashboard: 'Mis Estados Programados',
+            estados: 'Actividad de Estados',
+            lineas: 'Líneas conectadas'
+        };
+
+        function escaparHTML(texto) {
+            return String(texto ?? '').replace(/[&<>"']/g, caracter => {
+                const caracteres = {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                };
+
+                return caracteres[caracter];
+            });
+        }
+
+        function toast(mensaje, tipo = '') {
+            const contenedor = document.getElementById('toast-container');
+            const elemento = document.createElement('div');
+
+            elemento.className = `toast ${tipo}`.trim();
+            elemento.textContent = mensaje;
+            contenedor.appendChild(elemento);
+
+            setTimeout(() => elemento.remove(), 4200);
+        }
+
+        function abrirModal(id) {
+            document.getElementById(id).classList.add('open');
+        }
+
+        function cerrarModal(id) {
+            document.getElementById(id).classList.remove('open');
+        }
+
+        function actualizarCantidadSeleccionadas() {
+            document.getElementById('cantidad-lineas-seleccionadas').textContent =
+                `${lineasSeleccionadas.size} línea(s)`;
+        }
+
+        function mostrarSeccion(nombre) {
+            document.querySelectorAll('.section').forEach(seccion => {
+                seccion.classList.toggle(
+                    'active',
+                    seccion.id === `section-${nombre}`
+                );
+            });
+
+            document.querySelectorAll('.nav-button').forEach(boton => {
+                boton.classList.toggle(
+                    'active',
+                    boton.dataset.section === nombre
+                );
+            });
+
+            document.getElementById('page-title').textContent = titulos[nombre];
+
+            document.getElementById('view-controls').style.display =
+                nombre === 'dashboard' ? 'flex' : 'none';
+        }
+
+        function actualizarCheckboxGeneral() {
+            const checkbox = document.getElementById('seleccionar-todas');
+
+            const cantidadSeleccionadas =
+                idsLineasConectadas.filter(id =>
+                    lineasSeleccionadas.has(id)
+                ).length;
+
+            checkbox.checked =
+                idsLineasConectadas.length > 0 &&
+                cantidadSeleccionadas === idsLineasConectadas.length;
+
+            checkbox.indeterminate =
+                cantidadSeleccionadas > 0 &&
+                cantidadSeleccionadas < idsLineasConectadas.length;
+
+            checkbox.disabled = idsLineasConectadas.length === 0;
+
+            actualizarCantidadSeleccionadas();
+        }
+
+        function claseEstadoLinea(estado) {
+            if (estado === 'esperando_qr') return 'waiting';
+            if ([
+                'error',
+                'sesion_cerrada',
+                'desconectado',
+                'reconectando'
+            ].includes(estado)) return 'error';
+            return '';
+        }
+
+        function mostrarEstado(estado) {
+            const estados = {
+                iniciando: '⏳ Iniciando',
+                esperando_qr: '📱 Esperando QR',
+                conectado: '✅ Conectado',
+                desconectado: '❌ Desconectado',
+                reconectando: '🔄 Desconectado · reconectando',
+                sesion_cerrada: '⚠️ Sesión cerrada',
+                error: '❌ Error'
+            };
+
+            return estados[estado] || estado;
+        }
+
+
+        function normalizarEtiquetaVisual(etiqueta) {
+            return ['activa', 'indefinida', 'caida', 'reposo'].includes(etiqueta)
+                ? etiqueta
+                : 'activa';
+        }
+
+        function nombreEtiqueta(etiqueta) {
+            const nombres = {
+                activa: 'Activa',
+                indefinida: 'Indefinida',
+                caida: 'Caída',
+                reposo: 'Reposo'
+            };
+
+            return nombres[normalizarEtiquetaVisual(etiqueta)];
+        }
+
+        function etiquetaHTML(etiqueta) {
+            const valor = normalizarEtiquetaVisual(etiqueta);
+            return `<span class="line-tag ${valor}">${nombreEtiqueta(valor)}</span>`;
+        }
+
+        function selectorEtiquetaHTML(linea) {
+            const valor = normalizarEtiquetaVisual(linea.etiqueta);
+            const estaAbierto = selectorEtiquetaAbiertoId === linea.id;
+            const opciones = ['activa', 'indefinida', 'caida', 'reposo']
+                .map(opcion => `
+                    <button
+                        type="button"
+                        class="line-tag ${opcion} tag-option"
+                        data-id="${linea.id}"
+                        data-etiqueta="${opcion}"
+                    >
+                        ${nombreEtiqueta(opcion)}
+                    </button>
+                `)
+                .join('');
+
+            return `
+                <div
+                    class="tag-picker ${estaAbierto ? 'open' : ''}"
+                    data-id="${linea.id}"
+                >
+                    <button
+                        type="button"
+                        class="tag-picker-button btn-abrir-etiquetas"
+                        data-id="${linea.id}"
+                        aria-expanded="${estaAbierto ? 'true' : 'false'}"
+                    >
+                        <span>🏷</span>
+                        <span>Etiquetas</span>
+                        <span>+</span>
+                    </button>
+                    <div class="tag-menu" role="menu" aria-label="Etiquetas de ${escaparHTML(linea.nombre)}">
+                        ${opciones}
+                    </div>
+                </div>
+            `;
+        }
+
+        function mostrarEstadoProgramacion(estado) {
+            const estados = {
+                programado: 'Programado diariamente',
+                en_cola: 'En cola',
+                ejecutando: 'Publicando'
+            };
+
+            return estados[estado] || estado;
+        }
+
+        async function leerRespuesta(respuesta) {
+            const contenido = await respuesta.text();
+
+            try {
+                return JSON.parse(contenido);
+            } catch {
+                return { mensaje: contenido };
+            }
+        }
+
+        async function actualizarLineas() {
+            try {
+                const respuesta = await fetch('/estado');
+                const data = await respuesta.json();
+
+                const selector = document.getElementById('lista-lineas');
+                const contenedorConectadas =
+                    document.getElementById('lista-lineas-conectadas');
+                const contenedorPendientes =
+                    document.getElementById('lista-lineas-pendientes');
+
+                selector.innerHTML = '';
+                contenedorConectadas.innerHTML = '';
+                contenedorPendientes.innerHTML = '';
+
+                const conectadas = data.lineas.filter(
+                    linea => linea.estado === 'conectado'
+                );
+                const pendientes = data.lineas.filter(
+                    linea => linea.estado !== 'conectado'
+                );
+
+                idsLineasConectadas = conectadas.map(linea => linea.id);
+
+                for (const id of Array.from(lineasSeleccionadas)) {
+                    if (!idsLineasConectadas.includes(id)) {
+                        lineasSeleccionadas.delete(id);
+                    }
+                }
+
+                const busqueda = document
+                    .getElementById('buscar-lineas')
+                    .value
+                    .trim()
+                    .toLocaleLowerCase('es');
+
+                const visibles = conectadas.filter(linea =>
+                    !busqueda ||
+                    String(linea.nombre || '')
+                        .toLocaleLowerCase('es')
+                        .includes(busqueda) ||
+                    String(linea.numero || '')
+                        .toLocaleLowerCase('es')
+                        .includes(busqueda) ||
+                    nombreEtiqueta(linea.etiqueta)
+                        .toLocaleLowerCase('es')
+                        .includes(busqueda)
+                );
+
+                for (const linea of visibles) {
+                    const opcion = document.createElement('label');
+                    opcion.className = 'selector-line';
+                    opcion.innerHTML = `
+                        <input
+                            type="checkbox"
+                            class="line-check seleccionar-linea"
+                            value="${linea.id}"
+                            ${lineasSeleccionadas.has(linea.id) ? 'checked' : ''}
+                        >
+                        <span class="selector-line-info">
+                            <strong>
+                                ${escaparHTML(linea.nombre)}
+                                ${etiquetaHTML(linea.etiqueta)}
+                            </strong>
+                            <span>${linea.numero ? `📞 ${escaparHTML(linea.numero)}` : 'Número no disponible'}</span>
+                        </span>
+                    `;
+                    selector.appendChild(opcion);
+                }
+
+                if (!visibles.length) {
+                    selector.innerHTML = `
+                        <div class="empty-state" style="min-height:100px;">
+                            <div>
+                                <strong>${busqueda ? 'No se encontraron líneas' : 'No hay líneas conectadas'}</strong>
+                                ${busqueda ? 'Probá con otro nombre o número.' : 'Conectá una línea desde la sección Líneas.'}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const busquedaSeccion = document
+                    .getElementById('buscar-lineas-seccion')
+                    .value
+                    .trim()
+                    .toLocaleLowerCase('es');
+
+                const conectadasVisiblesSeccion = conectadas.filter(linea =>
+                    !busquedaSeccion ||
+                    String(linea.nombre || '')
+                        .toLocaleLowerCase('es')
+                        .includes(busquedaSeccion) ||
+                    String(linea.numero || '')
+                        .toLocaleLowerCase('es')
+                        .includes(busquedaSeccion) ||
+                    nombreEtiqueta(linea.etiqueta)
+                        .toLocaleLowerCase('es')
+                        .includes(busquedaSeccion)
+                );
+
+                for (const linea of conectadasVisiblesSeccion) {
+                    const tarjeta = document.createElement('article');
+                    tarjeta.className = 'line-card';
+                    tarjeta.innerHTML = `
+                        <div>
+                            <h3 class="line-title">
+                                ${escaparHTML(linea.nombre)}
+                                ${etiquetaHTML(linea.etiqueta)}
+                            </h3>
+                            <div class="line-details">
+                                <span class="line-status">✅ Conectado</span>
+                                ${linea.numero ? `<span>📞 ${escaparHTML(linea.numero)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="line-actions">
+                            ${selectorEtiquetaHTML(linea)}
+                            <button
+                                type="button"
+                                class="small-secondary btn-reconectar"
+                                data-id="${linea.id}"
+                            >
+                                Reconectar
+                            </button>
+                            <button
+                                type="button"
+                                class="small-danger btn-eliminar"
+                                data-id="${linea.id}"
+                            >
+                                Eliminar
+                            </button>
+                        </div>
+                    `;
+                    contenedorConectadas.appendChild(tarjeta);
+                }
+
+                if (!conectadasVisiblesSeccion.length) {
+                    contenedorConectadas.innerHTML = `
+                        <div class="empty-state" style="grid-column:1/-1;">
+                            <div>
+                                <strong>${busquedaSeccion ? 'No se encontraron líneas' : 'No hay líneas conectadas'}</strong>
+                                ${busquedaSeccion
+                                    ? 'Probá con otro nombre o número.'
+                                    : 'Las líneas aparecerán acá cuando terminen de vincularse.'}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                document.getElementById('resultado-busqueda-seccion').textContent =
+                    busquedaSeccion
+                        ? `${conectadasVisiblesSeccion.length} resultado(s) de ${conectadas.length}.`
+                        : `${conectadas.length} línea(s) conectada(s).`;
+
+                for (const linea of pendientes) {
+                    const tarjeta = document.createElement('article');
+                    tarjeta.className = 'line-card';
+                    tarjeta.innerHTML = `
+                        <div>
+                            <h3 class="line-title">
+                                ${escaparHTML(linea.nombre)}
+                                ${etiquetaHTML(linea.etiqueta)}
+                            </h3>
+                            <div class="line-details">
+                                <span class="line-status ${claseEstadoLinea(linea.estado)}">
+                                    ${mostrarEstado(linea.estado)}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="line-actions">
+                            ${
+                                linea.estado === 'esperando_qr' && linea.qr
+                                    ? `<img class="qr" src="${linea.qr}" alt="QR de ${escaparHTML(linea.nombre)}">`
+                                    : ''
+                            }
+                            ${selectorEtiquetaHTML(linea)}
+                            <button
+                                type="button"
+                                class="small-secondary btn-reconectar"
+                                data-id="${linea.id}"
+                            >
+                                Reconectar
+                            </button>
+                            <button
+                                type="button"
+                                class="small-danger btn-eliminar"
+                                data-id="${linea.id}"
+                            >
+                                Eliminar
+                            </button>
+                        </div>
+                    `;
+                    contenedorPendientes.appendChild(tarjeta);
+                }
+
+                if (!pendientes.length) {
+                    contenedorPendientes.innerHTML = `
+                        <div class="empty-state" style="grid-column:1/-1;min-height:90px;">
+                            <div>No hay líneas pendientes.</div>
+                        </div>
+                    `;
+                }
+
+                document.getElementById('nav-line-count').textContent =
+                    conectadas.length;
+
+                document.getElementById('resultado-busqueda').textContent =
+                    busqueda
+                        ? `${visibles.length} resultado(s) de ${conectadas.length}.`
+                        : `${conectadas.length} línea(s) conectada(s).`;
+
+                document
+                    .querySelectorAll('.seleccionar-linea')
+                    .forEach(checkbox => {
+                        checkbox.addEventListener('change', evento => {
+                            if (evento.target.checked) {
+                                lineasSeleccionadas.add(evento.target.value);
+                            } else {
+                                lineasSeleccionadas.delete(evento.target.value);
+                            }
+
+                            actualizarCheckboxGeneral();
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.btn-abrir-etiquetas')
+                    .forEach(botonEtiqueta => {
+                        botonEtiqueta.addEventListener('click', evento => {
+                            evento.stopPropagation();
+                            const id = evento.currentTarget.dataset.id;
+                            selectorEtiquetaAbiertoId = id;
+
+                            document.querySelectorAll('.tag-picker').forEach(picker => {
+                                const abierto = picker.dataset.id === id;
+                                picker.classList.toggle('open', abierto);
+                                picker.querySelector('.tag-picker-button')
+                                    ?.setAttribute('aria-expanded', String(abierto));
+                            });
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.tag-menu')
+                    .forEach(menu => {
+                        menu.addEventListener('click', evento => {
+                            evento.stopPropagation();
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.tag-option')
+                    .forEach(opcionEtiqueta => {
+                        opcionEtiqueta.addEventListener('click', async evento => {
+                            evento.stopPropagation();
+                            const opcionActual = evento.currentTarget;
+                            const id = opcionActual.dataset.id;
+                            const etiqueta = opcionActual.dataset.etiqueta;
+
+                            opcionActual.disabled = true;
+
+                            try {
+                                const respuestaEtiqueta = await fetch(
+                                    `/lineas/${id}/etiqueta`,
+                                    {
+                                        method: 'PATCH',
+                                        headers: {
+                                            'Content-Type': 'application/json'
+                                        },
+                                        body: JSON.stringify({ etiqueta })
+                                    }
+                                );
+
+                                const dataEtiqueta = await leerRespuesta(
+                                    respuestaEtiqueta
+                                );
+
+                                if (!respuestaEtiqueta.ok) {
+                                    throw new Error(
+                                        dataEtiqueta.error ||
+                                        'No se pudo actualizar la etiqueta.'
+                                    );
+                                }
+
+                                selectorEtiquetaAbiertoId = null;
+                                toast(
+                                    dataEtiqueta.mensaje ||
+                                    'Etiqueta actualizada.',
+                                    'success'
+                                );
+                                actualizarLineas();
+                            } catch (error) {
+                                opcionActual.disabled = false;
+                                toast(error.message, 'error');
+                            }
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.btn-reconectar')
+                    .forEach(boton => {
+                        boton.addEventListener('click', async evento => {
+                            const botonActual = evento.currentTarget;
+                            const id = botonActual.dataset.id;
+                            const textoOriginal = botonActual.textContent;
+
+                            botonActual.disabled = true;
+                            botonActual.textContent = 'Reconectando...';
+
+                            try {
+                                const respuestaReconectar = await fetch(
+                                    `/lineas/${id}/reconectar`,
+                                    { method: 'POST' }
+                                );
+
+                                const dataReconectar = await leerRespuesta(
+                                    respuestaReconectar
+                                );
+
+                                if (!respuestaReconectar.ok) {
+                                    throw new Error(
+                                        dataReconectar.error ||
+                                        'No se pudo reconectar la línea.'
+                                    );
+                                }
+
+                                toast(
+                                    dataReconectar.mensaje ||
+                                    'Reconexión iniciada.',
+                                    'success'
+                                );
+
+                                setTimeout(actualizarLineas, 700);
+                            } catch (error) {
+                                toast(error.message, 'error');
+                                botonActual.disabled = false;
+                                botonActual.textContent = textoOriginal;
+                            }
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.btn-eliminar')
+                    .forEach(boton => {
+                        boton.addEventListener('click', async evento => {
+                            const id = evento.currentTarget.dataset.id;
+
+                            if (!confirm('¿Querés eliminar esta línea y cerrar su sesión?')) {
+                                return;
+                            }
+
+                            const respuestaEliminar = await fetch(
+                                `/lineas/${id}`,
+                                { method: 'DELETE' }
+                            );
+
+                            const dataEliminar = await leerRespuesta(
+                                respuestaEliminar
+                            );
+
+                            if (!respuestaEliminar.ok) {
+                                toast(
+                                    dataEliminar.error ||
+                                    'No se pudo eliminar la línea.',
+                                    'error'
+                                );
+                                return;
+                            }
+
+                            lineasSeleccionadas.delete(id);
+                            toast(
+                                dataEliminar.mensaje || 'Línea eliminada.',
+                                'success'
+                            );
+                            actualizarLineas();
+                        });
+                    });
+
+                actualizarCheckboxGeneral();
+            } catch (error) {
+                console.error('Error consultando las líneas:', error);
+            }
+        }
+
+        function formatearTiempo(segundos) {
+            const minutos = Math.floor(segundos / 60);
+            const segundosRestantes = segundos % 60;
+
+            return `${minutos}:${String(segundosRestantes).padStart(2, '0')}`;
+        }
+
+        async function actualizarProgresoPublicacion() {
+            try {
+                const respuesta = await fetch('/progreso');
+                const progreso = await respuesta.json();
+
+                document.getElementById('progreso-procesadas').textContent =
+                    progreso.procesadas || 0;
+                document.getElementById('progreso-total').textContent =
+                    progreso.total || 0;
+                document.getElementById('progreso-correctas').textContent =
+                    progreso.correctas || 0;
+                document.getElementById('progreso-fallidas').textContent =
+                    progreso.fallidas || 0;
+                document.getElementById('progreso-grupo').textContent =
+                    `${progreso.grupoActual || 0} de ${progreso.totalGrupos || 0}`;
+
+                const proximo = document.getElementById('progreso-proximo');
+
+                if (progreso.estado === 'esperando_siguiente_grupo') {
+                    proximo.textContent = formatearTiempo(
+                        progreso.proximoGrupoSegundos || 0
+                    );
+                } else if (progreso.estado === 'completado') {
+                    proximo.textContent = 'Finalizado';
+                } else if (progreso.estado === 'detenido_seguridad') {
+                    proximo.textContent = 'Detenido por seguridad';
+                } else if (progreso.estado === 'cancelado_seguridad') {
+                    proximo.textContent = 'Cancelado';
+                } else if (progreso.estado === 'error') {
+                    proximo.textContent = 'Error';
+                } else if (progreso.activo) {
+                    proximo.textContent = 'Publicando ahora';
+                } else {
+                    proximo.textContent = '--';
+                }
+
+                document.getElementById('progreso-mensaje').textContent =
+                    progreso.mensaje || 'No hay una publicación activa.';
+
+                const alertaSeguridad = document.getElementById('alerta-seguridad');
+                const detalleSeguridad = document.getElementById('detalle-seguridad');
+                const seguridadDetenida =
+                    progreso.estado === 'detenido_seguridad';
+
+                alertaSeguridad.classList.toggle('visible', seguridadDetenida);
+
+                if (seguridadDetenida) {
+                    detalleSeguridad.textContent =
+                        progreso.mensajeSeguridad ||
+                        `Fallaron ${progreso.fallosGrupoActual || 0} de ` +
+                        `${progreso.totalGrupoActual || 0} líneas del grupo ` +
+                        `(${progreso.porcentajeFallosGrupo || 0}%).`;
+                }
+
+                const porcentaje = progreso.total > 0
+                    ? Math.round(
+                        (progreso.procesadas / progreso.total) * 100
+                    )
+                    : 0;
+
+                document.getElementById('barra-progreso').style.width =
+                    `${porcentaje}%`;
+
+                document.getElementById('lista-correctas').innerHTML =
+                    (progreso.lineasCorrectas || [])
+                        .map(linea => `
+                            <li>
+                                ${escaparHTML(linea.nombre)}
+                                ${
+                                    linea.numero
+                                        ? `— ${escaparHTML(linea.numero)}`
+                                        : ''
+                                }
+                            </li>
+                        `)
+                        .join('');
+
+                document.getElementById('lista-fallidas').innerHTML =
+                    (progreso.lineasFallidas || [])
+                        .map(linea => `
+                            <li>
+                                ${escaparHTML(linea.nombre)}
+                                — ${escaparHTML(linea.error)}
+                            </li>
+                        `)
+                        .join('');
+
+                document.getElementById('btn-publicar').disabled =
+                    Boolean(progreso.activo);
+            } catch (error) {
+                console.error('No se pudo consultar el progreso:', error);
+            }
+        }
+
+        function iniciarSeguimientoProgreso() {
+            if (intervaloProgreso) {
+                clearInterval(intervaloProgreso);
+            }
+
+            actualizarProgresoPublicacion();
+            intervaloProgreso = setInterval(
+                actualizarProgresoPublicacion,
+                1000
+            );
+        }
+
+        function validarDatosFormulario(paraProgramar) {
+            const archivo = document.getElementById('foto').files[0];
+            const texto = document.getElementById('texto').value;
+            const lineasPorGrupo = Number(
+                document.getElementById('lineas-por-grupo').value
+            );
+            const intervaloMinutos = Number(
+                document.getElementById('intervalo-minutos').value
+            );
+            const hora = document.getElementById('hora-programada').value;
+
+            if (!lineasSeleccionadas.size) {
+                throw new Error('Seleccioná al menos una línea conectada.');
+            }
+
+            if (!archivo) {
+                throw new Error('Seleccioná una imagen.');
+            }
+
+            if (
+                !Number.isInteger(lineasPorGrupo) ||
+                lineasPorGrupo < 1 ||
+                lineasPorGrupo > 50
+            ) {
+                throw new Error(
+                    'Indicá una cantidad entre 1 y 50 líneas por envío.'
+                );
+            }
+
+            if (
+                !Number.isFinite(intervaloMinutos) ||
+                intervaloMinutos < 0 ||
+                intervaloMinutos > 1440
+            ) {
+                throw new Error(
+                    'Indicá un intervalo entre 0 y 1440 minutos.'
+                );
+            }
+
+            if (
+                paraProgramar &&
+                !/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)
+            ) {
+                throw new Error('Elegí una hora diaria válida.');
+            }
+
+            return {
+                archivo,
+                texto,
+                lineasPorGrupo,
+                intervaloMinutos,
+                hora
+            };
+        }
+
+        function crearFormData(datos, incluirHora) {
+            const formData = new FormData();
+
+            formData.append('imagen', datos.archivo);
+            formData.append('texto', datos.texto);
+            formData.append(
+                'lineas',
+                JSON.stringify(Array.from(lineasSeleccionadas))
+            );
+            formData.append(
+                'lineasPorGrupo',
+                String(datos.lineasPorGrupo)
+            );
+            formData.append(
+                'intervaloMinutos',
+                String(datos.intervaloMinutos)
+            );
+
+            if (incluirHora) {
+                formData.append('hora', datos.hora);
+            }
+
+            return formData;
+        }
+
+        function abrirEditorProgramacion(id) {
+            const item = programacionesCache.get(id);
+            if (!item) return;
+
+            document.getElementById('editar-id').value = item.id;
+            document.getElementById('editar-hora').value = item.hora;
+            document.getElementById('editar-texto').value =
+                item.texto || '';
+            document.getElementById('editar-foto').value = '';
+            document.getElementById('mensaje-edicion').textContent = '';
+            document.getElementById('editar-imagen-actual').src =
+                `/programaciones/${item.id}/imagen?v=${Date.now()}`;
+
+            abrirModal('modal-editar');
+        }
+
+        function cerrarEditorProgramacion() {
+            cerrarModal('modal-editar');
+            document.getElementById('editar-id').value = '';
+            document.getElementById('editar-foto').value = '';
+            document.getElementById('mensaje-edicion').textContent = '';
+        }
+
+        function tarjetaProgramacion(item) {
+            const puedeModificar =
+                !['en_cola', 'ejecutando'].includes(item.estado);
+
+            const proxima = item.proximaEjecucion
+                ? new Date(item.proximaEjecucion).toLocaleString()
+                : 'No disponible';
+
+            const ultima = item.ultimaEjecucion
+                ? new Date(item.ultimaEjecucion).toLocaleString()
+                : 'Todavía no se ejecutó';
+
+            const textoVisible = item.texto
+                ? escaparHTML(item.texto)
+                : '<em style="color:#8091a8;">Sin texto.</em>';
+
+            return `
+                <article class="program-card">
+                    <img
+                        class="program-card-image"
+                        src="/programaciones/${item.id}/imagen?v=${encodeURIComponent(item.actualizadoEn || '')}"
+                        alt="Imagen programada"
+                    >
+
+                    <div class="program-card-body">
+                        <div class="program-card-time">
+                            Todos los días a las ${escaparHTML(item.hora)}
+                        </div>
+
+                        <div class="program-meta">
+                            <span class="chip success">
+                                ${mostrarEstadoProgramacion(item.estado)}
+                            </span>
+                            <span class="chip">
+                                ${item.cantidadLineas} líneas
+                            </span>
+                            <span class="chip">
+                                Grupos de ${item.lineasPorGrupo}
+                            </span>
+                            <span class="chip">
+                                ${item.intervaloMinutos} min
+                            </span>
+                        </div>
+
+                        <p class="program-card-text">${textoVisible}</p>
+
+                        <div class="program-dates">
+                            <span>Próxima: ${escaparHTML(proxima)}</span>
+                            <span>Última: ${escaparHTML(ultima)}</span>
+                        </div>
+
+                        <div class="program-actions">
+                            <button
+                                type="button"
+                                class="btn-edit btn-editar-programacion"
+                                data-id="${item.id}"
+                                ${puedeModificar ? '' : 'disabled'}
+                            >
+                                Editar
+                            </button>
+
+                            <button
+                                type="button"
+                                class="btn-delete btn-eliminar-programacion"
+                                data-id="${item.id}"
+                                ${puedeModificar ? '' : 'disabled'}
+                            >
+                                Eliminar
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }
+
+        async function actualizarProgramaciones() {
+            try {
+                const respuesta = await fetch('/programaciones');
+                const data = await respuesta.json();
+                const contenedor =
+                    document.getElementById('lista-programaciones');
+
+                programacionesCache.clear();
+
+                for (const item of data.programaciones) {
+                    programacionesCache.set(item.id, item);
+                }
+
+                contenedor.classList.toggle(
+                    'list-view',
+                    vistaProgramaciones === 'list'
+                );
+
+                if (!data.programaciones.length) {
+                    contenedor.innerHTML = `
+                        <div class="empty-state">
+                            <div>
+                                <strong>Aún no hay estados programados</strong>
+                                Tocá el botón + para crear el primero.
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                contenedor.innerHTML = data.programaciones
+                    .map(tarjetaProgramacion)
+                    .join('');
+
+                document
+                    .querySelectorAll('.btn-editar-programacion')
+                    .forEach(boton => {
+                        boton.addEventListener('click', evento => {
+                            abrirEditorProgramacion(
+                                evento.currentTarget.dataset.id
+                            );
+                        });
+                    });
+
+                document
+                    .querySelectorAll('.btn-eliminar-programacion')
+                    .forEach(boton => {
+                        boton.addEventListener('click', async evento => {
+                            const id = evento.currentTarget.dataset.id;
+
+                            if (!confirm('¿Querés eliminar esta programación diaria?')) {
+                                return;
+                            }
+
+                            const respuestaEliminar = await fetch(
+                                `/programaciones/${id}`,
+                                { method: 'DELETE' }
+                            );
+
+                            const dataEliminar = await leerRespuesta(
+                                respuestaEliminar
+                            );
+
+                            if (!respuestaEliminar.ok) {
+                                toast(
+                                    dataEliminar.error ||
+                                    'No se pudo eliminar la programación.',
+                                    'error'
+                                );
+                                return;
+                            }
+
+                            toast(
+                                dataEliminar.mensaje ||
+                                'Programación eliminada.',
+                                'success'
+                            );
+
+                            actualizarProgramaciones();
+                        });
+                    });
+            } catch (error) {
+                console.error(
+                    'No se pudieron cargar las programaciones:',
+                    error
+                );
+            }
+        }
+
+        function limpiarFormularioCreacion() {
+            document.getElementById('formulario').reset();
+            document.getElementById('mensaje').textContent = '';
+            document.getElementById('preview-imagen').style.display = 'none';
+            document.getElementById('preview-imagen').removeAttribute('src');
+            document.getElementById('upload-placeholder').style.display = 'grid';
+
+            if (urlPreviewActual) {
+                URL.revokeObjectURL(urlPreviewActual);
+                urlPreviewActual = null;
+            }
+        }
+
+        document.querySelectorAll('.nav-button').forEach(boton => {
+            boton.addEventListener('click', () => {
+                mostrarSeccion(boton.dataset.section);
+            });
+        });
+
+        document.querySelectorAll('.view-button').forEach(boton => {
+            boton.addEventListener('click', () => {
+                vistaProgramaciones = boton.dataset.view;
+
+                document.querySelectorAll('.view-button').forEach(item => {
+                    item.classList.toggle(
+                        'active',
+                        item === boton
+                    );
+                });
+
+                actualizarProgramaciones();
+            });
+        });
+
+        document.getElementById('btn-nuevo-estado').onclick = () => {
+            actualizarCantidadSeleccionadas();
+            actualizarLineas();
+            abrirModal('modal-crear');
+        };
+
+        document.getElementById('cerrar-modal-crear').onclick = () => {
+            cerrarModal('modal-crear');
+        };
+
+        document.getElementById('modal-crear').addEventListener(
+            'click',
+            evento => {
+                if (evento.target.id === 'modal-crear') {
+                    cerrarModal('modal-crear');
+                }
+            }
+        );
+
+        document.getElementById('foto').addEventListener('change', evento => {
+            const archivo = evento.target.files[0];
+            const preview = document.getElementById('preview-imagen');
+            const placeholder =
+                document.getElementById('upload-placeholder');
+
+            if (urlPreviewActual) {
+                URL.revokeObjectURL(urlPreviewActual);
+                urlPreviewActual = null;
+            }
+
+            if (!archivo) {
+                preview.style.display = 'none';
+                placeholder.style.display = 'grid';
+                return;
+            }
+
+            urlPreviewActual = URL.createObjectURL(archivo);
+            preview.src = urlPreviewActual;
+            preview.style.display = 'block';
+            placeholder.style.display = 'none';
+        });
+
+        document.getElementById('btn-conectar').onclick = async () => {
+            const input = document.getElementById('nombre-linea');
+            const mensaje = document.getElementById('mensaje-linea');
+            const nombre = input.value.trim();
+
+            if (!nombre) {
+                mensaje.textContent =
+                    'Escribí un nombre para identificar la línea.';
+                mensaje.style.color = '#fb7185';
+                return;
+            }
+
+            mensaje.textContent = 'Creando línea...';
+            mensaje.style.color = '#fbbf24';
+
+            try {
+                const respuesta = await fetch('/lineas', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ nombre })
+                });
+
+                const data = await respuesta.json();
+
+                if (!respuesta.ok) {
+                    throw new Error(data.error);
+                }
+
+                input.value = '';
+                mensaje.textContent = '';
+                toast(`Línea "${data.nombre}" creada.`, 'success');
+                actualizarLineas();
+            } catch (error) {
+                mensaje.textContent =
+                    error.message || 'No se pudo crear la línea.';
+                mensaje.style.color = '#fb7185';
+            }
+        };
+
+        document.getElementById('buscar-lineas').addEventListener(
+            'input',
+            actualizarLineas
+        );
+
+        document.getElementById('buscar-lineas-seccion').addEventListener(
+            'input',
+            actualizarLineas
+        );
+
+        document.getElementById('btn-limpiar-busqueda-seccion').onclick = () => {
+            document.getElementById('buscar-lineas-seccion').value = '';
+            document.getElementById('buscar-lineas-seccion').focus();
+            actualizarLineas();
+        };
+
+        document.getElementById('btn-limpiar-busqueda').onclick = () => {
+            document.getElementById('buscar-lineas').value = '';
+            document.getElementById('buscar-lineas').focus();
+            actualizarLineas();
+        };
+
+        document.getElementById('seleccionar-todas').addEventListener(
+            'change',
+            function () {
+                if (this.checked) {
+                    idsLineasConectadas.forEach(id => {
+                        lineasSeleccionadas.add(id);
+                    });
+                } else {
+                    idsLineasConectadas.forEach(id => {
+                        lineasSeleccionadas.delete(id);
+                    });
+                }
+
+                document
+                    .querySelectorAll('.seleccionar-linea:not(:disabled)')
+                    .forEach(checkbox => {
+                        checkbox.checked =
+                            lineasSeleccionadas.has(checkbox.value);
+                    });
+
+                actualizarCheckboxGeneral();
+            }
+        );
+
+        document.getElementById('formulario').onsubmit = async evento => {
+            evento.preventDefault();
+
+            const mensaje = document.getElementById('mensaje');
+
+            try {
+                const datos = validarDatosFormulario(false);
+
+                mensaje.textContent = 'Preparando publicación...';
+                mensaje.style.color = '#fbbf24';
+
+                const respuesta = await fetch('/subir', {
+                    method: 'POST',
+                    body: crearFormData(datos, false)
+                });
+
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error ||
+                        data.mensaje ||
+                        'No se pudo iniciar la publicación.'
+                    );
+                }
+
+                mensaje.textContent = '';
+                toast(
+                    data.mensaje || 'Publicación iniciada.',
+                    'success'
+                );
+
+                cerrarModal('modal-crear');
+                mostrarSeccion('estados');
+                iniciarSeguimientoProgreso();
+            } catch (error) {
+                mensaje.textContent = error.message;
+                mensaje.style.color = '#fb7185';
+            }
+        };
+
+        document.getElementById('btn-programar').onclick = async () => {
+            const mensaje = document.getElementById('mensaje');
+            const boton = document.getElementById('btn-programar');
+
+            try {
+                const datos = validarDatosFormulario(true);
+
+                mensaje.textContent = 'Guardando programación diaria...';
+                mensaje.style.color = '#fbbf24';
+                boton.disabled = true;
+
+                const respuesta = await fetch('/programar', {
+                    method: 'POST',
+                    body: crearFormData(datos, true)
+                });
+
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error ||
+                        data.mensaje ||
+                        'No se pudo programar el estado.'
+                    );
+                }
+
+                mensaje.textContent = '';
+                toast(
+                    data.mensaje || 'Estado programado correctamente.',
+                    'success'
+                );
+
+                cerrarModal('modal-crear');
+                limpiarFormularioCreacion();
+                mostrarSeccion('dashboard');
+                actualizarProgramaciones();
+            } catch (error) {
+                mensaje.textContent = error.message;
+                mensaje.style.color = '#fb7185';
+            } finally {
+                boton.disabled = false;
+            }
+        };
+
+        document.getElementById('btn-guardar-edicion').onclick = async () => {
+            const id = document.getElementById('editar-id').value;
+            const hora = document.getElementById('editar-hora').value;
+            const texto = document.getElementById('editar-texto').value;
+            const archivo = document.getElementById('editar-foto').files[0];
+            const mensaje = document.getElementById('mensaje-edicion');
+            const boton = document.getElementById('btn-guardar-edicion');
+
+            if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)) {
+                mensaje.textContent = 'Elegí una hora válida.';
+                mensaje.style.color = '#fb7185';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('hora', hora);
+            formData.append('texto', texto);
+
+            if (archivo) {
+                formData.append('imagen', archivo);
+            }
+
+            try {
+                boton.disabled = true;
+                mensaje.textContent = 'Guardando cambios...';
+                mensaje.style.color = '#fbbf24';
+
+                const respuesta = await fetch(
+                    `/programaciones/${id}`,
+                    {
+                        method: 'PUT',
+                        body: formData
+                    }
+                );
+
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error ||
+                        'No se pudo actualizar la programación.'
+                    );
+                }
+
+                mensaje.textContent = '';
+                toast(
+                    data.mensaje || 'Programación actualizada.',
+                    'success'
+                );
+
+                cerrarEditorProgramacion();
+                actualizarProgramaciones();
+            } catch (error) {
+                mensaje.textContent = error.message;
+                mensaje.style.color = '#fb7185';
+            } finally {
+                boton.disabled = false;
+            }
+        };
+
+        async function ejecutarAccionSeguridad(accion) {
+            const botonReanudar = document.getElementById('btn-reanudar-seguridad');
+            const botonCancelar = document.getElementById('btn-cancelar-seguridad');
+
+            botonReanudar.disabled = true;
+            botonCancelar.disabled = true;
+
+            try {
+                const respuesta = await fetch(
+                    `/progreso/${accion}`,
+                    { method: 'POST' }
+                );
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error || 'No se pudo procesar la decisión.'
+                    );
+                }
+
+                toast(data.mensaje || 'Decisión aplicada.', 'success');
+                actualizarProgresoPublicacion();
+            } catch (error) {
+                toast(error.message, 'error');
+            } finally {
+                botonReanudar.disabled = false;
+                botonCancelar.disabled = false;
+            }
+        }
+
+        document.getElementById('btn-reanudar-seguridad').onclick = () => {
+            ejecutarAccionSeguridad('reanudar');
+        };
+
+        document.getElementById('btn-cancelar-seguridad').onclick = () => {
+            if (confirm('¿Querés cancelar los grupos restantes de esta publicación?')) {
+                ejecutarAccionSeguridad('cancelar');
+            }
+        };
+
+        document.getElementById('btn-cancelar-edicion').onclick =
+            cerrarEditorProgramacion;
+
+        document.getElementById('cerrar-modal-editar').onclick =
+            cerrarEditorProgramacion;
+
+        document.getElementById('modal-editar').addEventListener(
+            'click',
+            evento => {
+                if (evento.target.id === 'modal-editar') {
+                    cerrarEditorProgramacion();
+                }
+            }
+        );
+
+        document.addEventListener('click', evento => {
+            if (evento.target.closest('.tag-picker')) return;
+
+            if (selectorEtiquetaAbiertoId !== null) {
+                selectorEtiquetaAbiertoId = null;
+                document.querySelectorAll('.tag-picker.open').forEach(picker => {
+                    picker.classList.remove('open');
+                    picker.querySelector('.tag-picker-button')
+                        ?.setAttribute('aria-expanded', 'false');
+                });
+            }
+        });
+
+        function mostrarEstadoActualizacion(estado) {
+            const version = document.getElementById('update-version');
+            const mensaje = document.getElementById('update-message');
+            const progreso = document.getElementById('update-progress');
+            const barra = document.getElementById('update-progress-bar');
+            const botonBuscar = document.getElementById('btn-update-search');
+            const botonDescargar = document.getElementById('btn-update-download');
+            const botonInstalar = document.getElementById('btn-update-install');
+
+            version.textContent = `v${estado.versionActual || '1.0.0'}`;
+            mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';
+
+            const porcentaje = Math.max(0, Math.min(100, Number(estado.porcentaje) || 0));
+            barra.style.width = `${porcentaje}%`;
+            progreso.classList.toggle(
+                'visible',
+                ['descargando', 'descargada'].includes(estado.estado)
+            );
+
+            botonBuscar.disabled = ['buscando', 'descargando', 'instalando'].includes(
+                estado.estado
+            );
+            botonBuscar.textContent = estado.estado === 'buscando'
+                ? 'Buscando...'
+                : 'Buscar actualización';
+
+            botonDescargar.hidden = estado.estado !== 'disponible';
+            botonDescargar.disabled = estado.estado !== 'disponible';
+
+            botonInstalar.hidden = estado.estado !== 'descargada';
+            botonInstalar.disabled = estado.estado !== 'descargada';
+        }
+
+        async function consultarEstadoActualizacion() {
+            try {
+                const respuesta = await fetch('/actualizacion/estado');
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error || data.mensaje || 'No se pudo consultar la actualización.'
+                    );
+                }
+
+                mostrarEstadoActualizacion(data);
+            } catch (error) {
+                document.getElementById('update-message').textContent = error.message;
+            }
+        }
+
+        async function ejecutarAccionActualizacion(accion) {
+            try {
+                const respuesta = await fetch(`/actualizacion/${accion}`, {
+                    method: 'POST'
+                });
+                const data = await leerRespuesta(respuesta);
+
+                if (!respuesta.ok) {
+                    throw new Error(
+                        data.error || data.mensaje || 'No se pudo procesar la actualización.'
+                    );
+                }
+
+                mostrarEstadoActualizacion(data);
+            } catch (error) {
+                toast(error.message, 'error');
+                consultarEstadoActualizacion();
+            }
+        }
+
+        document.getElementById('btn-update-search').onclick = () => {
+            ejecutarAccionActualizacion('buscar');
+        };
+
+        document.getElementById('btn-update-download').onclick = () => {
+            ejecutarAccionActualizacion('descargar');
+        };
+
+        document.getElementById('btn-update-install').onclick = () => {
+            if (confirm('La aplicación se cerrará para instalar la actualización. ¿Continuar?')) {
+                ejecutarAccionActualizacion('instalar');
+            }
+        };
+
+        actualizarLineas();
+        actualizarProgramaciones();
+        iniciarSeguimientoProgreso();
+        consultarEstadoActualizacion();
+
+        setInterval(actualizarLineas, 2000);
+        setInterval(actualizarProgramaciones, 5000);
+        setInterval(consultarEstadoActualizacion, 5000);
+    </script>
+</body>
+</html>

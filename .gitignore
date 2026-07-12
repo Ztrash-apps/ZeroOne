@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+sesiones/
+uploads/
+programados/
+.env
+.env.*
+*.log
+*.zip
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

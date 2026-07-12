@@ -1,0 +1,82 @@
+{
+  "name": "autostatues",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplicación de escritorio para gestionar estados de WhatsApp",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder --win --x64",
+    "release": "electron-builder --win --x64 --publish always"
+  },
+  "keywords": [
+    "electron",
+    "whatsapp",
+    "estados"
+  ],
+  "author": "ZABO",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "electron-updater": "^6.8.9",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "node-schedule": "^2.1.1",
+    "pino": "^9.2.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.zabo.autostatues",
+    "productName": "AutoStatues",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "src/**/*",
+      "public/**/*",
+      "package.json",
+      "!dist/**/*",
+      "!sesiones/**/*",
+      "!uploads/**/*",
+      "!programados/**/*",
+      "!**/*.log",
+      "!.git/**/*",
+      "!.github/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "AutoStatues-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AutoStatues",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Ztrash-apps",
+        "repo": "AutoStatues",
+        "releaseType": "release"
+      }
+    ]
+  }
+}
