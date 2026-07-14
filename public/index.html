@@ -3021,6 +3021,1458 @@
         }
     </style>
 
+
+
+    <style id="edit-modal-and-weekdays-polish">
+        #modal-editar {
+            align-items: center;
+            justify-content: center;
+        }
+
+        #modal-editar .modal-card {
+            width: min(760px, 96vw) !important;
+            max-height: min(92vh, 900px);
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 28px;
+            background:
+                radial-gradient(circle at top right, rgba(124,114,255,.16), transparent 32%),
+                radial-gradient(circle at bottom left, rgba(98,245,197,.10), transparent 28%),
+                linear-gradient(180deg, rgba(16,20,35,.99), rgba(8,12,24,.985));
+            box-shadow: 0 30px 90px rgba(0,0,0,.42);
+        }
+
+        #modal-editar .modal-header {
+            padding: 18px 22px;
+            border-bottom: 1px solid rgba(255,255,255,.07);
+            background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.01));
+        }
+
+        #modal-editar .modal-header h2 {
+            font-size: 29px;
+            letter-spacing: -.7px;
+        }
+
+        #modal-editar .modal-body {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 20px 22px 22px;
+            overflow: auto;
+        }
+
+        #modal-editar .field,
+        #modal-editar .weekday-field,
+        #modal-editar .toggle-field {
+            margin-top: 0 !important;
+        }
+
+        #modal-editar .field {
+            padding: 16px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(18,22,38,.72), rgba(12,16,28,.78));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+        }
+
+        #modal-editar .label-with-icon {
+            margin-bottom: 10px;
+            color: #eef1ff;
+        }
+
+        .edit-image-panel {
+            position: relative;
+            display: grid;
+            grid-template-columns: 182px minmax(0, 1fr);
+            gap: 18px;
+            align-items: stretch;
+            padding: 18px;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 24px;
+            background:
+                radial-gradient(circle at 12% 10%, rgba(124,114,255,.14), transparent 42%),
+                linear-gradient(145deg, rgba(24,29,50,.96), rgba(10,14,26,.98));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 16px 32px rgba(0,0,0,.16);
+        }
+
+        .edit-image-panel::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            box-shadow: inset 0 0 0 1px rgba(124,114,255,.05);
+        }
+
+        .edit-image-preview {
+            position: relative;
+            min-height: 238px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.08);
+            border-radius: 20px;
+            background: #0a0f1c;
+            box-shadow: 0 14px 30px rgba(0,0,0,.26);
+        }
+
+        #editar-imagen-actual {
+            display: block;
+            width: 100%;
+            height: 100%;
+            min-height: 238px;
+            object-fit: cover;
+            background: #0b1020;
+        }
+
+        .edit-image-badge {
+            position: absolute;
+            left: 12px;
+            bottom: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 31px;
+            padding: 0 11px;
+            border: 1px solid rgba(255,255,255,.10);
+            border-radius: 999px;
+            background: rgba(7,10,19,.76);
+            color: #eef2ff;
+            font-size: 10px;
+            font-weight: 800;
+            backdrop-filter: blur(10px);
+        }
+
+        .edit-image-badge .icon {
+            width: 14px;
+            height: 14px;
+            color: #9f98ff;
+        }
+
+        .edit-image-content {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-width: 0;
+            gap: 16px;
+        }
+
+        .edit-image-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            margin-bottom: 8px;
+            padding: 6px 10px;
+            border: 1px solid rgba(124,114,255,.18);
+            border-radius: 999px;
+            background: rgba(124,114,255,.08);
+            color: #a99fff;
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: .9px;
+            text-transform: uppercase;
+        }
+
+        .edit-image-content h3 {
+            margin: 0 0 8px;
+            color: #f7f8ff;
+            font-size: 23px;
+            letter-spacing: -.55px;
+        }
+
+        .edit-image-content p {
+            margin: 0;
+            color: #929eb8;
+            font-size: 12px;
+            line-height: 1.6;
+            max-width: 380px;
+        }
+
+        .edit-file-stack {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .visually-hidden-file {
+            position: absolute !important;
+            width: 1px !important;
+            height: 1px !important;
+            padding: 0 !important;
+            margin: -1px !important;
+            overflow: hidden !important;
+            clip: rect(0,0,0,0) !important;
+            white-space: nowrap !important;
+            border: 0 !important;
+        }
+
+        .edit-file-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            min-height: 44px;
+            padding: 0 16px;
+            border: 1px solid rgba(124,114,255,.25);
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(124,114,255,.22), rgba(98,245,197,.08));
+            color: #f5f5ff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 800;
+            transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease;
+        }
+
+        .edit-file-button:hover {
+            transform: translateY(-1px);
+            border-color: rgba(124,114,255,.42);
+            background: linear-gradient(135deg, rgba(124,114,255,.30), rgba(98,245,197,.12));
+            box-shadow: 0 12px 24px rgba(124,114,255,.14);
+        }
+
+        .edit-file-button .icon {
+            width: 17px;
+            height: 17px;
+            color: #bcb7ff;
+        }
+
+        .edit-file-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            max-width: 100%;
+            padding: 10px 12px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.06);
+            border-radius: 13px;
+            background: rgba(255,255,255,.03);
+            color: #9aa6be;
+            font-size: 11px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .edit-file-name::before {
+            content: "";
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #7c72ff, #62f5c5);
+            box-shadow: 0 0 0 4px rgba(124,114,255,.10);
+            flex: 0 0 auto;
+        }
+
+        #modal-editar .textarea {
+            min-height: 112px;
+        }
+
+        #modal-editar .toggle-field {
+            padding: 16px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(18,22,38,.72), rgba(12,16,28,.78));
+        }
+
+        .weekday-field {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 16px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(18,22,38,.72), rgba(12,16,28,.78));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+        }
+
+        .weekday-field-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .weekday-field-header > .label-with-icon {
+            margin: 0;
+        }
+
+        .weekday-helper {
+            margin: -4px 0 0;
+            color: #8290ab;
+            font-size: 11px;
+            line-height: 1.45;
+        }
+
+        .all-days-check {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 42px;
+            padding: 0 14px;
+            border: 1px solid rgba(124,114,255,.18);
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(124,114,255,.12), rgba(98,245,197,.05));
+            color: #eef2ff;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 800;
+            user-select: none;
+            transition: border-color .18s ease, background .18s ease, color .18s ease, transform .18s ease, box-shadow .18s ease;
+        }
+
+        .all-days-check:hover {
+            transform: translateY(-1px);
+            border-color: rgba(124,114,255,.34);
+            background: linear-gradient(135deg, rgba(124,114,255,.18), rgba(98,245,197,.08));
+            color: #ffffff;
+            box-shadow: 0 12px 22px rgba(124,114,255,.10);
+        }
+
+        .all-days-check input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .all-days-box {
+            display: grid;
+            place-items: center;
+            width: 19px;
+            height: 19px;
+            border: 1px solid rgba(255,255,255,.15);
+            border-radius: 6px;
+            background: rgba(255,255,255,.04);
+            color: transparent;
+            transition: .18s ease;
+            flex: 0 0 auto;
+        }
+
+        .all-days-box .icon {
+            width: 12px;
+            height: 12px;
+            stroke-width: 2.5;
+        }
+
+        .all-days-check input:checked + .all-days-box {
+            border-color: transparent;
+            background: linear-gradient(135deg, #7c72ff, #62f5c5);
+            color: #09101d;
+            box-shadow: 0 8px 18px rgba(124,114,255,.22);
+        }
+
+        .all-days-check input:indeterminate + .all-days-box {
+            border-color: rgba(124,114,255,.35);
+            background: rgba(124,114,255,.16);
+            color: transparent;
+        }
+
+        .all-days-check input:indeterminate + .all-days-box::after {
+            content: "";
+            width: 8px;
+            height: 2px;
+            border-radius: 999px;
+            background: #c8c4ff;
+        }
+
+        .weekday-picker {
+            gap: 9px;
+        }
+
+        .weekday-picker span {
+            min-height: 46px;
+            border-radius: 14px;
+            background: rgba(255,255,255,.025);
+            transition: transform .16s ease, border-color .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease;
+        }
+
+        .weekday-picker label:hover span {
+            transform: translateY(-1px);
+            border-color: rgba(124,114,255,.20);
+            background: rgba(124,114,255,.05);
+            color: #e4e7f2;
+        }
+
+        .weekday-picker input:checked + span {
+            border-color: rgba(124,114,255,.34);
+            background: linear-gradient(135deg, rgba(124,114,255,.30), rgba(98,245,197,.11));
+            color: #fff;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 18px rgba(0,0,0,.12);
+        }
+
+        #modal-editar .modal-message {
+            min-height: 18px;
+            margin: 0;
+        }
+
+        #modal-editar .modal-actions {
+            position: sticky;
+            bottom: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 2px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(255,255,255,.06);
+            background: linear-gradient(180deg, rgba(8,12,24,0), rgba(8,12,24,.92) 18%, rgba(8,12,24,.98));
+        }
+
+        #modal-editar .modal-actions button {
+            min-height: 48px;
+        }
+
+        @media (max-width: 620px) {
+            #modal-editar .modal-card {
+                width: min(96vw, 96vw) !important;
+                max-height: 94vh;
+                border-radius: 24px;
+            }
+
+            #modal-editar .modal-header {
+                padding: 16px;
+            }
+
+            #modal-editar .modal-header h2 {
+                font-size: 23px;
+            }
+
+            #modal-editar .modal-body {
+                padding: 16px;
+                gap: 14px;
+            }
+
+            .edit-image-panel {
+                grid-template-columns: 1fr;
+                gap: 14px;
+                padding: 14px;
+            }
+
+            .edit-image-preview {
+                width: min(230px, 100%);
+                min-height: 272px;
+                margin: 0 auto;
+            }
+
+            #editar-imagen-actual {
+                min-height: 272px;
+            }
+
+            .edit-image-content {
+                text-align: center;
+                align-items: stretch;
+            }
+
+            .edit-image-content p {
+                max-width: none;
+            }
+
+            .edit-file-stack {
+                align-items: stretch;
+            }
+
+            .edit-file-button {
+                width: 100%;
+            }
+
+            .weekday-field-header {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .all-days-check {
+                justify-content: center;
+                width: 100%;
+            }
+
+            .weekday-picker {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+
+            #modal-editar .modal-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+
+
+
+    <style id="edit-modal-scroll-fix">
+        #modal-editar {
+            overflow: hidden;
+        }
+
+        #modal-editar .modal-card {
+            display: flex;
+            flex-direction: column;
+            width: min(760px, 96vw) !important;
+            max-height: calc(100vh - 40px) !important;
+            overflow: hidden !important;
+        }
+
+        #modal-editar .modal-header {
+            flex: 0 0 auto;
+        }
+
+        #modal-editar .modal-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto !important;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            scrollbar-gutter: stable;
+            padding-bottom: 24px;
+        }
+
+        #modal-editar .modal-actions {
+            position: sticky;
+            bottom: -1px;
+            z-index: 5;
+            margin-bottom: 0;
+            padding-bottom: 2px;
+        }
+
+        @media (max-height: 760px) {
+            #modal-editar {
+                align-items: flex-start;
+                padding-top: 12px;
+                padding-bottom: 12px;
+            }
+
+            #modal-editar .modal-card {
+                max-height: calc(100vh - 24px) !important;
+            }
+        }
+
+        @media (max-width: 620px) {
+            #modal-editar {
+                padding: 8px;
+            }
+
+            #modal-editar .modal-card {
+                width: 100% !important;
+                max-height: calc(100vh - 16px) !important;
+            }
+        }
+    </style>
+
+
+
+
+
+
+
+    <style id="edit-modal-footer-final-fix">
+        #modal-editar .modal-body {
+            padding-bottom: 0 !important;
+        }
+
+        #modal-editar .modal-actions {
+            position: sticky !important;
+            bottom: 0 !important;
+            z-index: 20 !important;
+            display: grid !important;
+            grid-template-columns: 1fr 1fr !important;
+            gap: 12px !important;
+            min-height: 78px;
+            margin: 0 -2px !important;
+            padding: 15px 2px 16px !important;
+            overflow: visible !important;
+            border-top: 1px solid rgba(255,255,255,.06) !important;
+            background: rgba(8,12,24,.98) !important;
+            box-shadow: none !important;
+            isolation: isolate;
+        }
+
+        #modal-editar .modal-actions::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: -22px;
+            height: 22px;
+            pointer-events: none;
+            background: linear-gradient(to top, rgba(8,12,24,.98), transparent);
+            z-index: -1;
+        }
+
+        #modal-editar #btn-guardar-edicion,
+        #modal-editar #btn-cancelar-edicion {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            min-height: 50px !important;
+            width: 100% !important;
+            margin: 0 !important;
+            transform: none !important;
+        }
+
+        #modal-editar #btn-guardar-edicion {
+            background: linear-gradient(135deg, #7c72ff, #62f5c5) !important;
+            color: #09111f !important;
+            box-shadow: none !important;
+        }
+
+        #modal-editar #btn-cancelar-edicion {
+            box-shadow: none !important;
+        }
+
+        #modal-editar #btn-guardar-edicion:hover,
+        #modal-editar #btn-cancelar-edicion:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: none !important;
+        }
+
+        @media (max-width: 620px) {
+            #modal-editar .modal-actions {
+                grid-template-columns: 1fr !important;
+                min-height: 132px;
+            }
+        }
+    </style>
+
+
+
+    <style id="edit-modal-only-shadow-fix">
+        #modal-editar .modal-actions {
+            margin: 0 !important;
+            padding: 15px 0 16px !important;
+            background: rgba(8,12,24,.98) !important;
+        }
+
+        #modal-editar .modal-actions::before {
+            display: none !important;
+        }
+    </style>
+
+
+
+    <style id="edit-modal-card-shadow-final-fix">
+        #modal-editar .modal-card {
+            box-shadow: none !important;
+        }
+    </style>
+
+
+
+    <style id="edit-modal-left-glow-fix">
+        #modal-editar .modal-card {
+            background:
+                radial-gradient(circle at top right, rgba(124,114,255,.16), transparent 32%),
+                linear-gradient(180deg, rgba(16,20,35,.99), rgba(8,12,24,.985)) !important;
+        }
+    </style>
+
+
+
+    <style id="edit-modal-footer-pretty-final">
+        #modal-editar .modal-card {
+            border-color: rgba(145, 139, 255, .16) !important;
+            background:
+                radial-gradient(circle at 88% 7%, rgba(124,114,255,.13), transparent 29%),
+                linear-gradient(180deg, #111628 0%, #0b1020 100%) !important;
+            box-shadow: 0 22px 58px rgba(0,0,0,.34) !important;
+        }
+
+        #modal-editar .modal-body {
+            padding-bottom: 18px !important;
+        }
+
+        #modal-editar .modal-actions {
+            position: sticky !important;
+            bottom: 0 !important;
+            z-index: 20 !important;
+            display: grid !important;
+            grid-template-columns: 1fr 1fr !important;
+            gap: 12px !important;
+            min-height: auto !important;
+            margin: 2px 0 0 !important;
+            padding: 14px !important;
+            overflow: hidden !important;
+            border: 1px solid rgba(255,255,255,.07) !important;
+            border-radius: 18px !important;
+            background:
+                radial-gradient(circle at 50% 0%, rgba(124,114,255,.10), transparent 58%),
+                linear-gradient(180deg, rgba(20,25,43,.98), rgba(13,17,31,.99)) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.035) !important;
+            isolation: isolate;
+        }
+
+        #modal-editar .modal-actions::before {
+            display: none !important;
+        }
+
+        #modal-editar #btn-guardar-edicion,
+        #modal-editar #btn-cancelar-edicion {
+            min-height: 50px !important;
+            border-radius: 14px !important;
+        }
+
+        #modal-editar #btn-guardar-edicion {
+            background: linear-gradient(135deg, #8077ff 0%, #61e6cb 100%) !important;
+            color: #08101d !important;
+            box-shadow: 0 10px 24px rgba(124,114,255,.16), inset 0 1px 0 rgba(255,255,255,.34) !important;
+        }
+
+        #modal-editar #btn-guardar-edicion:hover {
+            transform: translateY(-1px) !important;
+            box-shadow: 0 13px 28px rgba(124,114,255,.20), inset 0 1px 0 rgba(255,255,255,.38) !important;
+        }
+
+        #modal-editar #btn-cancelar-edicion {
+            border: 1px solid rgba(255,255,255,.08) !important;
+            background: rgba(255,255,255,.035) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025) !important;
+        }
+
+        #modal-editar #btn-cancelar-edicion:hover {
+            transform: translateY(-1px) !important;
+            background: rgba(255,255,255,.06) !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.035) !important;
+        }
+
+        @media (max-width: 620px) {
+            #modal-editar .modal-actions {
+                grid-template-columns: 1fr !important;
+                padding: 12px !important;
+            }
+        }
+    </style>
+
+
+
+    <style id="edit-modal-footer-visibility-fix">
+        #modal-editar .modal-body {
+            padding-bottom: 12px !important;
+            scroll-padding-bottom: 104px;
+        }
+
+        #modal-editar .modal-actions {
+            bottom: 10px !important;
+            margin: 0 0 10px !important;
+            padding: 12px !important;
+            box-sizing: border-box;
+            flex: 0 0 auto;
+        }
+
+        #modal-editar #btn-guardar-edicion,
+        #modal-editar #btn-cancelar-edicion {
+            min-height: 48px !important;
+        }
+
+        @media (max-width: 620px) {
+            #modal-editar .modal-actions {
+                bottom: 8px !important;
+                margin-bottom: 8px !important;
+            }
+        }
+    </style>
+
+    <style id="active-status-lines-final">
+        /* Pantalla de estados activos. Se mantiene aislada para no alterar
+           las tarjetas y el progreso de publicación existentes. */
+        .active-metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .active-metric-card {
+            position: relative;
+            display: grid;
+            align-content: center;
+            min-height: 156px;
+            padding: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.065);
+            border-radius: 24px;
+            background:
+                radial-gradient(circle at 100% 100%, rgba(124,114,255,.10), transparent 45%),
+                linear-gradient(180deg, rgba(18,22,38,.98), rgba(13,17,30,.96));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+        }
+
+        .active-metric-icon {
+            display: grid;
+            place-items: center;
+            width: 39px;
+            height: 39px;
+            margin-bottom: 17px;
+            border: 1px solid rgba(124,114,255,.24);
+            border-radius: 12px;
+            background: rgba(124,114,255,.14);
+            color: #aaa4ff;
+        }
+
+        .active-metric-icon.danger {
+            border-color: rgba(255,95,115,.25);
+            background: rgba(255,95,115,.11);
+            color: #ff8999;
+        }
+
+        .active-metric-icon .icon { width: 18px; height: 18px; }
+        .active-metric-card > span:not(.active-metric-icon) {
+            color: #99a5bf;
+            font-size: 11px;
+            font-weight: 650;
+            letter-spacing: .65px;
+            text-transform: uppercase;
+        }
+
+        .active-metric-card strong {
+            margin-top: 7px;
+            color: #fff;
+            font-size: 30px;
+            line-height: 1;
+            letter-spacing: -.8px;
+        }
+
+        .deletion-panel {
+            margin-bottom: 20px;
+            padding: 24px;
+        }
+
+        .deletion-panel-header,
+        .active-publications-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 18px;
+        }
+
+        .deletion-panel-header h2,
+        .active-publications-header h2 { margin: 0; }
+
+        .deletion-message {
+            margin: 6px 0 16px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .deletion-status-badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 29px;
+            padding: 0 11px;
+            border: 1px solid rgba(255,255,255,.075);
+            border-radius: 999px;
+            background: rgba(255,255,255,.035);
+            color: #a8b2c8;
+            font-size: 10px;
+            font-weight: 800;
+        }
+
+        .deletion-status-badge.active {
+            border-color: rgba(98,245,197,.20);
+            background: rgba(98,245,197,.09);
+            color: #9bffdd;
+        }
+
+        .deletion-status-badge.success {
+            border-color: rgba(98,245,197,.20);
+            background: rgba(98,245,197,.09);
+            color: #9bffdd;
+        }
+
+        .deletion-status-badge.error {
+            border-color: rgba(255,95,115,.24);
+            background: rgba(255,95,115,.10);
+            color: #ff8999;
+        }
+
+        .deletion-progress-meta {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 14px;
+            color: #8f9bb5;
+            font-size: 12px;
+        }
+
+        .deletion-progress-meta span:nth-child(2) { text-align: center; }
+        .deletion-progress-meta span:last-child { text-align: right; }
+        .deletion-progress-meta strong { color: #aeb9d1; }
+
+        .active-publications-block { display: grid; gap: 14px; }
+        .active-publications-header { align-items: center; }
+        .active-publications-copy p {
+            margin: 6px 0 0;
+            color: #91a0bb;
+            font-size: 12px;
+        }
+
+        .active-publications-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+            gap: 16px;
+            align-items: start;
+        }
+
+        .active-publications-grid > .active-empty-state {
+            grid-column: 1 / -1;
+            width: min(312px, 100%);
+        }
+
+        .active-empty-state {
+            display: grid;
+            place-items: center;
+            min-height: 240px;
+            padding: 28px;
+            border: 1px solid rgba(255,255,255,.065);
+            border-radius: 24px;
+            background: linear-gradient(180deg, rgba(18,22,38,.98), rgba(13,17,30,.96));
+            color: #8b97af;
+            text-align: center;
+        }
+
+        .active-empty-state .empty-state-content { max-width: 245px; }
+        .active-empty-state strong { color: #d5dbea; font-size: 21px; line-height: 1.2; }
+        .active-empty-state span:last-child { font-size: 14px; line-height: 1.5; }
+
+        .active-group-card {
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,.065);
+            border-radius: 22px;
+            background: linear-gradient(180deg, rgba(18,22,38,.98), rgba(13,17,30,.97));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+        }
+
+        .active-group-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(124,114,255,.22);
+            box-shadow: 0 18px 42px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.04);
+        }
+
+        .active-group-media {
+            position: relative;
+            aspect-ratio: 16 / 8;
+            overflow: hidden;
+            background: #0b0f1c;
+        }
+
+        .active-group-media img { width: 100%; height: 100%; object-fit: cover; }
+        .active-group-media-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: #8079df; }
+        .active-group-media-placeholder .icon { width: 36px; height: 36px; }
+        .active-group-count {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 30px;
+            padding: 0 10px;
+            border: 1px solid rgba(255,255,255,.10);
+            border-radius: 999px;
+            background: rgba(7,10,18,.76);
+            color: #f2f4ff;
+            font-size: 10px;
+            font-weight: 800;
+            backdrop-filter: blur(10px);
+        }
+
+        .active-group-body { display: grid; gap: 13px; padding: 16px; }
+        .active-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .active-group-heading h3 { margin: 0; color: #f5f6ff; font-size: 16px; }
+        .active-group-heading p { margin: 5px 0 0; color: #8794ad; font-size: 11px; }
+        .active-group-text { margin: 0; color: #b0b9cc; font-size: 12px; line-height: 1.5; }
+        .active-group-expiry { color: #9b94ff; font-size: 10px; font-weight: 800; white-space: nowrap; }
+        .active-group-lines { display: grid; gap: 7px; max-height: 172px; overflow-y: auto; }
+        .active-group-line {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 9px;
+            align-items: center;
+            padding: 9px 10px;
+            border: 1px solid rgba(255,255,255,.05);
+            border-radius: 11px;
+            background: rgba(255,255,255,.025);
+        }
+
+        .active-group-line-main { min-width: 0; display: grid; gap: 3px; }
+        .active-group-line-main strong,
+        .active-group-line-main span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .active-group-line-main strong { color: #dce2ef; font-size: 11px; }
+        .active-group-line-main span { color: #77859f; font-size: 10px; }
+        .active-line-details { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .active-line-details > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .active-line-id {
+            flex: 0 0 auto;
+            padding: 2px 6px;
+            border: 1px solid rgba(124,114,255,.15);
+            border-radius: 999px;
+            background: rgba(124,114,255,.07);
+            color: #aaa4ff !important;
+            font-family: Consolas, monospace;
+            font-size: 8px !important;
+            letter-spacing: .2px;
+        }
+        .active-line-status { color: #79f3cb; font-size: 9px; font-weight: 850; text-transform: uppercase; }
+        .active-line-status.error { color: #ff8999; }
+        .active-group-actions { display: flex; justify-content: flex-end; }
+
+        /* Administración de líneas */
+        #section-lineas .line-connect-panel,
+        #section-lineas .connected-lines-panel { padding: 24px; }
+
+        .line-management-toolbar {
+            display: grid;
+            grid-template-columns: minmax(250px, 1fr) auto auto auto auto;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+            padding: 7px;
+            border: 1px solid rgba(255,255,255,.055);
+            border-radius: 16px;
+            background: rgba(7,11,22,.24);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.02);
+        }
+
+        .line-view-switch {
+            display: inline-flex;
+            align-items: center;
+            min-height: 44px;
+            padding: 4px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 13px;
+            background: rgba(255,255,255,.025);
+        }
+
+        .line-view-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-height: 34px;
+            padding: 0 10px;
+            border: 1px solid transparent;
+            border-radius: 9px;
+            background: transparent;
+            color: #8491aa;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 780;
+        }
+
+        .line-view-button .icon { width: 14px; height: 14px; }
+        .line-view-button:hover { color: #d9dfec; }
+        .line-view-button.active {
+            border-color: rgba(98,245,197,.23);
+            background: rgba(98,245,197,.10);
+            color: #78f3ce;
+        }
+
+        .line-order-picker {
+            position: relative;
+            min-width: 198px;
+        }
+
+        .line-order-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            width: 100%;
+            min-height: 44px;
+            padding: 6px 12px 6px 14px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 13px;
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.10), transparent 45%),
+                rgba(255,255,255,.035);
+            color: #dce2ef;
+            cursor: pointer;
+            text-align: left;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+            transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+        }
+
+        .line-order-button:hover,
+        .line-order-picker.open .line-order-button {
+            border-color: rgba(124,114,255,.30);
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.16), transparent 48%),
+                rgba(255,255,255,.05);
+            box-shadow: 0 0 0 3px rgba(124,114,255,.055), inset 0 1px 0 rgba(255,255,255,.04);
+        }
+
+        .line-order-button-copy { display: grid; gap: 1px; min-width: 0; }
+        .line-order-button-copy small {
+            color: #68758d;
+            font-size: 8px;
+            font-weight: 850;
+            letter-spacing: .55px;
+            line-height: 1;
+            text-transform: uppercase;
+        }
+        .line-order-button-copy strong {
+            overflow: hidden;
+            color: #e8ebf4;
+            font-size: 11px;
+            font-weight: 800;
+            line-height: 1.25;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .line-order-chevron {
+            flex: 0 0 auto;
+            width: 14px;
+            height: 14px;
+            color: #918aff;
+            transition: transform .18s ease;
+        }
+        .line-order-picker.open .line-order-chevron { transform: rotate(180deg); }
+
+        .line-order-menu {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            z-index: 120;
+            display: grid;
+            gap: 5px;
+            width: max(100%, 264px);
+            padding: 7px;
+            visibility: hidden;
+            border: 1px solid rgba(124,114,255,.22);
+            border-radius: 15px;
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.12), transparent 44%),
+                rgba(13,17,30,.98);
+            box-shadow: 0 18px 46px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.035);
+            opacity: 0;
+            transform: translateY(-5px) scale(.985);
+            transform-origin: top left;
+            pointer-events: none;
+            backdrop-filter: blur(18px);
+            transition: opacity .16s ease, transform .16s ease, visibility .16s ease;
+        }
+
+        .line-order-picker.open .line-order-menu {
+            visibility: visible;
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: auto;
+        }
+
+        .line-order-option {
+            display: grid;
+            grid-template-columns: 18px minmax(0, 1fr);
+            gap: 9px;
+            align-items: center;
+            width: 100%;
+            min-height: 50px;
+            padding: 8px 10px;
+            border: 1px solid transparent;
+            border-radius: 11px;
+            background: transparent;
+            color: #aeb8cb;
+            cursor: pointer;
+            text-align: left;
+            transition: border-color .15s ease, background .15s ease, color .15s ease;
+        }
+
+        .line-order-option:hover {
+            border-color: rgba(255,255,255,.065);
+            background: rgba(255,255,255,.045);
+            color: #f2f4fb;
+        }
+
+        .line-order-option.active {
+            border-color: rgba(98,245,197,.18);
+            background: linear-gradient(135deg, rgba(124,114,255,.13), rgba(98,245,197,.075));
+            color: #f6f7fc;
+        }
+
+        .line-order-option-mark {
+            display: grid;
+            place-items: center;
+            width: 16px;
+            height: 16px;
+            border: 1px solid rgba(255,255,255,.13);
+            border-radius: 999px;
+            background: rgba(255,255,255,.025);
+        }
+        .line-order-option.active .line-order-option-mark {
+            border-color: rgba(98,245,197,.42);
+            background: rgba(98,245,197,.13);
+            box-shadow: 0 0 12px rgba(98,245,197,.10);
+        }
+        .line-order-option.active .line-order-option-mark::after {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #62f5c5;
+            box-shadow: 0 0 8px rgba(98,245,197,.45);
+        }
+        .line-order-option > span:last-child { display: grid; gap: 2px; min-width: 0; }
+        .line-order-option strong { font-size: 11px; font-weight: 820; }
+        .line-order-option small { color: #6f7c94; font-size: 9px; line-height: 1.3; }
+        .line-order-direction {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            min-width: 116px;
+            min-height: 44px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 13px;
+            background: rgba(255,255,255,.03);
+            cursor: pointer;
+            color: #dce2ef;
+            font-size: 11px;
+            font-weight: 850;
+            transition: transform .18s ease, border-color .18s ease, background .18s ease;
+        }
+
+        .line-order-direction:hover {
+            transform: translateY(-1px);
+            border-color: rgba(124,114,255,.24);
+            background: rgba(124,114,255,.09);
+            color: #fff;
+        }
+
+        .line-order-direction-icon { color: #8d85ff; font-size: 16px; line-height: 1; }
+
+        .connected-lines-grid {
+            display: grid;
+            gap: 12px;
+            align-items: start;
+        }
+
+        .connected-lines-grid.view-large { grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); }
+        .connected-lines-grid.view-small {
+            grid-template-columns: repeat(auto-fill, minmax(280px, 300px));
+            gap: 10px;
+            justify-content: start;
+        }
+        .connected-lines-grid.view-list { grid-template-columns: 1fr; }
+
+        .connected-line-card {
+            position: relative;
+            display: grid;
+            gap: 13px;
+            min-width: 0;
+            min-height: 310px;
+            padding: 22px 20px 18px;
+            overflow: visible;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.10), transparent 38%),
+                linear-gradient(180deg, rgba(18,22,38,.99), rgba(13,17,30,.97));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+            transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+        }
+
+        .connected-line-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(98,245,197,.16);
+            box-shadow: 0 16px 36px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.04);
+        }
+
+        .connected-line-card::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 13px;
+            bottom: 13px;
+            width: 3px;
+            border-radius: 0 999px 999px 0;
+            background: linear-gradient(180deg, #62f5c5, #7c72ff);
+        }
+
+        .connected-line-card-header {
+            display: grid;
+            grid-template-columns: 50px minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .connected-line-avatar {
+            display: grid;
+            place-items: center;
+            width: 50px;
+            height: 50px;
+            border: 1px solid rgba(98,245,197,.20);
+            border-radius: 15px;
+            background: linear-gradient(145deg, rgba(98,245,197,.15), rgba(124,114,255,.13));
+            color: #dffff5;
+            font-size: 13px;
+            font-weight: 900;
+        }
+
+        .connected-line-identity { min-width: 0; }
+        .connected-line-name-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+        .connected-line-name-row h3 { min-width: 0; margin: 0; overflow: hidden; color: #f5f6fb; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+        .connected-line-number { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: #78869f; font-size: 11px; }
+        .connected-line-number .icon { width: 13px; height: 13px; }
+        .connected-line-rank {
+            align-self: start;
+            min-width: 36px;
+            padding: 7px 8px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 10px;
+            background: rgba(255,255,255,.035);
+            color: #9da8bc;
+            font-size: 10px;
+            font-weight: 850;
+            text-align: center;
+        }
+
+        .connected-line-state-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .connected-state-pill,
+        .audience-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 28px;
+            padding: 0 10px;
+            border: 1px solid rgba(98,245,197,.18);
+            border-radius: 999px;
+            background: rgba(98,245,197,.08);
+            color: #77f3cd;
+            font-size: 9px;
+            font-weight: 850;
+        }
+
+        .connected-state-pill .icon,
+        .audience-pill .icon { width: 12px; height: 12px; }
+        .connected-original-order { color: #707d95; font-size: 9px; font-weight: 700; }
+
+        .connected-line-health {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .connected-health-item {
+            min-width: 0;
+            min-height: 58px;
+            padding: 10px 11px;
+            border: 1px solid rgba(255,255,255,.055);
+            border-radius: 12px;
+            background: rgba(6,10,20,.25);
+        }
+
+        .connected-health-item span { display: block; color: #66748d; font-size: 9px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
+        .connected-health-item strong { display: block; margin-top: 5px; overflow: hidden; color: #aab5c9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+        .connected-line-audience { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .audience-pill { border-color: rgba(124,114,255,.18); background: rgba(124,114,255,.08); color: #b4afff; }
+        .audience-syncing { color: #e7bd68; }
+
+        .connected-line-card .tag-picker { width: 100%; }
+        .connected-line-card .tag-picker-button { justify-content: center; width: 100%; }
+        .connected-line-card .tag-chevron { margin-left: auto; }
+        .connected-line-card .tag-menu { left: 0; right: 0; min-width: 100%; }
+        .connected-line-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+        .connected-line-actions button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-width: 0;
+            min-height: 38px;
+            padding: 0 8px;
+            border-radius: 11px;
+            font-size: 11px;
+            font-weight: 800;
+            transition: transform .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
+        }
+        .connected-line-actions button .icon { width: 14px; height: 14px; }
+        .connected-line-actions button:hover { transform: translateY(-1px); }
+        .connected-line-actions .btn-editar-linea {
+            border: 1px solid rgba(124,114,255,.25);
+            background: linear-gradient(135deg, rgba(124,114,255,.18), rgba(98,245,197,.08));
+            color: #e7e4ff;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+        }
+        .connected-line-actions .btn-editar-linea:hover {
+            border-color: rgba(124,114,255,.42);
+            background: linear-gradient(135deg, rgba(124,114,255,.28), rgba(98,245,197,.13));
+            color: #fff;
+        }
+
+        .connected-lines-grid.view-small .connected-line-card {
+            min-height: 0;
+            padding: 16px;
+            gap: 12px;
+            border-radius: 18px;
+        }
+        .connected-lines-grid.view-small .connected-line-card::before { top: 12px; bottom: 12px; }
+        .connected-lines-grid.view-small .connected-line-state-row,
+        .connected-lines-grid.view-small .connected-line-health { display: none; }
+        .connected-lines-grid.view-small .connected-line-audience { min-width: 0; }
+        .connected-lines-grid.view-small .audience-pill { max-width: 100%; }
+        .connected-lines-grid.view-small .audience-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .connected-lines-grid.view-small .connected-line-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .connected-lines-grid.view-small .connected-line-actions button { padding: 0 5px; }
+
+        .connected-lines-grid.view-list .connected-line-card {
+            grid-template-columns: minmax(260px, 1.15fr) minmax(270px, 1fr) minmax(250px, .9fr);
+            align-items: center;
+            min-height: 0;
+            padding: 16px 18px;
+        }
+
+        .connected-lines-grid.view-list .connected-line-card-header { grid-column: 1; grid-row: 1 / span 2; }
+        .connected-lines-grid.view-list .connected-line-state-row { grid-column: 1; grid-row: 3; }
+        .connected-lines-grid.view-list .connected-line-health { grid-column: 2; grid-row: 1 / span 2; }
+        .connected-lines-grid.view-list .connected-line-audience { grid-column: 2; grid-row: 3; }
+        .connected-lines-grid.view-list .tag-picker { grid-column: 3; grid-row: 1; }
+        .connected-lines-grid.view-list .connected-line-actions { grid-column: 3; grid-row: 2 / span 2; }
+
+        #modal-editar-linea .modal-card { width: min(480px, 94vw); }
+        #modal-editar-linea .modal-body { display: grid; gap: 16px; }
+
+        @media (max-width: 1250px) {
+            .active-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .line-management-toolbar { grid-template-columns: minmax(240px, 1fr) auto auto; }
+            .line-management-toolbar .line-order-direction,
+            .line-management-toolbar .line-clear-button { justify-self: stretch; }
+            .connected-lines-grid.view-list .connected-line-card { grid-template-columns: minmax(240px, 1fr) minmax(260px, 1fr); }
+            .connected-lines-grid.view-list .tag-picker,
+            .connected-lines-grid.view-list .connected-line-actions { grid-column: auto; grid-row: auto; }
+        }
+
+        @media (max-width: 860px) {
+            .line-management-toolbar { grid-template-columns: 1fr 1fr; }
+            .line-management-toolbar > .input { grid-column: 1 / -1; }
+            .line-view-switch { justify-content: center; }
+            .line-order-picker { min-width: 0; width: 100%; }
+            .connected-lines-grid.view-list .connected-line-card { grid-template-columns: 1fr; }
+            .connected-lines-grid.view-list .connected-line-card-header,
+            .connected-lines-grid.view-list .connected-line-state-row,
+            .connected-lines-grid.view-list .connected-line-audience,
+            .connected-lines-grid.view-list .connected-line-health,
+            .connected-lines-grid.view-list .tag-picker,
+            .connected-lines-grid.view-list .connected-line-actions { grid-column: auto; grid-row: auto; }
+        }
+
+        @media (max-width: 680px) {
+            .nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .active-metrics-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .active-metric-card { min-height: 130px; padding: 15px; border-radius: 18px; }
+            .active-publications-grid { grid-template-columns: 1fr; }
+            .deletion-progress-meta { grid-template-columns: 1fr; }
+            .deletion-progress-meta span:nth-child(2),
+            .deletion-progress-meta span:last-child { text-align: left; }
+            .active-publications-header { align-items: stretch; flex-direction: column; }
+            .line-management-toolbar { grid-template-columns: 1fr; }
+            .line-management-toolbar > .input { grid-column: auto; }
+            .line-view-switch { overflow-x: auto; }
+            .connected-lines-grid.view-large,
+            .connected-lines-grid.view-small { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 440px) {
+            .active-metrics-grid { grid-template-columns: 1fr; }
+            .connected-line-health { grid-template-columns: 1fr; }
+            .connected-line-actions { grid-template-columns: 1fr; }
+        }
+    </style>
+
 </head>
 <body>
 
@@ -3090,6 +4542,10 @@
                     <svg class="icon"><use href="#i-image"></use></svg>
                     <span>Estados</span>
                 </button>
+                <button class="nav-button" data-section="activos">
+                    <svg class="icon"><use href="#i-layers"></use></svg>
+                    <span>Estados activos <span class="nav-count" id="nav-active-count">0</span></span>
+                </button>
                 <button class="nav-button" data-section="lineas">
                     <svg class="icon"><use href="#i-lines"></use></svg>
                     <span>Líneas <span class="nav-count" id="nav-line-count">0</span></span>
@@ -3107,7 +4563,7 @@
             <div class="update-panel">
                 <div class="update-panel-header">
                     <span class="update-panel-title title-with-icon"><svg class="icon"><use href="#i-update"></use></svg><span>Actualizaciones</span></span>
-                    <span id="update-version" class="update-version">v1.0.0</span>
+                    <span id="update-version" class="update-version">v1.0.6</span>
                 </div>
 
                 <p id="update-message" class="update-message">
@@ -3134,7 +4590,7 @@
                 </button>
             </div>
 
-            <div class="sidebar-version">AutoStatues 1.0.3</div>
+            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.0.6</div>
         </aside>
 
         <main class="main">
@@ -3296,8 +4752,76 @@
                 </div>
             </section>
 
+            <section id="section-activos" class="section active-status-page">
+                <div class="active-metrics-grid">
+                    <article class="active-metric-card">
+                        <span class="active-metric-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                        <span>Grupos activos</span>
+                        <strong id="activos-grupos">0</strong>
+                    </article>
+                    <article class="active-metric-card">
+                        <span class="active-metric-icon"><svg class="icon"><use href="#i-list"></use></svg></span>
+                        <span>Estados en líneas</span>
+                        <strong id="activos-lineas">0</strong>
+                    </article>
+                    <article class="active-metric-card">
+                        <span class="active-metric-icon danger"><svg class="icon"><use href="#i-alert"></use></svg></span>
+                        <span>Con errores</span>
+                        <strong id="activos-errores">0</strong>
+                    </article>
+                    <article class="active-metric-card">
+                        <span class="active-metric-icon"><svg class="icon"><use href="#i-trash"></use></svg></span>
+                        <span>Eliminados ahora</span>
+                        <strong id="activos-eliminados">0</strong>
+                    </article>
+                </div>
+
+                <div class="panel deletion-panel">
+                    <div class="deletion-panel-header">
+                        <div>
+                            <h2 class="title-with-icon"><svg class="icon"><use href="#i-trash"></use></svg><span>Progreso de eliminación</span></h2>
+                            <p id="eliminacion-mensaje" class="deletion-message">No hay una eliminación activa.</p>
+                        </div>
+                        <span id="eliminacion-estado" class="deletion-status-badge">Inactivo</span>
+                    </div>
+
+                    <div class="deletion-progress-meta">
+                        <span>Procesadas: <strong id="eliminacion-procesadas">0 de 0</strong></span>
+                        <span>Grupo: <strong id="eliminacion-grupo">0 de 0</strong></span>
+                        <span>Próximo grupo: <strong id="eliminacion-proximo">--</strong></span>
+                    </div>
+
+                    <div class="progress-track">
+                        <div id="eliminacion-barra" class="progress-bar"></div>
+                    </div>
+                </div>
+
+                <div class="active-publications-block">
+                    <div class="active-publications-header">
+                        <div class="active-publications-copy">
+                            <h2 class="title-with-icon"><svg class="icon"><use href="#i-layers"></use></svg><span>Publicaciones agrupadas</span></h2>
+                            <p>Cada card reúne la misma imagen publicada en varias líneas y conserva el ID de cada estado.</p>
+                        </div>
+                        <button type="button" id="btn-actualizar-activos" class="secondary-button">
+                            <svg class="icon"><use href="#i-refresh"></use></svg>
+                            <span>Actualizar</span>
+                        </button>
+                    </div>
+
+                    <div id="lista-estados-activos" class="active-publications-grid">
+                        <div class="active-empty-state">
+                            <div class="empty-state-content">
+                                <span class="empty-state-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                                <strong>No hay estados activos guardados</strong>
+                                <span>Las próximas publicaciones aparecerán agrupadas en este apartado.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <section id="section-lineas" class="section">
-                <div class="panel">
+                <div class="panel line-connect-panel">
                     <h2 class="title-with-icon"><svg class="icon"><use href="#i-link"></use></svg><span>Conectar una nueva línea</span></h2>
 
                     <div class="line-toolbar" style="grid-template-columns:minmax(220px,1fr) auto;">
@@ -3306,6 +4830,7 @@
                             id="nombre-linea"
                             class="input"
                             placeholder="Nombre de la línea"
+                            maxlength="80"
                         >
 
                         <button type="button" id="btn-conectar" class="primary-button">
@@ -3319,7 +4844,7 @@
                     <div id="lista-lineas-pendientes" class="lines-grid"></div>
                 </div>
 
-                <div class="panel">
+                <div class="panel connected-lines-panel">
                     <div class="section-heading-row">
                         <div>
                             <h2 class="title-with-icon"><svg class="icon"><use href="#i-check-circle"></use></svg><span>Líneas conectadas</span></h2>
@@ -3331,7 +4856,7 @@
                         </button>
                     </div>
 
-                    <div class="line-toolbar" style="grid-template-columns:minmax(220px,1fr) auto; margin-bottom:12px;">
+                    <div class="line-management-toolbar">
                         <input
                             type="search"
                             id="buscar-lineas-seccion"
@@ -3340,10 +4865,68 @@
                             autocomplete="off"
                         >
 
+                        <div class="line-view-switch" role="group" aria-label="Vista de líneas">
+                            <button type="button" class="line-view-button" data-line-view="small" title="Tarjetas pequeñas">
+                                <svg class="icon"><use href="#i-grid"></use></svg>
+                                <span>Pequeñas</span>
+                            </button>
+                            <button type="button" class="line-view-button active" data-line-view="large" title="Tarjetas grandes">
+                                <svg class="icon"><use href="#i-grid"></use></svg>
+                                <span>Grandes</span>
+                            </button>
+                            <button type="button" class="line-view-button" data-line-view="list" title="Vista de lista">
+                                <svg class="icon"><use href="#i-list"></use></svg>
+                                <span>Lista</span>
+                            </button>
+                        </div>
+
+                        <div id="selector-orden-lineas" class="line-order-picker">
+                            <button
+                                type="button"
+                                id="btn-orden-lineas"
+                                class="line-order-button"
+                                aria-haspopup="listbox"
+                                aria-expanded="false"
+                            >
+                                <span class="line-order-button-copy">
+                                    <small>Ordenar por</small>
+                                    <strong id="texto-orden-lineas">Orden de conexión</strong>
+                                </span>
+                                <svg class="icon line-order-chevron"><use href="#i-chevron-down"></use></svg>
+                            </button>
+                            <div class="line-order-menu" role="listbox" aria-label="Ordenar líneas por">
+                                <button type="button" class="line-order-option active" data-line-order="conexion" role="option" aria-selected="true">
+                                    <span class="line-order-option-mark"></span>
+                                    <span>
+                                        <strong>Orden de conexión</strong>
+                                        <small>Según el número asignado a cada línea</small>
+                                    </span>
+                                </button>
+                                <button type="button" class="line-order-option" data-line-order="alfabetico" role="option" aria-selected="false">
+                                    <span class="line-order-option-mark"></span>
+                                    <span>
+                                        <strong>Alfabético</strong>
+                                        <small>Ordenar las líneas por su nombre</small>
+                                    </span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <button
+                            type="button"
+                            id="btn-direccion-lineas"
+                            class="line-order-direction"
+                            aria-label="Cambiar a orden descendente"
+                            title="Cambiar a orden descendente"
+                        >
+                            <span class="line-order-direction-icon" aria-hidden="true">⇅</span>
+                            <span id="texto-direccion-lineas">1 → 10</span>
+                        </button>
+
                         <button
                             type="button"
                             id="btn-limpiar-busqueda-seccion"
-                            class="secondary-button"
+                            class="secondary-button line-clear-button"
                         >
                             <svg class="icon"><use href="#i-clear"></use></svg>
                             <span>Limpiar</span>
@@ -3352,7 +4935,7 @@
 
                     <p id="resultado-busqueda-seccion" class="help" style="margin:0 0 14px;"></p>
 
-                    <div id="lista-lineas-conectadas" class="lines-grid"></div>
+                    <div id="lista-lineas-conectadas" class="connected-lines-grid view-large"></div>
                 </div>
             </section>
 
@@ -3499,8 +5082,16 @@
                                     <input type="time" id="hora-programada" class="input">
                                     <span class="help">Se utiliza únicamente al guardar una programación.</span>
                                 </div>
-                                <div class="field full">
-                                    <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                                <div class="field full weekday-field">
+                                    <div class="weekday-field-header">
+                                        <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                                        <label class="all-days-check" for="todos-dias-programados">
+                                            <input type="checkbox" id="todos-dias-programados" checked>
+                                            <span class="all-days-box"><svg class="icon"><use href="#i-check"></use></svg></span>
+                                            <span>Todos los días</span>
+                                        </label>
+                                    </div>
+                                    <p class="weekday-helper">Marcá <strong>Todos los días</strong> para seleccionar la semana completa de una sola vez.</p>
                                     <div id="dias-programados" class="weekday-picker">
                                         <label><input type="checkbox" value="1" checked><span>Lun</span></label>
                                         <label><input type="checkbox" value="2" checked><span>Mar</span></label>
@@ -3577,22 +5168,42 @@
             <div class="modal-body">
                 <input type="hidden" id="editar-id">
 
-                <img
-                    id="editar-imagen-actual"
-                    alt="Imagen actualmente programada"
-                    style="display:block;width:180px;height:220px;object-fit:cover;margin:0 auto 16px;border-radius:10px;background:#0b1422;"
-                >
+                <section class="edit-image-panel">
+                    <div class="edit-image-preview">
+                        <img
+                            id="editar-imagen-actual"
+                            alt="Imagen actualmente programada"
+                        >
+                        <span class="edit-image-badge">
+                            <svg class="icon"><use href="#i-image"></use></svg>
+                            <span>Vista previa</span>
+                        </span>
+                    </div>
 
-                <div class="field">
-                    <label for="editar-foto" class="label-with-icon"><svg class="icon"><use href="#i-image"></use></svg><span>Cambiar imagen</span></label>
-                    <input
-                        type="file"
-                        id="editar-foto"
-                        class="input"
-                        accept="image/png, image/jpeg"
-                    >
-                    <span class="help">Dejalo vacío para conservar la imagen actual.</span>
-                </div>
+                    <div class="edit-image-content">
+                        <div>
+                            <span class="edit-image-eyebrow">Contenido visual</span>
+                            <h3>Cambiar imagen</h3>
+                            <p>Elegí una imagen nueva o conservá la que ya está programada.</p>
+                        </div>
+
+                        <input
+                            type="file"
+                            id="editar-foto"
+                            class="visually-hidden-file"
+                            accept="image/png, image/jpeg"
+                        >
+
+                        <div class="edit-file-stack">
+                            <label for="editar-foto" class="edit-file-button">
+                                <svg class="icon"><use href="#i-upload"></use></svg>
+                                <span>Seleccionar otra imagen</span>
+                            </label>
+
+                            <span id="editar-foto-nombre" class="edit-file-name">Ningún archivo nuevo seleccionado</span>
+                        </div>
+                    </div>
+                </section>
 
                 <div class="field" style="margin-top:14px;">
                     <label for="editar-texto" class="label-with-icon"><svg class="icon"><use href="#i-text"></use></svg><span>Texto opcional</span></label>
@@ -3608,8 +5219,16 @@
                     <input type="time" id="editar-hora" class="input">
                 </div>
 
-                <div class="field" style="margin-top:14px;">
-                    <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                <div class="field weekday-field" style="margin-top:18px;">
+                    <div class="weekday-field-header">
+                        <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                        <label class="all-days-check" for="editar-todos-dias">
+                            <input type="checkbox" id="editar-todos-dias">
+                            <span class="all-days-box"><svg class="icon"><use href="#i-check"></use></svg></span>
+                            <span>Todos los días</span>
+                        </label>
+                    </div>
+                    <p class="weekday-helper">Marcá <strong>Todos los días</strong> para seleccionar la semana completa de una sola vez.</p>
                     <div id="editar-dias-programados" class="weekday-picker">
                         <label><input type="checkbox" value="1"><span>Lun</span></label>
                         <label><input type="checkbox" value="2"><span>Mar</span></label>
@@ -3644,6 +5263,36 @@
         </div>
     </div>
 
+    <div id="modal-editar-linea" class="modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h2 class="title-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Editar línea</span></h2>
+                <button type="button" id="cerrar-modal-editar-linea" class="icon-button" aria-label="Cerrar">
+                    <svg class="icon"><use href="#i-x"></use></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="editar-linea-id">
+                <div class="field">
+                    <label for="editar-linea-nombre" class="label-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Nombre de la línea</span></label>
+                    <input type="text" id="editar-linea-nombre" class="input" maxlength="80" autocomplete="off">
+                    <span class="help">Este nombre solo se usa para identificar la línea dentro de AutoStatues.</span>
+                </div>
+                <p id="mensaje-editar-linea" class="modal-message"></p>
+                <div class="modal-actions">
+                    <button type="button" id="btn-guardar-linea" class="primary-button">
+                        <svg class="icon"><use href="#i-save"></use></svg>
+                        <span>Guardar cambios</span>
+                    </button>
+                    <button type="button" id="btn-cancelar-editar-linea" class="secondary-button">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                        <span>Cancelar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="toast-container" class="toast-container"></div>
 
     <script>
@@ -3654,12 +5303,21 @@
         let intervaloProgreso = null;
         let vistaProgramaciones = 'grid';
         let urlPreviewActual = null;
+        let urlPreviewEdicion = null;
         let selectorEtiquetaAbiertoId = null;
         let configuracionActual = null;
+        let seccionActual = 'dashboard';
+        let cacheLineasSeccion = [];
+        let vistaLineas = 'large';
+        let ordenLineas = 'conexion';
+        let direccionLineas = 'asc';
+        let lineaEditandoId = null;
+        let cargandoEstadosActivos = false;
 
         const titulos = {
             dashboard: 'Panel general',
             estados: 'Actividad de Estados',
+            activos: 'Estados activos',
             lineas: 'Líneas conectadas',
             historial: 'Historial de publicaciones',
             configuracion: 'Configuración'
@@ -3689,10 +5347,54 @@
             return Number.isNaN(fecha.getTime()) ? reemplazo : fecha.toLocaleString();
         }
 
+        const selectoresTodosDias = {
+            'dias-programados': 'todos-dias-programados',
+            'editar-dias-programados': 'editar-todos-dias'
+        };
+
         function obtenerDiasSeleccionados(contenedorId) {
             return Array.from(
                 document.querySelectorAll(`#${contenedorId} input:checked`)
             ).map(input => Number(input.value));
+        }
+
+        function actualizarSelectorTodosDias(contenedorId) {
+            const selectorId = selectoresTodosDias[contenedorId];
+            const selector = selectorId ? document.getElementById(selectorId) : null;
+            const dias = Array.from(
+                document.querySelectorAll(`#${contenedorId} input[type="checkbox"]`)
+            );
+
+            if (!selector || !dias.length) return;
+
+            const seleccionados = dias.filter(input => input.checked).length;
+            selector.checked = seleccionados === dias.length;
+            selector.indeterminate = seleccionados > 0 && seleccionados < dias.length;
+        }
+
+        function configurarSelectorTodosDias(contenedorId) {
+            const selectorId = selectoresTodosDias[contenedorId];
+            const selector = selectorId ? document.getElementById(selectorId) : null;
+            const dias = Array.from(
+                document.querySelectorAll(`#${contenedorId} input[type="checkbox"]`)
+            );
+
+            if (!selector || !dias.length) return;
+
+            selector.addEventListener('change', () => {
+                dias.forEach(input => {
+                    input.checked = selector.checked;
+                });
+                selector.indeterminate = false;
+            });
+
+            dias.forEach(input => {
+                input.addEventListener('change', () => {
+                    actualizarSelectorTodosDias(contenedorId);
+                });
+            });
+
+            actualizarSelectorTodosDias(contenedorId);
         }
 
         function marcarDiasSeleccionados(contenedorId, dias) {
@@ -3700,6 +5402,7 @@
             document.querySelectorAll(`#${contenedorId} input`).forEach(input => {
                 input.checked = seleccionados.has(Number(input.value));
             });
+            actualizarSelectorTodosDias(contenedorId);
         }
 
         function describirDias(dias) {
@@ -3738,7 +5441,13 @@
                 `${lineasSeleccionadas.size} línea(s)`;
         }
 
-        function mostrarSeccion(nombre) {
+        function mostrarSeccion(nombre, opciones = {}) {
+            if (!Object.prototype.hasOwnProperty.call(titulos, nombre)) {
+                nombre = 'dashboard';
+            }
+
+            seccionActual = nombre;
+
             document.querySelectorAll('.section').forEach(seccion => {
                 seccion.classList.toggle(
                     'active',
@@ -3757,7 +5466,18 @@
             document.getElementById('view-controls').style.display =
                 nombre === 'dashboard' ? 'flex' : 'none';
 
+            const fab = document.getElementById('btn-nuevo-estado');
+            const fabEsLinea = nombre === 'lineas';
+            fab.title = fabEsLinea ? 'Conectar una nueva línea' : 'Crear nuevo estado';
+            fab.setAttribute('aria-label', fab.title);
+
+            if (opciones.actualizarHash !== false && location.hash !== `#${nombre}`) {
+                history.pushState({ seccion: nombre }, '', `#${nombre}`);
+            }
+
             if (nombre === 'dashboard') actualizarResumen();
+            if (nombre === 'activos') actualizarEstadosActivos(true);
+            if (nombre === 'lineas') renderizarLineasConectadas(cacheLineasSeccion);
             if (nombre === 'historial') actualizarHistorial();
             if (nombre === 'configuracion') cargarConfiguracion();
         }
@@ -3871,6 +5591,512 @@
             `;
         }
 
+        function formatearFechaCompacta(valor, reemplazo = 'Sin registro') {
+            if (!valor) return reemplazo;
+            const fecha = new Date(valor);
+            if (Number.isNaN(fecha.getTime())) return reemplazo;
+
+            return fecha.toLocaleString('es-PY', {
+                day: '2-digit',
+                month: '2-digit',
+                year: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function obtenerAvatarLinea(linea) {
+            const nombre = String(linea.nombre || '').trim();
+            const numeroNombre = nombre.match(/(\d{1,3})(?!.*\d)/);
+            if (numeroNombre) return numeroNombre[1];
+
+            const iniciales = nombre
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map(parte => parte[0])
+                .join('')
+                .toUpperCase();
+
+            return iniciales || String(linea.ordenOriginal || '--');
+        }
+
+        function compararLineas(a, b) {
+            const texto = valor => String(valor || '').toLocaleLowerCase('es');
+            let resultado;
+
+            if (ordenLineas === 'alfabetico') {
+                resultado = texto(a.nombre).localeCompare(
+                    texto(b.nombre),
+                    'es',
+                    { numeric: true }
+                );
+
+                if (resultado === 0) {
+                    resultado = Number(a.ordenOriginal || 0) - Number(b.ordenOriginal || 0);
+                }
+            } else {
+                resultado = Number(a.ordenOriginal || 0) - Number(b.ordenOriginal || 0);
+            }
+
+            return direccionLineas === 'desc' ? -resultado : resultado;
+        }
+
+        function actualizarControlesVistaLineas() {
+            document.querySelectorAll('[data-line-view]').forEach(boton => {
+                boton.classList.toggle('active', boton.dataset.lineView === vistaLineas);
+            });
+
+            const selectorOrden = document.getElementById('selector-orden-lineas');
+            const botonOrden = document.getElementById('btn-orden-lineas');
+            const textoOrden = document.getElementById('texto-orden-lineas');
+            const nombreOrden = ordenLineas === 'alfabetico'
+                ? 'Alfabético'
+                : 'Orden de conexión';
+
+            if (textoOrden) textoOrden.textContent = nombreOrden;
+            document.querySelectorAll('[data-line-order]').forEach(opcion => {
+                const estaActiva = opcion.dataset.lineOrder === ordenLineas;
+                opcion.classList.toggle('active', estaActiva);
+                opcion.setAttribute('aria-selected', String(estaActiva));
+            });
+            if (botonOrden && selectorOrden) {
+                botonOrden.setAttribute(
+                    'aria-expanded',
+                    String(selectorOrden.classList.contains('open'))
+                );
+            }
+
+            const botonDireccion = document.getElementById('btn-direccion-lineas');
+            const textoDireccion = document.getElementById('texto-direccion-lineas');
+            const esAscendente = direccionLineas === 'asc';
+            const esAlfabetico = ordenLineas === 'alfabetico';
+            const etiqueta = esAlfabetico
+                ? (esAscendente ? 'A → Z' : 'Z → A')
+                : (esAscendente ? '1 → 10' : '10 → 1');
+            const siguiente = esAscendente ? 'descendente' : 'ascendente';
+
+            if (textoDireccion) textoDireccion.textContent = etiqueta;
+            if (botonDireccion) {
+                botonDireccion.title = `Cambiar a orden ${siguiente}`;
+                botonDireccion.setAttribute('aria-label', `Cambiar a orden ${siguiente}`);
+            }
+        }
+
+        function renderizarLineasConectadas(lineas = cacheLineasSeccion) {
+            const contenedor = document.getElementById('lista-lineas-conectadas');
+            if (!contenedor) return;
+
+            cacheLineasSeccion = Array.isArray(lineas) ? lineas : [];
+            const busqueda = document
+                .getElementById('buscar-lineas-seccion')
+                .value
+                .trim()
+                .toLocaleLowerCase('es');
+
+            const filtradas = cacheLineasSeccion
+                .filter(linea =>
+                    !busqueda ||
+                    String(linea.nombre || '').toLocaleLowerCase('es').includes(busqueda) ||
+                    String(linea.numero || '').toLocaleLowerCase('es').includes(busqueda) ||
+                    nombreEtiqueta(linea.etiqueta).toLocaleLowerCase('es').includes(busqueda)
+                )
+                .sort(compararLineas);
+
+            const visibles = filtradas;
+
+            contenedor.className = `connected-lines-grid view-${vistaLineas}`;
+            contenedor.innerHTML = '';
+
+            for (const linea of visibles) {
+                const tarjeta = document.createElement('article');
+                tarjeta.className = 'connected-line-card';
+                const audienciaLista = Boolean(linea.audienciaEstadosLista);
+                const audiencia = audienciaLista
+                    ? `${Number(linea.destinatariosEstado) || 0} contacto(s)`
+                    : 'Sincronizando...';
+
+                tarjeta.innerHTML = `
+                    <div class="connected-line-card-header">
+                        <span class="connected-line-avatar">${escaparHTML(obtenerAvatarLinea(linea))}</span>
+                        <div class="connected-line-identity">
+                            <div class="connected-line-name-row">
+                                <h3>${escaparHTML(linea.nombre)}</h3>
+                                ${etiquetaHTML(linea.etiqueta)}
+                            </div>
+                            <span class="connected-line-number">
+                                ${iconoSVG('phone-call')}
+                                <span>${linea.numero ? escaparHTML(linea.numero) : 'Número no disponible'}</span>
+                            </span>
+                        </div>
+                        <span class="connected-line-rank">#${Number(linea.ordenOriginal) || 0}</span>
+                    </div>
+
+                    <div class="connected-line-state-row">
+                        <span class="connected-state-pill">${iconoSVG('check-circle')}<span>Conectado</span></span>
+                        <span class="connected-original-order">Conexión original #${Number(linea.ordenOriginal) || 0}</span>
+                    </div>
+
+                    <div class="connected-line-health">
+                        <div class="connected-health-item">
+                            <span>Última conexión</span>
+                            <strong>${escaparHTML(formatearFechaCompacta(linea.ultimaConexion))}</strong>
+                        </div>
+                        <div class="connected-health-item">
+                            <span>Última publicación</span>
+                            <strong>${escaparHTML(formatearFechaCompacta(linea.ultimaPublicacion))}</strong>
+                        </div>
+                    </div>
+
+                    <div class="connected-line-audience" ${linea.ultimoError ? `title="${escaparHTML(linea.ultimoError)}"` : ''}>
+                        <span class="audience-pill ${audienciaLista ? '' : 'audience-syncing'}">
+                            ${iconoSVG(audienciaLista ? 'users' : 'loader', audienciaLista ? '' : 'spin')}
+                            <span>Audiencia: ${escaparHTML(audiencia)}</span>
+                        </span>
+                    </div>
+
+                    ${selectorEtiquetaHTML(linea)}
+
+                    <div class="connected-line-actions">
+                        <button type="button" class="btn-editar-linea" data-id="${linea.id}" title="Editar línea" aria-label="Editar línea">
+                            ${iconoSVG('edit')}
+                            <span>Editar</span>
+                        </button>
+                        <button type="button" class="small-secondary btn-reconectar" data-id="${linea.id}" title="Reconectar línea" aria-label="Reconectar línea">
+                            ${iconoSVG('refresh')}
+                            <span>Reconectar</span>
+                        </button>
+                        <button type="button" class="small-danger btn-eliminar" data-id="${linea.id}" title="Eliminar línea" aria-label="Eliminar línea">
+                            ${iconoSVG('trash')}
+                            <span>Eliminar</span>
+                        </button>
+                    </div>
+                `;
+                contenedor.appendChild(tarjeta);
+            }
+
+            if (!visibles.length) {
+                contenedor.innerHTML = `
+                    <div class="empty-state" style="grid-column:1/-1;">
+                        <div class="empty-state-content">
+                            <span class="empty-state-icon">${iconoSVG('lines')}</span>
+                            <strong>${busqueda ? 'No se encontraron líneas' : 'No hay líneas conectadas'}</strong>
+                            <span>${busqueda ? 'Probá con otro nombre o número.' : 'Las líneas aparecerán acá cuando terminen de vincularse.'}</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            document.getElementById('resultado-busqueda-seccion').textContent = busqueda
+                ? `${filtradas.length} resultado(s) de ${cacheLineasSeccion.length}.`
+                : `${cacheLineasSeccion.length} línea(s) conectada(s).`;
+            actualizarControlesVistaLineas();
+        }
+
+        function abrirEditorLinea(id) {
+            const linea = cacheLineasSeccion.find(item => String(item.id) === String(id));
+            if (!linea) return;
+
+            lineaEditandoId = linea.id;
+            document.getElementById('editar-linea-id').value = linea.id;
+            document.getElementById('editar-linea-nombre').value = linea.nombre || '';
+            document.getElementById('mensaje-editar-linea').textContent = '';
+            abrirModal('modal-editar-linea');
+            setTimeout(() => document.getElementById('editar-linea-nombre').focus(), 60);
+        }
+
+        function cerrarEditorLinea() {
+            lineaEditandoId = null;
+            document.getElementById('editar-linea-id').value = '';
+            document.getElementById('editar-linea-nombre').value = '';
+            document.getElementById('mensaje-editar-linea').textContent = '';
+            cerrarModal('modal-editar-linea');
+        }
+
+        function htmlEstadosActivosVacios(mensaje = 'Las próximas publicaciones aparecerán agrupadas en este apartado.') {
+            return `
+                <div class="active-empty-state">
+                    <div class="empty-state-content">
+                        <span class="empty-state-icon">${iconoSVG('layers')}</span>
+                        <strong>No hay estados activos guardados</strong>
+                        <span>${escaparHTML(mensaje)}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderizarProgresoEliminacion(progreso = {}) {
+            const activo = Boolean(progreso.activo);
+            const estado = String(progreso.estado || 'inactivo');
+            const total = Number(progreso.total) || 0;
+            const procesadas = Number(progreso.procesadas) || 0;
+            const porcentaje = total ? Math.min(100, Math.round((procesadas / total) * 100)) : 0;
+            const badge = document.getElementById('eliminacion-estado');
+
+            const etiquetaEstado = activo
+                ? 'Eliminando'
+                : estado === 'completado'
+                    ? 'Completado'
+                    : estado === 'completado_con_errores'
+                        ? 'Con errores'
+                        : estado === 'error'
+                            ? 'Error'
+                            : 'Inactivo';
+
+            badge.textContent = etiquetaEstado;
+            badge.classList.toggle('active', activo);
+            badge.classList.toggle('success', !activo && estado === 'completado');
+            badge.classList.toggle(
+                'error',
+                !activo && ['completado_con_errores', 'error'].includes(estado)
+            );
+            document.getElementById('eliminacion-mensaje').textContent =
+                progreso.mensaje || (activo ? 'Eliminando estados...' : 'No hay una eliminación activa.');
+            document.getElementById('eliminacion-procesadas').textContent = `${procesadas} de ${total}`;
+            document.getElementById('eliminacion-grupo').textContent =
+                `${Number(progreso.grupoActual) || 0} de ${Number(progreso.totalGrupos) || 0}`;
+            document.getElementById('eliminacion-proximo').textContent =
+                Number(progreso.proximoGrupoSegundos) > 0
+                    ? formatearTiempo(Number(progreso.proximoGrupoSegundos))
+                    : '--';
+            document.getElementById('eliminacion-barra').style.width = `${porcentaje}%`;
+        }
+
+        function renderizarEstadosActivos(data = {}) {
+            const resumen = data.resumen || {};
+            const publicaciones = Array.isArray(data.publicaciones) ? data.publicaciones : [];
+            const contenedor = document.getElementById('lista-estados-activos');
+
+            document.getElementById('activos-grupos').textContent = Number(resumen.gruposActivos) || 0;
+            document.getElementById('activos-lineas').textContent = Number(resumen.estadosEnLineas) || 0;
+            document.getElementById('activos-errores').textContent = Number(resumen.conErrores) || 0;
+            document.getElementById('activos-eliminados').textContent = Number(resumen.eliminadosAhora) || 0;
+            document.getElementById('nav-active-count').textContent =
+                Number(resumen.gruposActivos) || publicaciones.length;
+            renderizarProgresoEliminacion(data.progreso || {});
+
+            if (!publicaciones.length) {
+                contenedor.innerHTML = htmlEstadosActivosVacios();
+                return;
+            }
+
+            contenedor.innerHTML = publicaciones.map(publicacion => {
+                const lineas = Array.isArray(publicacion.lineas) ? publicacion.lineas : [];
+                const imagen = String(publicacion.imagenUrl || '').trim();
+                const fecha = formatearFechaCompacta(publicacion.fechaInicio, 'Fecha no disponible');
+                const expiracion = formatearFechaCompacta(publicacion.expiraEn, 'Sin vencimiento informado');
+                const titulo = publicacion.texto
+                    ? String(publicacion.texto).slice(0, 72)
+                    : `Publicación del ${fecha}`;
+
+                const lineasHTML = lineas.length
+                    ? lineas.map(linea => {
+                        const conError = Boolean(linea.error) || ['error', 'fallido'].includes(String(linea.estado || '').toLowerCase());
+                        const estadoId = String(linea.estadoId || '').trim();
+                        const estadoIdCorto = estadoId.length > 16
+                            ? `${estadoId.slice(0, 8)}…${estadoId.slice(-4)}`
+                            : estadoId;
+                        return `
+                            <div class="active-group-line" title="${escaparHTML(linea.error || '')}">
+                                <span class="active-group-line-main">
+                                    <strong>${escaparHTML(linea.nombre || 'Línea sin nombre')}</strong>
+                                    <span class="active-line-details">
+                                        <span>${escaparHTML(linea.numero || 'Número no disponible')}</span>
+                                        ${estadoId ? `<span class="active-line-id" title="ID del estado: ${escaparHTML(estadoId)}">ID ${escaparHTML(estadoIdCorto)}</span>` : ''}
+                                    </span>
+                                </span>
+                                <span class="active-line-status ${conError ? 'error' : ''}">${conError ? 'Error' : escaparHTML(linea.estado || 'Activo')}</span>
+                            </div>
+                        `;
+                    }).join('')
+                    : '<div class="active-group-line"><span class="active-group-line-main"><strong>Sin líneas registradas</strong></span></div>';
+
+                return `
+                    <article class="active-group-card">
+                        <div class="active-group-media">
+                            ${imagen
+                                ? `<img src="${escaparHTML(imagen)}" alt="Vista previa de ${escaparHTML(titulo)}" loading="lazy">`
+                                : `<span class="active-group-media-placeholder">${iconoSVG('image')}</span>`}
+                            <span class="active-group-count">${iconoSVG('layers')}<span>${lineas.length} estado(s)</span></span>
+                        </div>
+                        <div class="active-group-body">
+                            <div class="active-group-heading">
+                                <div>
+                                    <h3>${escaparHTML(titulo)}</h3>
+                                    <p>${escaparHTML(fecha)}</p>
+                                </div>
+                                <span class="active-group-expiry">${escaparHTML(expiracion)}</span>
+                            </div>
+                            ${publicacion.texto ? `<p class="active-group-text">${escaparHTML(publicacion.texto)}</p>` : ''}
+                            <div class="active-group-lines">${lineasHTML}</div>
+                            <div class="active-group-actions">
+                                <button type="button" class="small-danger btn-eliminar-estado-activo" data-id="${escaparHTML(publicacion.id)}">
+                                    ${iconoSVG('trash')}
+                                    <span>Eliminar grupo</span>
+                                </button>
+                            </div>
+                        </div>
+                    </article>
+                `;
+            }).join('');
+
+            contenedor.querySelectorAll('.btn-eliminar-estado-activo').forEach(boton => {
+                boton.addEventListener('click', () => eliminarEstadoActivo(boton.dataset.id));
+            });
+        }
+
+        async function actualizarEstadosActivos(silencioso = false) {
+            if (cargandoEstadosActivos) return;
+            cargandoEstadosActivos = true;
+            const boton = document.getElementById('btn-actualizar-activos');
+            const contenidoOriginal = boton.innerHTML;
+
+            if (!silencioso) {
+                boton.disabled = true;
+                boton.innerHTML = `${iconoSVG('loader', 'spin')}<span>Actualizando...</span>`;
+            }
+
+            try {
+                const respuesta = await fetch('/estados-activos', { cache: 'no-store' });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) {
+                    throw new Error(data.error || data.mensaje || 'No se pudieron cargar los estados activos.');
+                }
+
+                renderizarEstadosActivos(data);
+            } catch (error) {
+                console.error('Error consultando estados activos:', error);
+                if (!silencioso) toast(error.message, 'error');
+            } finally {
+                cargandoEstadosActivos = false;
+
+                if (!silencioso) {
+                    boton.disabled = false;
+                    boton.innerHTML = contenidoOriginal;
+                }
+            }
+        }
+
+        async function eliminarEstadoActivo(id) {
+            if (!id || !confirm('¿Querés eliminar este grupo de estados de todas sus líneas?')) return;
+
+            try {
+                const respuesta = await fetch(`/estados-activos/${encodeURIComponent(id)}`, {
+                    method: 'DELETE'
+                });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) {
+                    throw new Error(data.error || data.mensaje || 'No se pudo iniciar la eliminación.');
+                }
+
+                toast(data.mensaje || 'Eliminación iniciada.', 'success');
+                actualizarEstadosActivos(true);
+            } catch (error) {
+                toast(error.message, 'error');
+            }
+        }
+
+        async function manejarClickLineasConectadas(evento) {
+            const botonEditar = evento.target.closest('.btn-editar-linea');
+            if (botonEditar) {
+                abrirEditorLinea(botonEditar.dataset.id);
+                return;
+            }
+
+            const botonEtiquetas = evento.target.closest('.btn-abrir-etiquetas');
+            if (botonEtiquetas) {
+                evento.stopPropagation();
+                const id = botonEtiquetas.dataset.id;
+                selectorEtiquetaAbiertoId = selectorEtiquetaAbiertoId === id ? null : id;
+
+                document.querySelectorAll('.tag-picker').forEach(picker => {
+                    const abierto = picker.dataset.id === selectorEtiquetaAbiertoId;
+                    picker.classList.toggle('open', abierto);
+                    picker.querySelector('.tag-picker-button')
+                        ?.setAttribute('aria-expanded', String(abierto));
+                });
+                return;
+            }
+
+            const opcionEtiqueta = evento.target.closest('.tag-option');
+            if (opcionEtiqueta) {
+                evento.stopPropagation();
+                const id = opcionEtiqueta.dataset.id;
+                const etiqueta = opcionEtiqueta.dataset.etiqueta;
+                opcionEtiqueta.disabled = true;
+
+                try {
+                    const respuesta = await fetch(`/lineas/${encodeURIComponent(id)}/etiqueta`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ etiqueta })
+                    });
+                    const data = await leerRespuesta(respuesta);
+                    if (!respuesta.ok) {
+                        throw new Error(data.error || 'No se pudo actualizar la etiqueta.');
+                    }
+
+                    selectorEtiquetaAbiertoId = null;
+                    toast(data.mensaje || 'Etiqueta actualizada.', 'success');
+                    actualizarLineas();
+                } catch (error) {
+                    opcionEtiqueta.disabled = false;
+                    toast(error.message, 'error');
+                }
+                return;
+            }
+
+            const botonReconectar = evento.target.closest('.btn-reconectar');
+            if (botonReconectar) {
+                const id = botonReconectar.dataset.id;
+                const contenidoOriginal = botonReconectar.innerHTML;
+                botonReconectar.disabled = true;
+                botonReconectar.innerHTML = `${iconoSVG('loader', 'spin')}<span>Reconectando...</span>`;
+
+                try {
+                    const respuesta = await fetch(`/lineas/${encodeURIComponent(id)}/reconectar`, {
+                        method: 'POST'
+                    });
+                    const data = await leerRespuesta(respuesta);
+                    if (!respuesta.ok) {
+                        throw new Error(data.error || 'No se pudo reconectar la línea.');
+                    }
+
+                    toast(data.mensaje || 'Reconexión iniciada.', 'success');
+                    setTimeout(actualizarLineas, 700);
+                } catch (error) {
+                    botonReconectar.disabled = false;
+                    botonReconectar.innerHTML = contenidoOriginal;
+                    toast(error.message, 'error');
+                }
+                return;
+            }
+
+            const botonEliminar = evento.target.closest('.btn-eliminar');
+            if (!botonEliminar) return;
+
+            const id = botonEliminar.dataset.id;
+            if (!confirm('¿Querés eliminar esta línea y cerrar su sesión?')) return;
+
+            try {
+                botonEliminar.disabled = true;
+                const respuesta = await fetch(`/lineas/${encodeURIComponent(id)}`, {
+                    method: 'DELETE'
+                });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) {
+                    throw new Error(data.error || 'No se pudo eliminar la línea.');
+                }
+
+                lineasSeleccionadas.delete(id);
+                toast(data.mensaje || 'Línea eliminada.', 'success');
+                actualizarLineas();
+            } catch (error) {
+                botonEliminar.disabled = false;
+                toast(error.message, 'error');
+            }
+        }
+
         function mostrarEstadoProgramacion(estado) {
             const estados = {
                 programado: 'Programado',
@@ -3913,6 +6139,11 @@
                 const pendientes = data.lineas.filter(
                     linea => linea.estado !== 'conectado'
                 );
+
+                cacheLineasSeccion = conectadas.map((linea, indice) => ({
+                    ...linea,
+                    ordenOriginal: Number(linea.ordenConexion) || indice + 1
+                }));
 
                 idsLineasConectadas = conectadas.map(linea => linea.id);
 
@@ -3973,84 +6204,7 @@
                     `;
                 }
 
-                const busquedaSeccion = document
-                    .getElementById('buscar-lineas-seccion')
-                    .value
-                    .trim()
-                    .toLocaleLowerCase('es');
-
-                const conectadasVisiblesSeccion = conectadas.filter(linea =>
-                    !busquedaSeccion ||
-                    String(linea.nombre || '')
-                        .toLocaleLowerCase('es')
-                        .includes(busquedaSeccion) ||
-                    String(linea.numero || '')
-                        .toLocaleLowerCase('es')
-                        .includes(busquedaSeccion) ||
-                    nombreEtiqueta(linea.etiqueta)
-                        .toLocaleLowerCase('es')
-                        .includes(busquedaSeccion)
-                );
-
-                for (const linea of conectadasVisiblesSeccion) {
-                    const tarjeta = document.createElement('article');
-                    tarjeta.className = 'line-card';
-                    tarjeta.innerHTML = `
-                        <div>
-                            <h3 class="line-title">
-                                ${escaparHTML(linea.nombre)}
-                                ${etiquetaHTML(linea.etiqueta)}
-                            </h3>
-                            <div class="line-details">
-                                <span class="line-status">${iconoSVG('check-circle')}<span>Conectado</span></span>
-                                ${linea.numero ? `<span class="meta-with-icon">${iconoSVG('phone-call')}<span>${escaparHTML(linea.numero)}</span></span>` : ''}
-                                <span class="line-health">
-                                    <span>Última conexión: ${escaparHTML(formatearFecha(linea.ultimaConexion, 'Sin registro'))}</span>
-                                    <span>Última publicación: ${escaparHTML(formatearFecha(linea.ultimaPublicacion, 'Sin registro'))}</span>
-                                    ${linea.ultimoError ? `<span>Último error: ${escaparHTML(linea.ultimoError)}</span>` : ''}
-                                </span>
-                            </div>
-                        </div>
-                        <div class="line-actions">
-                            ${selectorEtiquetaHTML(linea)}
-                            <button
-                                type="button"
-                                class="small-secondary btn-reconectar"
-                                data-id="${linea.id}"
-                            >
-                                ${iconoSVG('refresh')}
-                                <span>Reconectar</span>
-                            </button>
-                            <button
-                                type="button"
-                                class="small-danger btn-eliminar"
-                                data-id="${linea.id}"
-                            >
-                                ${iconoSVG('trash')}
-                                <span>Eliminar</span>
-                            </button>
-                        </div>
-                    `;
-                    contenedorConectadas.appendChild(tarjeta);
-                }
-
-                if (!conectadasVisiblesSeccion.length) {
-                    contenedorConectadas.innerHTML = `
-                        <div class="empty-state" style="grid-column:1/-1;">
-                            <div>
-                                <strong>${busquedaSeccion ? 'No se encontraron líneas' : 'No hay líneas conectadas'}</strong>
-                                ${busquedaSeccion
-                                    ? 'Probá con otro nombre o número.'
-                                    : 'Las líneas aparecerán acá cuando terminen de vincularse.'}
-                            </div>
-                        </div>
-                    `;
-                }
-
-                document.getElementById('resultado-busqueda-seccion').textContent =
-                    busquedaSeccion
-                        ? `${conectadasVisiblesSeccion.length} resultado(s) de ${conectadas.length}.`
-                        : `${conectadas.length} línea(s) conectada(s).`;
+                renderizarLineasConectadas(cacheLineasSeccion);
 
                 for (const linea of pendientes) {
                     const tarjeta = document.createElement('article');
@@ -4130,7 +6284,7 @@
                     });
 
                 document
-                    .querySelectorAll('.btn-abrir-etiquetas')
+                    .querySelectorAll('#lista-lineas-pendientes .btn-abrir-etiquetas')
                     .forEach(botonEtiqueta => {
                         botonEtiqueta.addEventListener('click', evento => {
                             evento.stopPropagation();
@@ -4147,7 +6301,7 @@
                     });
 
                 document
-                    .querySelectorAll('.tag-menu')
+                    .querySelectorAll('#lista-lineas-pendientes .tag-menu')
                     .forEach(menu => {
                         menu.addEventListener('click', evento => {
                             evento.stopPropagation();
@@ -4155,7 +6309,7 @@
                     });
 
                 document
-                    .querySelectorAll('.tag-option')
+                    .querySelectorAll('#lista-lineas-pendientes .tag-option')
                     .forEach(opcionEtiqueta => {
                         opcionEtiqueta.addEventListener('click', async evento => {
                             evento.stopPropagation();
@@ -4203,7 +6357,7 @@
                     });
 
                 document
-                    .querySelectorAll('.btn-reconectar')
+                    .querySelectorAll('#lista-lineas-pendientes .btn-reconectar')
                     .forEach(boton => {
                         boton.addEventListener('click', async evento => {
                             const botonActual = evento.currentTarget;
@@ -4246,7 +6400,7 @@
                     });
 
                 document
-                    .querySelectorAll('.btn-eliminar')
+                    .querySelectorAll('#lista-lineas-pendientes .btn-eliminar')
                     .forEach(boton => {
                         boton.addEventListener('click', async evento => {
                             const id = evento.currentTarget.dataset.id;
@@ -4455,7 +6609,14 @@
             document.getElementById('editar-texto').value = item.texto || '';
             document.getElementById('editar-activa').checked = item.activa !== false;
             marcarDiasSeleccionados('editar-dias-programados', item.diasSemana || [0,1,2,3,4,5,6]);
+            if (urlPreviewEdicion) {
+                URL.revokeObjectURL(urlPreviewEdicion);
+                urlPreviewEdicion = null;
+            }
+
             document.getElementById('editar-foto').value = '';
+            document.getElementById('editar-foto-nombre').textContent =
+                'Ningún archivo nuevo seleccionado';
             document.getElementById('mensaje-edicion').textContent = '';
             document.getElementById('editar-imagen-actual').src =
                 `/programaciones/${item.id}/imagen?v=${Date.now()}`;
@@ -4467,7 +6628,14 @@
             cerrarModal('modal-editar');
             document.getElementById('editar-id').value = '';
             document.getElementById('editar-foto').value = '';
+            document.getElementById('editar-foto-nombre').textContent =
+                'Ningún archivo nuevo seleccionado';
             document.getElementById('mensaje-edicion').textContent = '';
+
+            if (urlPreviewEdicion) {
+                URL.revokeObjectURL(urlPreviewEdicion);
+                urlPreviewEdicion = null;
+            }
         }
 
         function tarjetaProgramacion(item) {
@@ -4689,6 +6857,8 @@
                 URL.revokeObjectURL(urlPreviewActual);
                 urlPreviewActual = null;
             }
+
+            actualizarSelectorTodosDias('dias-programados');
         }
 
         document.querySelectorAll('.nav-button').forEach(boton => {
@@ -4696,6 +6866,50 @@
                 mostrarSeccion(boton.dataset.section);
             });
         });
+
+        window.addEventListener('hashchange', () => {
+            const nombre = location.hash.replace(/^#/, '') || 'dashboard';
+            mostrarSeccion(nombre, { actualizarHash: false });
+        });
+
+        document.querySelectorAll('[data-line-view]').forEach(boton => {
+            boton.addEventListener('click', () => {
+                vistaLineas = boton.dataset.lineView;
+                renderizarLineasConectadas(cacheLineasSeccion);
+            });
+        });
+
+        document.getElementById('btn-orden-lineas').addEventListener('click', evento => {
+            evento.stopPropagation();
+            const selector = document.getElementById('selector-orden-lineas');
+            const abierto = selector.classList.toggle('open');
+            evento.currentTarget.setAttribute('aria-expanded', String(abierto));
+        });
+
+        document.querySelectorAll('[data-line-order]').forEach(opcion => {
+            opcion.addEventListener('click', () => {
+                ordenLineas = opcion.dataset.lineOrder;
+                document.getElementById('selector-orden-lineas').classList.remove('open');
+                document.getElementById('btn-orden-lineas').setAttribute('aria-expanded', 'false');
+                renderizarLineasConectadas(cacheLineasSeccion);
+            });
+        });
+
+        document.addEventListener('click', evento => {
+            if (evento.target.closest('.line-order-picker')) return;
+            const selector = document.getElementById('selector-orden-lineas');
+            selector.classList.remove('open');
+            document.getElementById('btn-orden-lineas').setAttribute('aria-expanded', 'false');
+        });
+
+        document.getElementById('btn-direccion-lineas').onclick = () => {
+            direccionLineas = direccionLineas === 'asc' ? 'desc' : 'asc';
+            renderizarLineasConectadas(cacheLineasSeccion);
+        };
+
+        document
+            .getElementById('lista-lineas-conectadas')
+            .addEventListener('click', manejarClickLineasConectadas);
 
         document.querySelectorAll('.view-button').forEach(boton => {
             boton.addEventListener('click', () => {
@@ -4713,6 +6927,13 @@
         });
 
         document.getElementById('btn-nuevo-estado').onclick = async () => {
+            if (seccionActual === 'lineas') {
+                const entrada = document.getElementById('nombre-linea');
+                entrada.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                setTimeout(() => entrada.focus(), 260);
+                return;
+            }
+
             if (!configuracionActual) await cargarConfiguracion();
             if (configuracionActual) {
                 document.getElementById('lineas-por-grupo').value = configuracionActual.lineasPorGrupoPredeterminado || 10;
@@ -4757,6 +6978,26 @@
             preview.src = urlPreviewActual;
             preview.style.display = 'block';
             placeholder.style.display = 'none';
+        });
+
+        document.getElementById('editar-foto').addEventListener('change', evento => {
+            const archivo = evento.target.files[0];
+            const imagen = document.getElementById('editar-imagen-actual');
+            const nombre = document.getElementById('editar-foto-nombre');
+
+            if (urlPreviewEdicion) {
+                URL.revokeObjectURL(urlPreviewEdicion);
+                urlPreviewEdicion = null;
+            }
+
+            if (!archivo) {
+                nombre.textContent = 'Ningún archivo nuevo seleccionado';
+                return;
+            }
+
+            urlPreviewEdicion = URL.createObjectURL(archivo);
+            imagen.src = urlPreviewEdicion;
+            nombre.textContent = archivo.name;
         });
 
         document.getElementById('btn-conectar').onclick = async () => {
@@ -4807,13 +7048,18 @@
 
         document.getElementById('buscar-lineas-seccion').addEventListener(
             'input',
-            actualizarLineas
+            () => {
+                renderizarLineasConectadas(cacheLineasSeccion);
+            }
         );
 
         document.getElementById('btn-limpiar-busqueda-seccion').onclick = () => {
             document.getElementById('buscar-lineas-seccion').value = '';
+            vistaLineas = 'large';
+            ordenLineas = 'conexion';
+            direccionLineas = 'asc';
+            renderizarLineasConectadas(cacheLineasSeccion);
             document.getElementById('buscar-lineas-seccion').focus();
-            actualizarLineas();
         };
 
         document.getElementById('btn-limpiar-busqueda').onclick = () => {
@@ -5041,6 +7287,59 @@
             } catch (error) { toast(error.message, 'error'); }
         };
 
+        document.getElementById('btn-actualizar-activos').onclick = () => {
+            actualizarEstadosActivos(false);
+        };
+
+        document.getElementById('btn-guardar-linea').onclick = async () => {
+            const id = lineaEditandoId || document.getElementById('editar-linea-id').value;
+            const nombre = document.getElementById('editar-linea-nombre').value.trim();
+            const mensaje = document.getElementById('mensaje-editar-linea');
+            const boton = document.getElementById('btn-guardar-linea');
+
+            if (!id || !nombre) {
+                mensaje.textContent = 'Escribí un nombre válido para la línea.';
+                mensaje.style.color = '#fb7185';
+                return;
+            }
+
+            try {
+                boton.disabled = true;
+                mensaje.textContent = 'Guardando cambios...';
+                mensaje.style.color = '#fbbf24';
+                const respuesta = await fetch(`/lineas/${encodeURIComponent(id)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nombre })
+                });
+                const data = await leerRespuesta(respuesta);
+                if (!respuesta.ok) {
+                    throw new Error(data.error || data.mensaje || 'No se pudo editar la línea.');
+                }
+
+                cerrarEditorLinea();
+                toast(data.mensaje || 'Línea actualizada.', 'success');
+                actualizarLineas();
+            } catch (error) {
+                mensaje.textContent = error.message;
+                mensaje.style.color = '#fb7185';
+            } finally {
+                boton.disabled = false;
+            }
+        };
+
+        document.getElementById('btn-cancelar-editar-linea').onclick = cerrarEditorLinea;
+        document.getElementById('cerrar-modal-editar-linea').onclick = cerrarEditorLinea;
+        document.getElementById('modal-editar-linea').addEventListener('click', evento => {
+            if (evento.target.id === 'modal-editar-linea') cerrarEditorLinea();
+        });
+        document.getElementById('editar-linea-nombre').addEventListener('keydown', evento => {
+            if (evento.key === 'Enter') {
+                evento.preventDefault();
+                document.getElementById('btn-guardar-linea').click();
+            }
+        });
+
         document.getElementById('btn-actualizar-historial').onclick = actualizarHistorial;
         document.getElementById('config-umbral').addEventListener('input', evento => {
             document.getElementById('config-umbral-valor').textContent = `${evento.target.value}%`;
@@ -5114,6 +7413,7 @@
 
         function mostrarEstadoActualizacion(estado) {
             const version = document.getElementById('update-version');
+            const versionSidebar = document.getElementById('sidebar-app-version');
             const mensaje = document.getElementById('update-message');
             const progreso = document.getElementById('update-progress');
             const barra = document.getElementById('update-progress-bar');
@@ -5121,7 +7421,9 @@
             const botonDescargar = document.getElementById('btn-update-download');
             const botonInstalar = document.getElementById('btn-update-install');
 
-            version.textContent = `v${estado.versionActual || '1.0.0'}`;
+            const versionActual = estado.versionActual || '1.0.6';
+            version.textContent = `v${versionActual}`;
+            if (versionSidebar) versionSidebar.textContent = `AutoStatues ${versionActual}`;
             mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';
 
             const porcentaje = Math.max(0, Math.min(100, Number(estado.porcentaje) || 0));
@@ -5237,7 +7539,14 @@
             }
         };
 
+        configurarSelectorTodosDias('dias-programados');
+        configurarSelectorTodosDias('editar-dias-programados');
+
+        const seccionInicial = location.hash.replace(/^#/, '') || 'dashboard';
+        mostrarSeccion(seccionInicial, { actualizarHash: false });
+
         actualizarLineas();
+        actualizarEstadosActivos(true);
         actualizarProgramaciones();
         actualizarResumen();
         actualizarHistorial();
@@ -5246,6 +7555,7 @@
         consultarEstadoActualizacion();
 
         setInterval(actualizarLineas, 2000);
+        setInterval(() => actualizarEstadosActivos(true), 5000);
         setInterval(actualizarProgramaciones, 5000);
         setInterval(actualizarResumen, 3000);
         setInterval(consultarEstadoActualizacion, 5000);
