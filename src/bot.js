@@ -14,6 +14,17 @@ const fs = require('fs');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 const schedule = require('node-schedule');
+const {
+    ErrorCompresionImagen,
+    MAXIMO_BYTES_ENTRADA,
+    convertirNombreAJpeg,
+    optimizarImagenArchivo
+} = require('./image-compression');
+const {
+    ErrorAgendamiento,
+    crearServicioAgendamiento,
+    obtenerPrefijoLinea
+} = require('./agendamiento');
 
 const app = express();
 const puertoConfigurado = Number(process.env.AUTOSTATUES_PORT);
@@ -41,6 +52,11 @@ const ARCHIVO_PROTECCION_PUBLICACION = path.join(
 const ARCHIVO_IDEMPOTENCIA_PUBLICACION = path.join(
     CARPETA_DATOS,
     'idempotencia-publicacion.json'
+);
+const ARCHIVO_AGENDAMIENTO = path.join(
+    CARPETA_DATOS,
+    'agendamiento',
+    'datos.json'
 );
 
 function carpetaTieneContenido(ruta) {
@@ -82,6 +98,54 @@ migrarCarpetaAnterior('programados');
 migrarCarpetaAnterior('uploads');
 migrarCarpetaAnterior('historial');
 
+function analizarHostLocal(valor) {
+    try {
+        const url = new URL(`http://${String(valor || '').trim()}`);
+        const hostname = url.hostname.toLowerCase();
+        if (!['127.0.0.1', 'localhost', '[::1]'].includes(hostname)) {
+            return null;
+        }
+        return url;
+    } catch {
+        return null;
+    }
+}
+
+function origenCoincideConHostLocal(origen, hostLocal) {
+    try {
+        const url = new URL(String(origen || ''));
+        return url.protocol === 'http:' &&
+            ['127.0.0.1', 'localhost', '[::1]'].includes(
+                url.hostname.toLowerCase()
+            ) &&
+            url.port === hostLocal.port;
+    } catch {
+        return false;
+    }
+}
+
+// La API controla WhatsApp y Google Contacts: aunque escuche sólo en
+// loopback, se rechazan DNS rebinding y formularios enviados desde otra web.
+app.use((req, res, next) => {
+    const hostLocal = analizarHostLocal(req.headers.host);
+    if (!hostLocal) {
+        return res.status(403).json({ error: 'Origen local no permitido.' });
+    }
+
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+        const origen = req.headers.origin;
+        const sitio = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+        if (
+            (origen && !origenCoincideConHostLocal(origen, hostLocal)) ||
+            sitio === 'cross-site'
+        ) {
+            return res.status(403).json({ error: 'Solicitud externa bloqueada.' });
+        }
+    }
+
+    next();
+});
+
 app.use(express.json());
 app.use(express.static(CARPETA_PUBLIC));
 
@@ -92,13 +156,124 @@ fs.mkdirSync(CARPETA_IMAGENES_PROGRAMADAS, { recursive: true });
 fs.mkdirSync(CARPETA_HISTORIAL, { recursive: true });
 fs.mkdirSync(CARPETA_IMAGENES_HISTORIAL, { recursive: true });
 
-// No se establece un límite de peso para las imágenes.
-const upload = multer({ dest: CARPETA_UPLOADS });
+const upload = multer({
+    dest: CARPETA_UPLOADS,
+    limits: {
+        fileSize: MAXIMO_BYTES_ENTRADA,
+        files: 1
+    }
+});
 
 const lineas = new Map();
 const programaciones = new Map();
 const trabajosProgramados = new Map();
 const historialPublicaciones = [];
+
+function describirLineaParaAgendamiento(linea) {
+    const nombre = String(linea?.nombre || '').trim();
+    const tieneNumero = /\d/u.test(nombre);
+    const orden = Number(linea?.ordenConexion);
+
+    return {
+        id: String(linea?.id || '').trim(),
+        // El número final del nombre tiene prioridad. Si el usuario nombró la
+        // línea sin cifras, su orden estable sirve para formar L(numero).
+        nombre: !tieneNumero && Number.isInteger(orden) && orden > 0
+            ? `${nombre} ${orden}`.trim()
+            : nombre
+    };
+}
+
+function obtenerPrefijoAgendamientoLinea(linea, nombre = linea?.nombre) {
+    return obtenerPrefijoLinea(
+        describirLineaParaAgendamiento({ ...linea, nombre }).nombre
+    );
+}
+
+function encontrarConflictoPrefijoAgendamiento(
+    linea,
+    nombre = linea?.nombre
+) {
+    const prefijo = obtenerPrefijoAgendamientoLinea(linea, nombre);
+    if (!prefijo) return null;
+
+    return Array.from(lineas.values()).find(otraLinea =>
+        otraLinea.id !== linea.id &&
+        obtenerPrefijoAgendamientoLinea(otraLinea) === prefijo
+    ) || null;
+}
+
+function responderConflictoPrefijoAgendamiento(res, linea, nombre) {
+    const conflicto = encontrarConflictoPrefijoAgendamiento(linea, nombre);
+    if (!conflicto) return false;
+    const prefijo = obtenerPrefijoAgendamientoLinea(linea, nombre);
+    res.status(409).json({
+        codigo: 'PREFIJO_AGENDAMIENTO_DUPLICADO',
+        error:
+            `${prefijo} ya identifica a ${conflicto.nombre}. ` +
+            'Usá un número de línea diferente para evitar mezclar contactos.'
+    });
+    return true;
+}
+
+function obtenerPuenteSeguroAgendamiento() {
+    const puente = global.autostatuesSecureStorage;
+    if (
+        !puente ||
+        typeof puente.cifrar !== 'function' ||
+        typeof puente.descifrar !== 'function' ||
+        (typeof puente.disponible === 'function' && !puente.disponible())
+    ) {
+        throw new Error(
+            'El almacenamiento seguro de Windows no está disponible. Abrí AutoStatues desde la aplicación de escritorio.'
+        );
+    }
+    return puente;
+}
+
+const servicioAgendamiento = crearServicioAgendamiento({
+    rutaDatos: ARCHIVO_AGENDAMIENTO,
+    codigoPais: '595',
+    obtenerLinea: valor => {
+        const id = String(
+            valor && typeof valor === 'object' ? valor.id || '' : valor || ''
+        ).trim();
+        const linea = lineas.get(id);
+        return linea ? describirLineaParaAgendamiento(linea) : null;
+    },
+    abrirEnlace: async url => {
+        const escritorio = global.autostatuesDesktop;
+        if (!escritorio || typeof escritorio.abrirEnlace !== 'function') {
+            throw new Error(
+                'El navegador seguro solo está disponible desde AutoStatues Desktop.'
+            );
+        }
+        await escritorio.abrirEnlace(url);
+    },
+    cifrar: async valor => obtenerPuenteSeguroAgendamiento().cifrar(valor),
+    descifrar: async valor => obtenerPuenteSeguroAgendamiento().descifrar(valor)
+});
+
+let ultimoProgresoAgendamiento = null;
+let promesaOAuthAgendamiento = null;
+let preparacionAgendamiento = null;
+
+servicioAgendamiento.on('progreso', progreso => {
+    ultimoProgresoAgendamiento = progreso;
+});
+
+function obtenerProcesoAgendamientoActivo() {
+    return servicioAgendamiento.obtenerProcesoActivo?.() ||
+        preparacionAgendamiento?.progreso ||
+        null;
+}
+
+function agendamientoEstaOcupado() {
+    return Boolean(
+        preparacionAgendamiento ||
+        servicioAgendamiento.estaOcupado?.()
+    );
+}
 
 const archivoLineas = path.join(CARPETA_SESIONES, 'lineas.json');
 const archivoProgramaciones = path.join(CARPETA_PROGRAMADOS, 'programaciones.json');
@@ -769,6 +944,59 @@ function validarImagenSubida(archivo) {
         return { tipo };
     } catch {
         return { error: 'No se pudo verificar la imagen seleccionada.' };
+    }
+}
+
+function describirPesoImagen(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 KB';
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+async function middlewareCompresionImagen(req, res, next) {
+    if (!req.file) return next();
+
+    const rutaOriginal = req.file.path;
+
+    try {
+        const optimizacion = await optimizarImagenArchivo(rutaOriginal);
+        req.file.path = optimizacion.rutaFinal;
+        req.file.filename = path.basename(optimizacion.rutaFinal);
+        req.file.originalname = convertirNombreAJpeg(req.file.originalname);
+        req.file.mimetype = 'image/jpeg';
+        req.file.size = optimizacion.bytesFinales;
+        req.optimizacionImagen = optimizacion;
+
+        console.log(
+            'Imagen optimizada:',
+            `${optimizacion.anchoOriginal}x${optimizacion.altoOriginal}`,
+            `${describirPesoImagen(optimizacion.bytesOriginales)} ->`,
+            `${optimizacion.anchoFinal}x${optimizacion.altoFinal}`,
+            describirPesoImagen(optimizacion.bytesFinales)
+        );
+
+        next();
+    } catch (error) {
+        eliminarArchivoSeguro(rutaOriginal);
+        if (req.file?.path !== rutaOriginal) {
+            eliminarArchivoSeguro(req.file?.path);
+        }
+
+        console.error('Falló la compresión de imagen:', {
+            codigo: error?.codigo || 'COMPRESION_IMAGEN_FALLIDA',
+            mensaje: error?.message,
+            causa: error?.cause?.message || null
+        });
+
+        const errorControlado = error instanceof ErrorCompresionImagen;
+        res.status(errorControlado ? error.statusCode : 500).json({
+            error: errorControlado
+                ? error.message
+                : 'No se pudo comprimir la imagen seleccionada.',
+            codigo: errorControlado
+                ? error.codigo
+                : 'COMPRESION_IMAGEN_FALLIDA'
+        });
     }
 }
 
@@ -2034,6 +2262,215 @@ async function resolverJidDestinatario(socket, valor) {
     }
 
     return jid;
+}
+
+async function resolverJidAgendamiento(linea, socket, valor, contexto = {}) {
+    const clave = contexto?.key || {};
+    const recibo = contexto?.receipt || contexto?.update || {};
+    const candidatos = [
+        clave.remoteJidAlt,
+        clave.participantAlt,
+        contexto?.remoteJidAlt,
+        contexto?.participantAlt,
+        recibo.userJid,
+        recibo.participant,
+        valor,
+        clave.participant,
+        contexto?.participant,
+        clave.remoteJid
+    ];
+    const lidsPendientes = [];
+
+    asegurarActividadContactos(linea);
+    const jidsPropios = obtenerJidsPropiosActividad(linea, socket);
+
+    for (const candidato of candidatos) {
+        let jid = normalizarJidDestinatario(candidato);
+        if (!jid) continue;
+
+        jid = linea.mapeosActividadContactos.get(jid) || jid;
+        if (jidsPropios.has(jid)) continue;
+        if (esJidNumero(jid)) return jid;
+        if (esJidLid(jid) && !lidsPendientes.includes(jid)) {
+            lidsPendientes.push(jid);
+        }
+    }
+
+    for (const lid of lidsPendientes) {
+        const resuelto = await resolverJidDestinatario(socket, lid);
+        if (!esJidNumero(resuelto) || jidsPropios.has(resuelto)) continue;
+
+        aplicarMapeoActividadContactos(linea, lid, resuelto);
+        return resuelto;
+    }
+
+    return null;
+}
+
+function idEstadoPerteneceALinea(lineaEntrada, idEntrada) {
+    const lineaId = String(
+        lineaEntrada && typeof lineaEntrada === 'object'
+            ? lineaEntrada.id || ''
+            : lineaEntrada || ''
+    ).trim();
+    const id = String(idEntrada || '').trim();
+    if (!lineaId || !id) return false;
+
+    for (const grupo of estadosActivos.values()) {
+        const registro = grupo.lineas.find(item => item.lineaId === lineaId);
+        if (!registro) continue;
+
+        if (
+            String(registro.clave?.id || '') === id ||
+            String(registro.meta?.id || '') === id
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function resolverPendientesAgendamiento(linea, socket) {
+    if (
+        !linea ||
+        !socket ||
+        lineas.get(linea.id) !== linea ||
+        linea.socket !== socket ||
+        linea.eliminando
+    ) {
+        return Promise.resolve(null);
+    }
+
+    const anterior = linea.promesaResolverPendientesAgendamiento ||
+        Promise.resolve();
+    const actual = Promise.resolve(anterior)
+        .catch(() => {})
+        .then(async () => {
+            if (
+                lineas.get(linea.id) !== linea ||
+                linea.socket !== socket ||
+                linea.eliminando
+            ) return null;
+
+            return servicioAgendamiento.resolverPendientesJid(
+                describirLineaParaAgendamiento(linea),
+                (jid, contexto) => resolverJidAgendamiento(
+                    linea,
+                    socket,
+                    jid,
+                    contexto
+                )
+            );
+        });
+
+    linea.promesaResolverPendientesAgendamiento = actual.catch(error => {
+        console.error(
+            `No se pudieron resolver los contactos pendientes de ${linea.nombre}:`,
+            error?.codigo || error?.message || 'ERROR_AGENDAMIENTO'
+        );
+        return null;
+    });
+    return linea.promesaResolverPendientesAgendamiento;
+}
+
+function programarResolucionPendientesAgendamiento(
+    linea,
+    socket,
+    retrasoMs = 120
+) {
+    if (linea?.temporizadorResolverPendientesAgendamiento) {
+        clearTimeout(linea.temporizadorResolverPendientesAgendamiento);
+    }
+
+    linea.temporizadorResolverPendientesAgendamiento = setTimeout(() => {
+        linea.temporizadorResolverPendientesAgendamiento = null;
+        resolverPendientesAgendamiento(linea, socket);
+    }, Math.max(0, Number(retrasoMs) || 0));
+}
+
+function registrarMensajesParaAgendamiento(
+    linea,
+    socket,
+    mensajes,
+    origen = 'vivo'
+) {
+    const jidsPropios = obtenerJidsPropiosActividad(linea, socket);
+    const lista = (Array.isArray(mensajes) ? mensajes : [])
+        .filter(mensaje => {
+            if (mensaje?.key?.fromMe !== true) return true;
+            const remoto = normalizarJidDestinatario(
+                mensaje?.key?.remoteJid
+            );
+            return !remoto || !jidsPropios.has(remoto);
+        });
+    if (
+        !lista.length ||
+        lineas.get(linea.id) !== linea ||
+        linea.socket !== socket ||
+        linea.eliminando
+    ) return;
+
+    const resolver = (jid, contexto) =>
+        resolverJidAgendamiento(linea, socket, jid, contexto);
+
+    Promise.all([
+        servicioAgendamiento.registrarMensajes(
+            describirLineaParaAgendamiento(linea),
+            lista,
+            resolver,
+            { origen }
+        ),
+        servicioAgendamiento.registrarPublicadoresEstado(
+            describirLineaParaAgendamiento(linea),
+            lista,
+            resolver
+        )
+    ]).then(() => {
+        // El mensaje puede haber llegado antes que su mapeo LID -> PN. Este
+        // segundo paso cubre tanto esa carrera como pendientes persistidos.
+        programarResolucionPendientesAgendamiento(linea, socket, 0);
+    }).catch(error => {
+        console.error(
+            `No se pudo actualizar el agendamiento de ${linea.nombre}:`,
+            error?.codigo || error?.message || 'ERROR_AGENDAMIENTO'
+        );
+    });
+}
+
+function registrarVistasParaAgendamiento(linea, socket, actualizaciones) {
+    const jidsPropios = obtenerJidsPropiosActividad(linea, socket);
+    const lista = (Array.isArray(actualizaciones) ? actualizaciones : [])
+        .filter(actualizacion => {
+            const recibo = actualizacion?.receipt || actualizacion?.update || {};
+            const jid = normalizarJidDestinatario(
+                recibo.userJid || recibo.participant
+            );
+            return !jid || !jidsPropios.has(jid);
+        });
+    if (
+        !lista.length ||
+        lineas.get(linea.id) !== linea ||
+        linea.socket !== socket ||
+        linea.eliminando
+    ) return;
+
+    servicioAgendamiento.registrarVistasEstado(
+        linea,
+        lista,
+        id => idEstadoPerteneceALinea(linea, id),
+        (jid, contexto) => resolverJidAgendamiento(
+            linea,
+            socket,
+            jid,
+            contexto
+        )
+    ).catch(error => {
+        console.error(
+            `No se pudieron registrar vistas de estados de ${linea.nombre}:`,
+            error?.codigo || error?.message || 'ERROR_AGENDAMIENTO'
+        );
+    });
 }
 
 async function obtenerJidDeContacto(socket, contacto) {
@@ -4334,7 +4771,10 @@ async function iniciarWhatsApp(lineaId) {
             auth: state,
             logger: pino({ level: 'silent' }),
             browser: Browsers.windows('Desktop'),
-            syncFullHistory: false
+            // El modo Desktop permite que las vinculaciones nuevas entreguen
+            // más historial. Baileys lo emite por chunks y Agendamiento sólo
+            // conserva el usuario extraído de la plantilla acordada.
+            syncFullHistory: true
         });
 
         linea.socket = sock;
@@ -4379,14 +4819,26 @@ async function iniciarWhatsApp(lineaId) {
         sock.ev.on('contacts.upsert', contactos => {
             procesarContactos(contactos, true);
             registrarActividad({ contactos });
+            Promise.resolve(linea.promesaActividadContactos).finally(() => {
+                programarResolucionPendientesAgendamiento(linea, sock);
+            });
         });
         sock.ev.on('contacts.update', contactos => {
             procesarContactos(contactos, false);
             registrarActividad({ contactos });
+            Promise.resolve(linea.promesaActividadContactos).finally(() => {
+                programarResolucionPendientesAgendamiento(linea, sock);
+            });
         });
 
         sock.ev.on('messages.upsert', actualizacion => {
             registrarActividad({ mensajes: actualizacion?.messages });
+            registrarMensajesParaAgendamiento(
+                linea,
+                sock,
+                actualizacion?.messages,
+                'vivo'
+            );
         });
 
         sock.ev.on('messaging-history.set', historial => {
@@ -4395,6 +4847,15 @@ async function iniciarWhatsApp(lineaId) {
                 chats: historial?.chats,
                 contactos: historial?.contacts,
                 mapeos: historial?.lidPnMappings
+            });
+            registrarMensajesParaAgendamiento(
+                linea,
+                sock,
+                historial?.messages,
+                'historial'
+            );
+            Promise.resolve(linea.promesaActividadContactos).finally(() => {
+                programarResolucionPendientesAgendamiento(linea, sock);
             });
         });
 
@@ -4408,6 +4869,9 @@ async function iniciarWhatsApp(lineaId) {
 
         sock.ev.on('lid-mapping.update', mapeo => {
             registrarActividad({ mapeos: [mapeo] });
+            Promise.resolve(linea.promesaActividadContactos).finally(() => {
+                programarResolucionPendientesAgendamiento(linea, sock, 0);
+            });
         });
 
         sock.ev.on('settings.update', actualizacion => {
@@ -4439,6 +4903,14 @@ async function iniciarWhatsApp(lineaId) {
                     error.message
                 );
             }
+        });
+
+        sock.ev.on('message-receipt.update', actualizaciones => {
+            registrarVistasParaAgendamiento(
+                linea,
+                sock,
+                actualizaciones
+            );
         });
 
         sock.ev.on('connection.update', async update => {
@@ -4530,6 +5002,10 @@ async function iniciarWhatsApp(lineaId) {
                         sesionExistente ? 1500 : 8000
                     );
                 }
+
+                // Al reiniciar puede existir un mapeo almacenado sin que
+                // Baileys vuelva a emitir lid-mapping.update.
+                programarResolucionPendientesAgendamiento(linea, sock, 500);
             }
 
             if (connection === 'close') {
@@ -6082,6 +6558,393 @@ function validarConfiguracionComun(req, rutaTemporalFoto, imagenObligatoria = tr
     };
 }
 
+function codigoHttpErrorAgendamiento(error) {
+    const codigo = String(error?.codigo || '');
+    if (codigo === 'CUENTA_NO_EXISTE') return 404;
+    if (
+        codigo === 'SINCRONIZACION_ACTIVA' ||
+        codigo === 'OAUTH_EN_CURSO'
+    ) return 409;
+    if (
+        codigo.startsWith('GOOGLE_') ||
+        codigo.startsWith('TOKEN_') ||
+        codigo.startsWith('OAUTH_TOKEN') ||
+        codigo === 'OAUTH_PERFIL'
+    ) return 502;
+    return 400;
+}
+
+function responderErrorAgendamiento(res, error) {
+    const mensaje = error instanceof ErrorAgendamiento || error instanceof Error
+        ? error.message
+        : 'No se pudo completar la operación de agendamiento.';
+
+    return res.status(codigoHttpErrorAgendamiento(error)).json({
+        error: mensaje,
+        codigo: error?.codigo || 'ERROR_AGENDAMIENTO'
+    });
+}
+
+function resultadoCandidatoEstaSincronizado(candidato) {
+    if (typeof candidato?.sincronizado === 'boolean') {
+        return candidato.sincronizado;
+    }
+    const resultado = candidato?.ultimoResultado;
+    if (!resultado) return false;
+    return ['creado', 'actualizado', 'sin_cambios'].includes(resultado.tipo);
+}
+
+function transformarVistaAgendamiento(vista) {
+    const candidatosOriginales = [
+        ...(Array.isArray(vista?.candidatos) ? vista.candidatos : []),
+        ...(Array.isArray(vista?.pendientesResolucion)
+            ? vista.pendientesResolucion
+            : [])
+    ];
+    const sincronizados = candidatosOriginales.filter(
+        resultadoCandidatoEstaSincronizado
+    ).length;
+    const pendientes = candidatosOriginales.filter(candidato =>
+        Boolean(candidato.usuario) &&
+        !resultadoCandidatoEstaSincronizado(candidato)
+    ).length;
+    const usuariosPendientesJid =
+        Number(vista?.totales?.usuariosPendientesJid) || 0;
+    const progreso = vista?.sincronizacion &&
+        vista.sincronizacion.lineaId === vista?.linea?.id
+        ? vista.sincronizacion
+        : ultimoProgresoAgendamiento?.lineaId === vista?.linea?.id
+            ? ultimoProgresoAgendamiento
+            : null;
+    const estadosActivos = new Set(['preparando', 'procesando', 'cancelando']);
+    const candidatos = candidatosOriginales.slice(0, 1000).map(candidato => {
+        const resultado = candidato.ultimoResultado || null;
+        const fuentes = [];
+        if (candidato.senales?.vioEstado) fuentes.push('Vio tu estado');
+        if (candidato.senales?.publicoEstado) fuentes.push('Publicó un estado');
+        if (candidato.usuario) fuentes.unshift('Mensaje de usuario');
+
+        return {
+            telefono: candidato.telefono,
+            usuario: candidato.usuario,
+            nombre: candidato.nombreObjetivo,
+            mutuo: candidato.mutuo === true,
+            estado: resultadoCandidatoEstaSincronizado(candidato)
+                ? 'agendado'
+                : resultado?.tipo || (candidato.usuario ? 'pendiente' : 'sin_usuario'),
+            detalle: resultado?.detalle || resultado?.codigo || null,
+            fuentes
+        };
+    });
+
+    return {
+        credencialesConfiguradas: vista?.credencialesConfiguradas === true,
+        cuentas: Array.isArray(vista?.cuentas) ? vista.cuentas : [],
+        lineaId: vista?.linea?.id || null,
+        cuentaId: vista?.cuentaId || null,
+        resumen: {
+            detectados:
+                (Number(vista?.totales?.conUsuario) || 0) +
+                usuariosPendientesJid,
+            pendientes,
+            agendados: sincronizados,
+            mutuos: Number(vista?.totales?.mutuos) || 0,
+            totalSenales: Number(vista?.totales?.candidatos) || 0,
+            mostrados: candidatos.length,
+            jidsPendientes: Number(vista?.totales?.jidsPendientes) || 0,
+            usuariosPendientesJid
+        },
+        proceso: progreso ? {
+            ...progreso,
+            activo: estadosActivos.has(progreso.estado),
+            mensaje: progreso.error ||
+                (progreso.estado === 'completada'
+                    ? 'Agendamiento completado.'
+                    : progreso.estado === 'cancelada'
+                        ? 'Agendamiento detenido.'
+                        : progreso.estado === 'fallida'
+                            ? 'El agendamiento terminó con un error.'
+                            : 'Procesando contactos uno a uno.'),
+            actual: progreso.actual || null
+        } : null,
+        candidatos
+    };
+}
+
+app.get('/agendamiento', (req, res) => {
+    const lineaId = String(req.query.lineaId || '').trim();
+    if (!lineaId) {
+        return res.json({
+            credencialesConfiguradas: Boolean(servicioAgendamiento.estado?.oauth),
+            cuentas: servicioAgendamiento.listarCuentas(),
+            lineaId: null,
+            cuentaId: null,
+            resumen: {
+                detectados: 0,
+                pendientes: 0,
+                agendados: 0,
+                mutuos: 0,
+                totalSenales: 0,
+                mostrados: 0
+            },
+            proceso: null,
+            candidatos: []
+        });
+    }
+
+    const linea = lineas.get(lineaId);
+    if (!linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+
+    try {
+        return res.json(transformarVistaAgendamiento(
+            servicioAgendamiento.obtenerVista(
+                describirLineaParaAgendamiento(linea)
+            )
+        ));
+    } catch (error) {
+        return responderErrorAgendamiento(res, error);
+    }
+});
+
+app.post('/agendamiento/credenciales', (req, res) => {
+    if (promesaOAuthAgendamiento) {
+        return res.status(409).json({
+            error: 'Terminá o cancelá la vinculación con Google antes de cambiar las credenciales.',
+            codigo: 'OAUTH_EN_CURSO'
+        });
+    }
+    if (agendamientoEstaOcupado()) {
+        return res.status(409).json({
+            error: 'Detené el agendamiento antes de cambiar las credenciales.',
+            codigo: 'SINCRONIZACION_ACTIVA'
+        });
+    }
+    try {
+        const resultado = servicioAgendamiento.configurarCredenciales(req.body);
+        const desconectadas = Number(
+            resultado?.cuentasDesconectadas ?? resultado?.desconectadas
+        ) || 0;
+        res.json({
+            mensaje: desconectadas > 0
+                ? `Las credenciales cambiaron y se desconectaron ${desconectadas} cuenta(s) del cliente anterior.`
+                : 'Las credenciales de Google quedaron configuradas.',
+            credencialesConfiguradas: true
+        });
+    } catch (error) {
+        responderErrorAgendamiento(res, error);
+    }
+});
+
+app.post('/agendamiento/google/conectar', async (req, res) => {
+    if (promesaOAuthAgendamiento) {
+        return res.status(409).json({
+            error: 'Ya hay una vinculación con Google en curso.',
+            codigo: 'OAUTH_EN_CURSO'
+        });
+    }
+
+    try {
+        promesaOAuthAgendamiento = servicioAgendamiento.iniciarOAuth();
+        const cuenta = await promesaOAuthAgendamiento;
+        res.json({
+            mensaje: `${cuenta.correo || cuenta.nombre} quedó conectada.`,
+            cuenta
+        });
+    } catch (error) {
+        responderErrorAgendamiento(res, error);
+    } finally {
+        promesaOAuthAgendamiento = null;
+    }
+});
+
+app.delete('/agendamiento/google/cuentas/:id', async (req, res) => {
+    const procesoActivo = obtenerProcesoAgendamientoActivo();
+    if (
+        procesoActivo?.cuentaId === req.params.id
+    ) {
+        return res.status(409).json({
+            error: 'Detené el agendamiento antes de desconectar esta cuenta.',
+            codigo: 'SINCRONIZACION_ACTIVA'
+        });
+    }
+    try {
+        const eliminada = await servicioAgendamiento.desconectarCuenta(
+            req.params.id
+        );
+        if (!eliminada) {
+            return res.status(404).json({ error: 'La cuenta de Google no existe.' });
+        }
+        res.json({ mensaje: 'La cuenta de Google fue desconectada.' });
+    } catch (error) {
+        responderErrorAgendamiento(res, error);
+    }
+});
+
+app.put('/agendamiento/lineas/:id/cuenta', (req, res) => {
+    const linea = lineas.get(req.params.id);
+    if (!linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+    if (obtenerProcesoAgendamientoActivo()?.lineaId === linea.id) {
+        return res.status(409).json({
+            error: 'Detené el agendamiento antes de cambiar su cuenta.',
+            codigo: 'SINCRONIZACION_ACTIVA'
+        });
+    }
+    if (responderConflictoPrefijoAgendamiento(res, linea)) return;
+
+    try {
+        const asociacion = servicioAgendamiento.asociarCuenta(
+            describirLineaParaAgendamiento(linea),
+            String(req.body?.cuentaId || '')
+        );
+        res.json({
+            mensaje: 'La cuenta quedó asignada a esta línea.',
+            ...asociacion
+        });
+    } catch (error) {
+        responderErrorAgendamiento(res, error);
+    }
+});
+
+app.post('/agendamiento/lineas/:id/iniciar', (req, res) => {
+    const linea = lineas.get(req.params.id);
+    if (!linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+    if (agendamientoEstaOcupado()) {
+        return res.status(409).json({
+            error: 'Ya hay un agendamiento en curso.',
+            codigo: 'SINCRONIZACION_ACTIVA'
+        });
+    }
+    if (responderConflictoPrefijoAgendamiento(res, linea)) return;
+
+    let vista;
+    try {
+        vista = servicioAgendamiento.obtenerVista(
+            describirLineaParaAgendamiento(linea)
+        );
+    } catch (error) {
+        return responderErrorAgendamiento(res, error);
+    }
+    if (!vista.credencialesConfiguradas) {
+        return res.status(400).json({
+            error: 'Primero configurá las credenciales de Google.',
+            codigo: 'CREDENCIALES_NO_CONFIGURADAS'
+        });
+    }
+    if (!vista.cuentaId) {
+        return res.status(400).json({
+            error: 'Seleccioná una cuenta de Google para esta línea.',
+            codigo: 'CUENTA_NO_ASOCIADA'
+        });
+    }
+    const tieneUsuariosListos = vista.candidatos.some(
+        candidato => candidato.usuario
+    );
+    const puedeResolverUsuariosPendientes =
+        Number(vista?.totales?.usuariosPendientesJid) > 0 &&
+        Boolean(linea.socket);
+    if (!tieneUsuariosListos && !puedeResolverUsuariosPendientes) {
+        return res.status(400).json({
+            error: 'Todavía no hay usuarios válidos detectados en esta línea.',
+            codigo: 'SIN_USUARIOS_DETECTADOS'
+        });
+    }
+
+    const preparacion = {
+        cancelado: false,
+        progreso: {
+            estado: 'preparando',
+            lineaId: linea.id,
+            cuentaId: vista.cuentaId,
+            total: 0,
+            procesados: 0,
+            actual: null
+        }
+    };
+    preparacionAgendamiento = preparacion;
+    ultimoProgresoAgendamiento = {
+        estado: 'preparando',
+        lineaId: linea.id,
+        cuentaId: vista.cuentaId,
+        total: 0,
+        procesados: 0,
+        actual: null
+    };
+
+    (async () => {
+        if (linea.socket) {
+            await resolverPendientesAgendamiento(linea, linea.socket);
+        }
+        if (preparacion.cancelado) return;
+
+        // La reserva interna se crea de forma sincrónica dentro de esta
+        // llamada, antes de liberar nuestra preparación HTTP.
+        const promesa = servicioAgendamiento.iniciarSincronizacion(
+            describirLineaParaAgendamiento(linea),
+            vista.cuentaId
+        );
+        if (preparacionAgendamiento === preparacion) {
+            preparacionAgendamiento = null;
+        }
+        await promesa;
+    })().catch(error => {
+        ultimoProgresoAgendamiento = {
+            ...ultimoProgresoAgendamiento,
+            estado: preparacion.cancelado ? 'cancelada' : 'fallida',
+            lineaId: linea.id,
+            actual: null,
+            error: preparacion.cancelado
+                ? null
+                : error?.message || 'No se pudo iniciar el agendamiento.'
+        };
+    }).finally(() => {
+        if (preparacionAgendamiento === preparacion) {
+            preparacionAgendamiento = null;
+        }
+    });
+
+    res.status(202).json({
+        mensaje: `El agendamiento de ${linea.nombre} comenzó.`,
+        lineaId: linea.id
+    });
+});
+
+app.post('/agendamiento/lineas/:id/detener', (req, res) => {
+    const linea = lineas.get(req.params.id);
+    if (!linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+    const procesoActivo = obtenerProcesoAgendamientoActivo();
+    if (procesoActivo?.lineaId && procesoActivo.lineaId !== linea.id) {
+        return res.status(409).json({
+            error: 'El proceso activo pertenece a otra línea.'
+        });
+    }
+    let detenida = false;
+    if (
+        preparacionAgendamiento &&
+        preparacionAgendamiento.progreso?.lineaId === linea.id
+    ) {
+        preparacionAgendamiento.cancelado = true;
+        preparacionAgendamiento.progreso.estado = 'cancelada';
+        ultimoProgresoAgendamiento = {
+            ...preparacionAgendamiento.progreso
+        };
+        detenida = true;
+    } else {
+        detenida = servicioAgendamiento.detenerSincronizacion();
+    }
+    if (!detenida) {
+        return res.status(409).json({ error: 'No hay un agendamiento activo.' });
+    }
+    res.json({ mensaje: 'Se solicitó detener el agendamiento.' });
+});
+
 app.post('/lineas', (req, res) => {
     const nombre = String(req.body.nombre || '')
         .replace(/\s+/g, ' ')
@@ -6277,6 +7140,33 @@ app.patch('/lineas/:id', (req, res) => {
             error: 'Ya existe una línea con ese nombre.'
         });
     }
+
+    if (obtenerProcesoAgendamientoActivo()?.lineaId === linea.id) {
+        return res.status(409).json({
+            codigo: 'AGENDAMIENTO_ACTIVO',
+            error: 'Detené el agendamiento antes de renombrar esta línea.'
+        });
+    }
+
+    const prefijoAnterior = obtenerPrefijoAgendamientoLinea(linea);
+    const prefijoNuevo = obtenerPrefijoAgendamientoLinea(linea, nombre);
+    if (prefijoAnterior !== prefijoNuevo) {
+        const vistaAgenda = servicioAgendamiento.obtenerVista(
+            describirLineaParaAgendamiento(linea)
+        );
+        const tieneDatosAgenda =
+            Number(vistaAgenda?.totales?.candidatos) > 0 ||
+            Number(vistaAgenda?.totales?.jidsPendientes) > 0;
+        if (tieneDatosAgenda) {
+            return res.status(409).json({
+                codigo: 'PREFIJO_AGENDAMIENTO_EN_USO',
+                error:
+                    `${prefijoAnterior} ya tiene datos de agendamiento. ` +
+                    'Podés cambiar el texto del nombre, pero no su número.'
+            });
+        }
+    }
+    if (responderConflictoPrefijoAgendamiento(res, linea, nombre)) return;
 
     linea.nombre = nombre;
     guardarLineas();
@@ -6474,6 +7364,7 @@ app.post(
     middlewareSeguridadPublicacion,
     upload.single('imagen'),
     middlewareSeguridadPublicacion,
+    middlewareCompresionImagen,
     (req, res) => {
     const rutaTemporalFoto = req.file?.path;
     const validacion = validarConfiguracionComun(req, rutaTemporalFoto, true);
@@ -6526,6 +7417,7 @@ app.post(
     '/programar',
     middlewareIdempotencia('programar'),
     upload.single('imagen'),
+    middlewareCompresionImagen,
     (req, res) => {
     const rutaTemporalFoto = req.file?.path;
     const validacion = validarConfiguracionComun(req, rutaTemporalFoto, true);
@@ -6616,7 +7508,11 @@ app.post(
     }
 );
 
-app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
+app.put(
+    '/programaciones/:id',
+    upload.single('imagen'),
+    middlewareCompresionImagen,
+    (req, res) => {
     const id = req.params.id;
     const programacion = programaciones.get(id);
     const rutaTemporalFoto = req.file?.path;
@@ -6728,7 +7624,8 @@ app.put('/programaciones/:id', upload.single('imagen'), (req, res) => {
             error: error.message || 'No se pudo actualizar la programación.'
         });
     }
-});
+    }
+);
 
 app.get('/programaciones', (req, res) => {
     const resultado = Array.from(programaciones.values())
@@ -7292,6 +8189,13 @@ app.delete('/lineas/:id', async (req, res) => {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
 
+    if (obtenerProcesoAgendamientoActivo()?.lineaId === id) {
+        return res.status(409).json({
+            error: 'Detené el agendamiento de esta línea antes de eliminarla.',
+            codigo: 'AGENDAMIENTO_ACTIVO'
+        });
+    }
+
     const carpetaSesion = resolverCarpetaSesionSegura(id);
     if (!carpetaSesion) {
         return res.status(400).json({
@@ -7339,7 +8243,34 @@ app.delete('/lineas/:id', async (req, res) => {
     res.json({ mensaje: `La línea ${linea.nombre} fue eliminada.` });
 });
 
+app.use((error, req, res, next) => {
+    if (!(error instanceof multer.MulterError)) return next(error);
+
+    eliminarArchivoSeguro(req.file?.path);
+
+    if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+            error: `La imagen original no puede superar ${Math.round(MAXIMO_BYTES_ENTRADA / (1024 * 1024))} MB.`,
+            codigo: 'IMAGEN_ENTRADA_DEMASIADO_PESADA'
+        });
+    }
+
+    res.status(400).json({
+        error: 'Solo se puede procesar una imagen JPG o PNG por solicitud.',
+        codigo: 'CARGA_IMAGEN_INVALIDA'
+    });
+});
+
 process.once('exit', () => {
+    try {
+        servicioAgendamiento.cerrar();
+    } catch (error) {
+        console.error(
+            'No se pudo cerrar el servicio de agendamiento:',
+            error?.message || error
+        );
+    }
+
     for (const linea of lineas.values()) {
         if (
             !linea.actividadContactosCargada ||

@@ -1,13 +1,13 @@
 {
   "name": "autostatues",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "private": true,
   "description": "Aplicación de escritorio para gestionar estados de WhatsApp",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "test:internal": "node --test tests/internal-safety.test.js tests/emergency-stop.test.js",
+    "test:internal": "node --test tests/internal-safety.test.js tests/emergency-stop.test.js tests/image-compression.test.js tests/agendamiento.test.js",
     "build": "electron-builder --win --x64",
     "release": "electron-builder --win --x64 --publish always"
   },
@@ -25,7 +25,8 @@
     "multer": "^2.2.0",
     "node-schedule": "^2.1.1",
     "pino": "^9.2.0",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
     "electron": "^43.1.0",
@@ -35,6 +36,10 @@
     "appId": "com.zabo.autostatues",
     "productName": "AutoStatues",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
     "directories": {
       "output": "dist"
     },

@@ -4,6 +4,7 @@ out/
 sesiones/
 uploads/
 programados/
+agendamiento/
 proteccion-publicacion.json
 idempotencia-publicacion.json
 .env

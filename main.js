@@ -2,7 +2,9 @@ const {
     app,
     BrowserWindow,
     ipcMain,
-    Notification
+    Notification,
+    safeStorage,
+    shell
 } = require('electron');
 
 const path = require('path');
@@ -261,6 +263,39 @@ function mostrarNotificacion(titulo, cuerpo) {
     return { correcto: true };
 }
 
+async function abrirEnlaceExterno(valor) {
+    let url;
+
+    try {
+        url = new URL(String(valor || ''));
+    } catch {
+        throw new Error('El enlace externo no es válido.');
+    }
+
+    if (url.protocol !== 'https:') {
+        throw new Error('Solo se permiten enlaces externos seguros.');
+    }
+
+    await shell.openExternal(url.toString());
+    return { correcto: true };
+}
+
+function cifrarDatoLocal(valor) {
+    if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error('El cifrado seguro de Windows no está disponible.');
+    }
+
+    return safeStorage.encryptString(String(valor || '')).toString('base64');
+}
+
+function descifrarDatoLocal(valor) {
+    if (!safeStorage.isEncryptionAvailable()) {
+        throw new Error('El cifrado seguro de Windows no está disponible.');
+    }
+
+    return safeStorage.decryptString(Buffer.from(String(valor || ''), 'base64'));
+}
+
 function configurarIPC() {
     ipcMain.handle('actualizacion:obtener-estado', () => {
         return obtenerEstadoActualizacion();
@@ -295,7 +330,14 @@ function exponerActualizadorAlServidor() {
 
     global.autostatuesDesktop = {
         notificar: mostrarNotificacion,
-        obtenerVersion: () => app.getVersion()
+        obtenerVersion: () => app.getVersion(),
+        abrirEnlace: abrirEnlaceExterno
+    };
+
+    global.autostatuesSecureStorage = {
+        disponible: () => safeStorage.isEncryptionAvailable(),
+        cifrar: cifrarDatoLocal,
+        descifrar: descifrarDatoLocal
     };
 }
 

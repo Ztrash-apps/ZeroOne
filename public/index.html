@@ -3987,18 +3987,63 @@
         .deletion-progress-meta strong { color: #aeb9d1; }
 
         .active-publications-block { display: grid; gap: 14px; }
-        .active-publications-header { align-items: center; }
+        .active-publications-header {
+            align-items: center;
+            flex-wrap: wrap;
+        }
         .active-publications-copy p {
             margin: 6px 0 0;
             color: #91a0bb;
             font-size: 12px;
         }
 
+        .active-publications-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-left: auto;
+        }
+
+        .active-status-view-switch {
+            flex: 0 1 auto;
+            overflow-x: auto;
+        }
+
+        .active-status-view-switch .line-view-button {
+            flex: 0 0 auto;
+            padding-inline: 9px;
+        }
+
+        .active-publications-actions > .secondary-button {
+            min-height: 44px;
+        }
+
         .active-publications-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
             gap: 16px;
-            align-items: start;
+            align-items: stretch;
+        }
+
+        .active-publications-grid.view-small {
+            grid-template-columns: repeat(auto-fill, minmax(240px, 270px));
+            justify-content: start;
+            gap: 12px;
+        }
+
+        .active-publications-grid.view-medium {
+            grid-template-columns: repeat(auto-fill, minmax(310px, 360px));
+            justify-content: start;
+            gap: 14px;
+        }
+
+        .active-publications-grid.view-large {
+            grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+        }
+
+        .active-publications-grid.view-list {
+            grid-template-columns: 1fr;
         }
 
         .active-publications-grid > .active-empty-state {
@@ -4023,6 +4068,10 @@
         .active-empty-state span:last-child { font-size: 14px; line-height: 1.5; }
 
         .active-group-card {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            height: 100%;
             overflow: hidden;
             border: 1px solid rgba(255,255,255,.065);
             border-radius: 22px;
@@ -4065,11 +4114,29 @@
             backdrop-filter: blur(10px);
         }
 
-        .active-group-body { display: grid; gap: 13px; padding: 16px; }
+        .active-group-body {
+            display: grid;
+            flex: 1;
+            gap: 13px;
+            min-width: 0;
+            padding: 16px;
+        }
         .active-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        .active-group-heading h3 { margin: 0; color: #f5f6ff; font-size: 16px; }
+        .active-group-heading > div { min-width: 0; }
+        .active-group-heading h3 {
+            margin: 0;
+            overflow-wrap: anywhere;
+            color: #f5f6ff;
+            font-size: 16px;
+        }
         .active-group-heading p { margin: 5px 0 0; color: #8794ad; font-size: 11px; }
-        .active-group-text { margin: 0; color: #b0b9cc; font-size: 12px; line-height: 1.5; }
+        .active-group-text {
+            margin: 0;
+            overflow-wrap: anywhere;
+            color: #b0b9cc;
+            font-size: 12px;
+            line-height: 1.5;
+        }
         .active-group-expiry { color: #9b94ff; font-size: 10px; font-weight: 800; white-space: nowrap; }
         .active-group-lines { display: grid; gap: 7px; max-height: 172px; overflow-y: auto; }
         .active-group-line {
@@ -4103,7 +4170,92 @@
         }
         .active-line-status { color: #79f3cb; font-size: 9px; font-weight: 850; text-transform: uppercase; }
         .active-line-status.error { color: #ff8999; }
-        .active-group-actions { display: flex; justify-content: flex-end; }
+        .active-group-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: auto;
+        }
+
+        .active-publications-grid.view-small .active-group-card {
+            border-radius: 18px;
+        }
+
+        .active-publications-grid.view-small .active-group-media {
+            aspect-ratio: 16 / 9;
+        }
+
+        .active-publications-grid.view-small .active-group-body {
+            gap: 11px;
+            padding: 14px;
+        }
+
+        .active-publications-grid.view-small .active-group-heading {
+            display: grid;
+            gap: 8px;
+        }
+
+        .active-publications-grid.view-small .active-group-heading h3 {
+            display: -webkit-box;
+            overflow: hidden;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+        }
+
+        .active-publications-grid.view-small .active-group-heading p,
+        .active-publications-grid.view-small .active-group-text,
+        .active-publications-grid.view-small .active-group-lines {
+            display: none;
+        }
+
+        .active-publications-grid.view-small .active-group-expiry {
+            white-space: normal;
+        }
+
+        .active-publications-grid.view-small .active-group-actions,
+        .active-publications-grid.view-small .active-group-actions button {
+            width: 100%;
+        }
+
+        .active-publications-grid.view-medium .active-group-text {
+            display: -webkit-box;
+            overflow: hidden;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+        }
+
+        .active-publications-grid.view-medium .active-group-lines {
+            max-height: none;
+            overflow: hidden;
+        }
+
+        .active-publications-grid.view-medium .active-group-line:nth-child(n + 4) {
+            display: none;
+        }
+
+        .active-publications-grid.view-large .active-group-media {
+            aspect-ratio: 16 / 9;
+        }
+
+        .active-publications-grid.view-large .active-group-lines {
+            max-height: 220px;
+        }
+
+        .active-publications-grid.view-list .active-group-card {
+            display: grid;
+            grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+        }
+
+        .active-publications-grid.view-list .active-group-media {
+            height: 100%;
+            min-height: 250px;
+            aspect-ratio: auto;
+            border-right: 1px solid rgba(255,255,255,.05);
+        }
+
+        .active-publications-grid.view-list .active-group-lines {
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            max-height: 148px;
+        }
 
         /* Administración de líneas */
         #section-lineas .line-connect-panel,
@@ -4550,6 +4702,16 @@
         }
 
         @media (max-width: 860px) {
+            .active-publications-grid.view-list .active-group-card {
+                grid-template-columns: 1fr;
+            }
+            .active-publications-grid.view-list .active-group-media {
+                height: auto;
+                min-height: 0;
+                aspect-ratio: 16 / 8;
+                border-right: 0;
+                border-bottom: 1px solid rgba(255,255,255,.05);
+            }
             .line-management-toolbar { grid-template-columns: 1fr 1fr; }
             .line-management-toolbar > .input { grid-column: 1 / -1; }
             .line-view-switch { justify-content: center; }
@@ -4567,11 +4729,27 @@
             .nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
             .active-metrics-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
             .active-metric-card { min-height: 130px; padding: 15px; border-radius: 18px; }
-            .active-publications-grid { grid-template-columns: 1fr; }
+            .active-publications-grid.view-small,
+            .active-publications-grid.view-medium,
+            .active-publications-grid.view-large,
+            .active-publications-grid.view-list { grid-template-columns: 1fr; }
             .deletion-progress-meta { grid-template-columns: 1fr; }
             .deletion-progress-meta span:nth-child(2),
             .deletion-progress-meta span:last-child { text-align: left; }
             .active-publications-header { align-items: stretch; flex-direction: column; }
+            .active-publications-actions {
+                display: grid;
+                grid-template-columns: 1fr;
+                width: 100%;
+                margin-left: 0;
+            }
+            .active-status-view-switch {
+                justify-content: flex-start;
+                width: 100%;
+            }
+            .active-publications-actions > .secondary-button {
+                width: 100%;
+            }
             .line-management-toolbar { grid-template-columns: 1fr; }
             .line-management-toolbar > .input { grid-column: auto; }
             .line-view-switch { overflow-x: auto; }
@@ -5804,6 +5982,403 @@
                 border-radius: 21px;
             }
         }
+
+        .agenda-layout {
+            display: grid;
+            grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+            gap: 18px;
+            align-items: start;
+        }
+
+        .agenda-side-stack,
+        .agenda-main-stack {
+            display: grid;
+            gap: 18px;
+        }
+
+        .agenda-panel {
+            position: relative;
+            overflow: visible;
+        }
+
+        .agenda-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            margin-bottom: 8px;
+            color: #73f5cc;
+            font-size: 11px;
+            font-weight: 850;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        .agenda-picker {
+            position: relative;
+            margin-top: 14px;
+        }
+
+        .agenda-picker-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            min-height: 54px;
+            padding: 10px 13px;
+            color: var(--text);
+            text-align: left;
+            border: 1px solid rgba(148, 163, 184, .18);
+            border-radius: 14px;
+            background: rgba(14, 20, 36, .78);
+            transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+        }
+
+        .agenda-picker-button:hover,
+        .agenda-picker.open .agenda-picker-button {
+            border-color: rgba(94, 234, 212, .45);
+            background: rgba(20, 29, 48, .94);
+            box-shadow: 0 0 0 3px rgba(45, 212, 191, .07);
+        }
+
+        .agenda-picker-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .agenda-picker-copy small {
+            color: var(--muted);
+            font-size: 10px;
+            font-weight: 750;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+
+        .agenda-picker-copy strong {
+            overflow: hidden;
+            font-size: 13px;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .agenda-picker-button .icon {
+            width: 15px;
+            height: 15px;
+            color: #8b8cff;
+            transition: transform .18s ease;
+        }
+
+        .agenda-picker.open .agenda-picker-button .icon {
+            transform: rotate(180deg);
+        }
+
+        .agenda-picker-menu {
+            position: absolute;
+            z-index: 80;
+            top: calc(100% + 7px);
+            left: 0;
+            right: 0;
+            display: none;
+            max-height: 290px;
+            padding: 7px;
+            overflow-y: auto;
+            border: 1px solid rgba(124, 114, 255, .25);
+            border-radius: 14px;
+            background: rgba(10, 15, 29, .98);
+            box-shadow: 0 22px 55px rgba(0, 0, 0, .4);
+            backdrop-filter: blur(18px);
+        }
+
+        .agenda-picker.open .agenda-picker-menu {
+            display: grid;
+            gap: 4px;
+            animation: menuReveal .16s ease both;
+        }
+
+        .agenda-picker-option {
+            display: grid;
+            grid-template-columns: 32px minmax(0, 1fr) auto;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+            padding: 9px;
+            color: var(--muted);
+            text-align: left;
+            border: 1px solid transparent;
+            border-radius: 11px;
+            background: transparent;
+        }
+
+        .agenda-picker-option:hover,
+        .agenda-picker-option.active {
+            color: var(--text);
+            border-color: rgba(45, 212, 191, .2);
+            background: rgba(45, 212, 191, .09);
+        }
+
+        .agenda-picker-avatar {
+            display: grid;
+            place-items: center;
+            width: 32px;
+            height: 32px;
+            color: #7ef4d3;
+            font-size: 11px;
+            font-weight: 900;
+            border: 1px solid rgba(45, 212, 191, .25);
+            border-radius: 10px;
+            background: rgba(45, 212, 191, .1);
+        }
+
+        .agenda-picker-option-copy {
+            display: grid;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .agenda-picker-option-copy strong,
+        .agenda-picker-option-copy small {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .agenda-picker-option-copy strong { font-size: 12px; }
+        .agenda-picker-option-copy small { color: var(--muted); font-size: 10px; }
+
+        .agenda-google-state {
+            display: flex;
+            gap: 11px;
+            align-items: center;
+            margin: 14px 0;
+            padding: 12px;
+            border: 1px solid rgba(148, 163, 184, .15);
+            border-radius: 14px;
+            background: rgba(11, 17, 31, .58);
+        }
+
+        .agenda-google-mark {
+            display: grid;
+            flex: 0 0 auto;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: 900;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #4285f4, #34a853 46%, #fbbc05 72%, #ea4335);
+            box-shadow: 0 8px 22px rgba(66, 133, 244, .2);
+        }
+
+        .agenda-google-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .agenda-google-copy strong,
+        .agenda-google-copy span {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .agenda-google-copy strong { font-size: 12px; }
+        .agenda-google-copy span { color: var(--muted); font-size: 10px; }
+
+        .agenda-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 9px;
+        }
+
+        .agenda-actions > button {
+            flex: 1 1 135px;
+            justify-content: center;
+        }
+
+        .agenda-security-note {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            margin-top: 14px;
+            padding: 11px 12px;
+            color: #a9bad0;
+            font-size: 11px;
+            line-height: 1.5;
+            border: 1px solid rgba(45, 212, 191, .2);
+            border-radius: 13px;
+            background: rgba(20, 184, 166, .07);
+        }
+
+        .agenda-security-note .icon {
+            flex: 0 0 auto;
+            width: 15px;
+            height: 15px;
+            margin-top: 1px;
+            color: #5eead4;
+        }
+
+        .agenda-stats {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin: 17px 0;
+        }
+
+        .agenda-stat {
+            display: grid;
+            gap: 6px;
+            min-height: 84px;
+            padding: 13px;
+            border: 1px solid rgba(148, 163, 184, .14);
+            border-radius: 15px;
+            background: linear-gradient(145deg, rgba(19, 26, 45, .8), rgba(10, 15, 29, .72));
+        }
+
+        .agenda-stat span {
+            color: var(--muted);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
+        .agenda-stat strong {
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        .agenda-stat.mutual strong { color: #c084fc; }
+        .agenda-stat.ready strong { color: #5eead4; }
+
+        .agenda-progress-card {
+            padding: 14px;
+            border: 1px solid rgba(124, 114, 255, .2);
+            border-radius: 15px;
+            background: rgba(124, 114, 255, .055);
+        }
+
+        .agenda-progress-head,
+        .agenda-progress-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .agenda-progress-head strong { font-size: 13px; }
+        .agenda-progress-head span,
+        .agenda-progress-meta { color: var(--muted); font-size: 10px; }
+
+        .agenda-progress-track {
+            height: 7px;
+            margin: 12px 0 9px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, .12);
+        }
+
+        .agenda-progress-bar {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #7c72ff, #42d8d0, #45e69a);
+            box-shadow: 0 0 18px rgba(69, 230, 154, .28);
+            transition: width .3s ease;
+        }
+
+        .agenda-list {
+            display: grid;
+            gap: 8px;
+            max-height: 430px;
+            margin-top: 14px;
+            overflow-y: auto;
+        }
+
+        .agenda-contact-row {
+            display: grid;
+            grid-template-columns: minmax(150px, 1fr) minmax(115px, .65fr) auto;
+            gap: 12px;
+            align-items: center;
+            padding: 11px 12px;
+            border: 1px solid rgba(148, 163, 184, .12);
+            border-radius: 13px;
+            background: rgba(11, 17, 31, .56);
+        }
+
+        .agenda-contact-main,
+        .agenda-contact-meta {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .agenda-contact-main strong,
+        .agenda-contact-main span,
+        .agenda-contact-meta span {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .agenda-contact-main strong { font-size: 12px; }
+        .agenda-contact-main span,
+        .agenda-contact-meta span { color: var(--muted); font-size: 10px; }
+
+        .agenda-contact-status {
+            padding: 5px 8px;
+            color: #a9bad0;
+            font-size: 9px;
+            font-weight: 850;
+            white-space: nowrap;
+            border: 1px solid rgba(148, 163, 184, .16);
+            border-radius: 999px;
+            background: rgba(148, 163, 184, .08);
+        }
+
+        .agenda-contact-status.done {
+            color: #70efc6;
+            border-color: rgba(45, 212, 191, .25);
+            background: rgba(45, 212, 191, .08);
+        }
+
+        .agenda-contact-status.error {
+            color: #fda4af;
+            border-color: rgba(251, 113, 133, .25);
+            background: rgba(251, 113, 133, .08);
+        }
+
+        .agenda-empty {
+            display: grid;
+            place-items: center;
+            min-height: 170px;
+            padding: 25px;
+            color: var(--muted);
+            text-align: center;
+            border: 1px dashed rgba(148, 163, 184, .16);
+            border-radius: 16px;
+        }
+
+        .agenda-empty .icon {
+            width: 26px;
+            height: 26px;
+            margin-bottom: 9px;
+            color: #8884ff;
+        }
+
+        @media (max-width: 1080px) {
+            .agenda-layout { grid-template-columns: 1fr; }
+            .agenda-side-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 720px) {
+            .agenda-side-stack { grid-template-columns: 1fr; }
+            .agenda-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .agenda-contact-row { grid-template-columns: minmax(0, 1fr) auto; }
+            .agenda-contact-meta { display: none; }
+        }
     </style>
 
 </head>
@@ -5885,6 +6460,10 @@
                     <svg class="icon"><use href="#i-lines"></use></svg>
                     <span>Líneas <span class="nav-count" id="nav-line-count">0</span></span>
                 </button>
+                <button class="nav-button" data-section="agendamiento">
+                    <svg class="icon"><use href="#i-users"></use></svg>
+                    <span>Agendamiento</span>
+                </button>
                 <button class="nav-button" data-section="historial">
                     <svg class="icon"><use href="#i-history"></use></svg>
                     <span>Historial</span>
@@ -5898,7 +6477,7 @@
             <div class="update-panel">
                 <div class="update-panel-header">
                     <span class="update-panel-title title-with-icon"><svg class="icon"><use href="#i-update"></use></svg><span>Actualizaciones</span></span>
-                    <span id="update-version" class="update-version">v1.0.9</span>
+                    <span id="update-version" class="update-version">v1.1.0</span>
                 </div>
 
                 <p id="update-message" class="update-message">
@@ -5925,7 +6504,7 @@
                 </button>
             </div>
 
-            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.0.9</div>
+            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.1.0</div>
         </aside>
 
         <main class="main">
@@ -6169,13 +6748,35 @@
                             <h2 class="title-with-icon"><svg class="icon"><use href="#i-layers"></use></svg><span>Publicaciones agrupadas</span></h2>
                             <p>Cada card reúne la misma imagen publicada en varias líneas y conserva el ID de cada estado.</p>
                         </div>
-                        <button type="button" id="btn-actualizar-activos" class="secondary-button">
-                            <svg class="icon"><use href="#i-refresh"></use></svg>
-                            <span>Actualizar</span>
-                        </button>
+
+                        <div class="active-publications-actions">
+                            <div class="line-view-switch active-status-view-switch" role="group" aria-label="Tamaño de las tarjetas de estados activos">
+                                <button type="button" class="line-view-button" data-active-status-view="small" title="Tarjetas pequeñas" aria-pressed="false">
+                                    <svg class="icon"><use href="#i-grid"></use></svg>
+                                    <span>Pequeñas</span>
+                                </button>
+                                <button type="button" class="line-view-button active" data-active-status-view="medium" title="Tarjetas medianas" aria-pressed="true">
+                                    <svg class="icon"><use href="#i-grid"></use></svg>
+                                    <span>Medianas</span>
+                                </button>
+                                <button type="button" class="line-view-button" data-active-status-view="large" title="Tarjetas grandes" aria-pressed="false">
+                                    <svg class="icon"><use href="#i-grid"></use></svg>
+                                    <span>Grandes</span>
+                                </button>
+                                <button type="button" class="line-view-button" data-active-status-view="list" title="Vista de lista" aria-pressed="false">
+                                    <svg class="icon"><use href="#i-list"></use></svg>
+                                    <span>Lista</span>
+                                </button>
+                            </div>
+
+                            <button type="button" id="btn-actualizar-activos" class="secondary-button">
+                                <svg class="icon"><use href="#i-refresh"></use></svg>
+                                <span>Actualizar</span>
+                            </button>
+                        </div>
                     </div>
 
-                    <div id="lista-estados-activos" class="active-publications-grid">
+                    <div id="lista-estados-activos" class="active-publications-grid view-medium">
                         <div class="active-empty-state">
                             <div class="empty-state-content">
                                 <span class="empty-state-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
@@ -6303,6 +6904,140 @@
                     <p id="resultado-busqueda-seccion" class="help" style="margin:0 0 14px;"></p>
 
                     <div id="lista-lineas-conectadas" class="connected-lines-grid view-large"></div>
+                </div>
+            </section>
+
+            <section id="section-agendamiento" class="section">
+                <div class="agenda-layout">
+                    <div class="agenda-side-stack">
+                        <div class="panel agenda-panel">
+                            <span class="agenda-eyebrow"><svg class="icon"><use href="#i-phone"></use></svg> Paso 1</span>
+                            <h2>Elegir una línea</h2>
+                            <p class="help">La vista y la cola trabajarán únicamente con esta línea. La detección pasiva conserva por separado los datos de cada línea conectada.</p>
+
+                            <div id="agenda-line-picker" class="agenda-picker">
+                                <button type="button" id="agenda-line-button" class="agenda-picker-button" aria-expanded="false">
+                                    <span class="agenda-picker-copy">
+                                        <small>Línea de WhatsApp</small>
+                                        <strong id="agenda-line-label">Seleccionar línea</strong>
+                                    </span>
+                                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                                </button>
+                                <div id="agenda-line-menu" class="agenda-picker-menu" role="listbox"></div>
+                            </div>
+
+                            <div class="agenda-security-note">
+                                <svg class="icon"><use href="#i-check-circle"></use></svg>
+                                <span>Solo se consideran chats individuales de la línea seleccionada.</span>
+                            </div>
+                            <p class="help" style="margin:10px 0 0;">Las vinculaciones nuevas solicitan el historial ampliado. En una sesión antigua, WhatsApp puede no reenviar chats previos y puede ser necesario volver a vincularla con QR.</p>
+                        </div>
+
+                        <div class="panel agenda-panel">
+                            <span class="agenda-eyebrow"><svg class="icon"><use href="#i-link"></use></svg> Paso 2</span>
+                            <h2>Google Contacts</h2>
+                            <p class="help">La cuenta se autoriza en el navegador y su permiso queda cifrado en este equipo.</p>
+
+                            <div class="agenda-google-state">
+                                <span class="agenda-google-mark">G</span>
+                                <span class="agenda-google-copy">
+                                    <strong id="agenda-google-title">Google no configurado</strong>
+                                    <span id="agenda-google-subtitle">Cargá las credenciales de aplicación de escritorio.</span>
+                                </span>
+                            </div>
+
+                            <div id="agenda-account-picker" class="agenda-picker" hidden>
+                                <button type="button" id="agenda-account-button" class="agenda-picker-button" aria-expanded="false">
+                                    <span class="agenda-picker-copy">
+                                        <small>Cuenta asignada</small>
+                                        <strong id="agenda-account-label">Seleccionar cuenta</strong>
+                                    </span>
+                                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                                </button>
+                                <div id="agenda-account-menu" class="agenda-picker-menu" role="listbox"></div>
+                            </div>
+
+                            <input type="file" id="agenda-google-credentials-file" accept="application/json,.json" hidden>
+                            <div class="agenda-actions" style="margin-top:14px;">
+                                <button type="button" id="btn-agenda-credentials" class="secondary-button">
+                                    <svg class="icon"><use href="#i-upload"></use></svg>
+                                    <span>Credenciales</span>
+                                </button>
+                                <button type="button" id="btn-agenda-connect-google" class="primary-button" disabled>
+                                    <svg class="icon"><use href="#i-link"></use></svg>
+                                    <span>Conectar Google</span>
+                                </button>
+                            </div>
+                            <p id="agenda-google-message" class="help" style="margin:10px 0 0;"></p>
+                        </div>
+                    </div>
+
+                    <div class="agenda-main-stack">
+                        <div class="panel agenda-panel">
+                            <div class="section-heading-row">
+                                <div>
+                                    <span class="agenda-eyebrow"><svg class="icon"><use href="#i-users"></use></svg> Cola segura</span>
+                                    <h2>Agendamiento uno a uno</h2>
+                                    <p>Formato: <strong id="agenda-name-example">L— usuario</strong>. El punto 🟣 se agrega al detectar reciprocidad. La detección usa el historial que WhatsApp sincroniza y los mensajes nuevos.</p>
+                                </div>
+                                <button type="button" id="btn-agenda-refresh" class="secondary-button">
+                                    <svg class="icon"><use href="#i-refresh"></use></svg>
+                                    <span>Actualizar</span>
+                                </button>
+                            </div>
+
+                            <div class="agenda-security-note">
+                                <svg class="icon"><use href="#i-info"></use></svg>
+                                <span>Se extrae únicamente el usuario del mensaje de Greenvip. La clave y el contenido del chat se descartan inmediatamente y nunca se guardan.</span>
+                            </div>
+
+                            <div class="agenda-stats">
+                                <div class="agenda-stat"><span>Detectados</span><strong id="agenda-stat-detected">0</strong></div>
+                                <div class="agenda-stat ready"><span>Pendientes</span><strong id="agenda-stat-pending">0</strong></div>
+                                <div class="agenda-stat"><span>Agendados</span><strong id="agenda-stat-synced">0</strong></div>
+                                <div class="agenda-stat mutual"><span>Con 🟣</span><strong id="agenda-stat-mutual">0</strong></div>
+                            </div>
+
+                            <div class="agenda-progress-card">
+                                <div class="agenda-progress-head">
+                                    <strong id="agenda-progress-title">Sin proceso activo</strong>
+                                    <span id="agenda-progress-count">0 de 0</span>
+                                </div>
+                                <div class="agenda-progress-track"><div id="agenda-progress-bar" class="agenda-progress-bar"></div></div>
+                                <div class="agenda-progress-meta">
+                                    <span id="agenda-progress-message">Seleccioná una línea y una cuenta Google.</span>
+                                    <span id="agenda-progress-current">—</span>
+                                </div>
+                            </div>
+
+                            <div class="agenda-actions" style="margin-top:14px;">
+                                <button type="button" id="btn-agenda-start" class="primary-button" disabled>
+                                    <svg class="icon"><use href="#i-play"></use></svg>
+                                    <span>Agendar pendientes</span>
+                                </button>
+                                <button type="button" id="btn-agenda-stop" class="secondary-button" disabled>
+                                    <svg class="icon"><use href="#i-stop"></use></svg>
+                                    <span>Detener</span>
+                                </button>
+                            </div>
+
+                            <p class="help" style="margin:12px 0 0;">Google aplica cuotas de escritura. AutoStatues procesa de forma secuencial y conserva el avance para continuar después. Si el número ya existe, su contacto se actualiza al formato de la línea; los duplicados o contactos asignados a otra línea quedan para revisión.</p>
+                        </div>
+
+                        <div class="panel agenda-panel">
+                            <div class="section-heading-row">
+                                <div>
+                                    <h2 class="title-with-icon"><svg class="icon"><use href="#i-list"></use></svg><span>Usuarios encontrados</span></h2>
+                                    <p>Los casos sin número resuelto o con contactos duplicados quedarán para revisión.</p>
+                                </div>
+                            </div>
+                            <div id="agenda-contact-list" class="agenda-list">
+                                <div class="agenda-empty">
+                                    <div><svg class="icon"><use href="#i-users"></use></svg><br>Seleccioná una línea para ver sus usuarios detectados.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -6468,7 +7203,7 @@
                                     <div id="upload-placeholder" class="upload-placeholder">
                                         <span class="upload-icon"><svg class="icon"><use href="#i-upload"></use></svg></span>
                                         <b>Elegir una imagen</b>
-                                        <span>PNG o JPG</span>
+                                        <span>PNG o JPG · optimización automática</span>
                                     </div>
 
                                     <img id="preview-imagen" class="preview-image" alt="Vista previa">
@@ -6696,7 +7431,7 @@
                         <div>
                             <span class="edit-image-eyebrow">Contenido visual</span>
                             <h3>Cambiar imagen</h3>
-                            <p>Elegí una imagen nueva o conservá la que ya está programada.</p>
+                            <p>Elegí una imagen nueva o conservá la actual. La nueva se optimizará automáticamente.</p>
                         </div>
 
                         <input
@@ -6871,6 +7606,7 @@
         let cacheLineasSeccion = [];
         let cacheLineasPendientes = [];
         let vistaLineas = 'large';
+        let vistaEstadosActivos = 'medium';
         let ordenLineas = 'conexion';
         let direccionLineas = 'asc';
         let ordenLineasSubida = 'conexion';
@@ -6886,6 +7622,16 @@
         let lineaQrObjetivoId = null;
         let lineaQrModalId = null;
         let qrModalActual = null;
+        let agendaLineaId = null;
+        let agendaCuentaId = null;
+        let agendaEstado = null;
+        let agendaActualizando = false;
+        let agendaActualizacionPendiente = false;
+        let agendaOAuthEnCurso = false;
+        let agendaTemporizador = null;
+        let agendaSecuencia = 0;
+        let agendaFirmaLineas = '';
+        let agendaFirmaCuentas = '';
 
         const solicitudesIdempotentesEnCurso = new Set();
         const qrDescartadosPorLinea = new Map();
@@ -6895,6 +7641,7 @@
             estados: 'Actividad de Estados',
             activos: 'Estados activos',
             lineas: 'Líneas conectadas',
+            agendamiento: 'Agendamiento',
             historial: 'Historial de publicaciones',
             configuracion: 'Configuración'
         };
@@ -7420,8 +8167,11 @@
 
             const fab = document.getElementById('btn-nuevo-estado');
             const fabEsLinea = nombre === 'lineas';
+            const ocultarFab = nombre === 'agendamiento';
             fab.title = fabEsLinea ? 'Conectar una nueva línea' : 'Crear nuevo estado';
             fab.setAttribute('aria-label', fab.title);
+            fab.style.display = ocultarFab ? 'none' : 'grid';
+            fab.setAttribute('aria-hidden', String(ocultarFab));
 
             if (opciones.actualizarHash !== false && location.hash !== `#${nombre}`) {
                 history.pushState({ seccion: nombre }, '', `#${nombre}`);
@@ -7430,8 +8180,11 @@
             if (nombre === 'dashboard') actualizarResumen();
             if (nombre === 'activos') actualizarEstadosActivos(true);
             if (nombre === 'lineas') renderizarLineasConectadas(cacheLineasSeccion);
+            if (nombre === 'agendamiento') actualizarAgendamiento(true);
             if (nombre === 'historial') actualizarHistorial();
             if (nombre === 'configuracion') cargarConfiguracion();
+
+            programarActualizacionAgendamiento();
         }
 
         function actualizarCheckboxGeneral() {
@@ -8341,10 +9094,36 @@
             document.getElementById('eliminacion-barra').style.width = `${porcentaje}%`;
         }
 
+        function aplicarVistaEstadosActivos() {
+            const vistasValidas = new Set(['small', 'medium', 'large', 'list']);
+            if (!vistasValidas.has(vistaEstadosActivos)) {
+                vistaEstadosActivos = 'medium';
+            }
+
+            const contenedor = document.getElementById('lista-estados-activos');
+            if (contenedor) {
+                contenedor.classList.remove(
+                    'view-small',
+                    'view-medium',
+                    'view-large',
+                    'view-list'
+                );
+                contenedor.classList.add(`view-${vistaEstadosActivos}`);
+            }
+
+            document.querySelectorAll('[data-active-status-view]').forEach(boton => {
+                const activa = boton.dataset.activeStatusView === vistaEstadosActivos;
+                boton.classList.toggle('active', activa);
+                boton.setAttribute('aria-pressed', String(activa));
+            });
+        }
+
         function renderizarEstadosActivos(data = {}) {
             const resumen = data.resumen || {};
             const publicaciones = Array.isArray(data.publicaciones) ? data.publicaciones : [];
             const contenedor = document.getElementById('lista-estados-activos');
+
+            aplicarVistaEstadosActivos();
 
             document.getElementById('activos-grupos').textContent = Number(resumen.gruposActivos) || 0;
             document.getElementById('activos-lineas').textContent = Number(resumen.estadosEnLineas) || 0;
@@ -8718,6 +9497,509 @@
                 : 'error';
         }
 
+        function idCuentaAgenda(cuenta = {}) {
+            return String(cuenta.id ?? cuenta.cuentaId ?? '').trim();
+        }
+
+        function nombreCuentaAgenda(cuenta = {}) {
+            return String(
+                cuenta.email ?? cuenta.correo ?? cuenta.nombre ?? cuenta.displayName ?? idCuentaAgenda(cuenta)
+            ).trim() || 'Cuenta de Google';
+        }
+
+        function lineaAgendaSeleccionada() {
+            return cacheLineasSeccion.find(
+                linea => String(linea.id) === String(agendaLineaId)
+            ) || null;
+        }
+
+        function prefijoAgendaLinea(linea = {}) {
+            const nombre = String(linea.nombre || '').trim();
+            const explicito = nombre.match(/\bL\s*0*(\d+)\b/i);
+            const coincidencia = nombre.match(/(\d+)(?!.*\d)/);
+            const numero = explicito?.[1] || coincidencia?.[1] ||
+                linea.ordenConexion || linea.ordenOriginal;
+            return numero ? `L${numero}` : 'L—';
+        }
+
+        function cerrarPickerAgendamiento(picker) {
+            if (!picker) return;
+            picker.classList.remove('open');
+            picker.querySelector('.agenda-picker-button')?.setAttribute('aria-expanded', 'false');
+        }
+
+        function cerrarSelectoresAgendamiento(excepto = null) {
+            document.querySelectorAll('.agenda-picker').forEach(picker => {
+                if (picker !== excepto) cerrarPickerAgendamiento(picker);
+            });
+        }
+
+        function alternarPickerAgendamiento(picker) {
+            if (!picker || picker.hidden) return;
+            const abrir = !picker.classList.contains('open');
+            cerrarSelectoresAgendamiento(picker);
+            picker.classList.toggle('open', abrir);
+            picker.querySelector('.agenda-picker-button')?.setAttribute('aria-expanded', String(abrir));
+        }
+
+        function renderizarSelectorLineasAgendamiento({ forzar = false } = {}) {
+            const picker = document.getElementById('agenda-line-picker');
+            const menu = document.getElementById('agenda-line-menu');
+            const etiqueta = document.getElementById('agenda-line-label');
+            if (!picker || !menu || !etiqueta) return;
+
+            if (
+                !agendaLineaId &&
+                seccionActual === 'agendamiento' &&
+                cacheLineasSeccion.length
+            ) {
+                agendaLineaId = String(cacheLineasSeccion[0].id);
+            }
+
+            const linea = lineaAgendaSeleccionada();
+            etiqueta.textContent = linea
+                ? `${linea.nombre}${linea.numero ? ` · ${linea.numero}` : ''}`
+                : agendaLineaId
+                    ? 'Línea no disponible'
+                    : 'Seleccionar línea';
+            document.getElementById('agenda-name-example').textContent =
+                `${prefijoAgendaLinea(linea || {})} usuario 🟣`;
+
+            const firma = JSON.stringify({
+                seleccionada: String(agendaLineaId || ''),
+                lineas: cacheLineasSeccion.map(item => [
+                    String(item.id),
+                    item.nombre || '',
+                    item.numero || '',
+                    item.ordenConexion || item.ordenOriginal || ''
+                ])
+            });
+            const interactuando = picker.classList.contains('open') || picker.contains(document.activeElement);
+            if (!forzar && (firma === agendaFirmaLineas || interactuando)) return;
+            agendaFirmaLineas = firma;
+
+            if (!cacheLineasSeccion.length) {
+                menu.innerHTML = '<div class="agenda-empty" style="min-height:90px;padding:14px;">No hay líneas conectadas.</div>';
+                return;
+            }
+
+            menu.innerHTML = cacheLineasSeccion.map(item => {
+                const activa = String(item.id) === String(agendaLineaId);
+                return `
+                    <button
+                        type="button"
+                        class="agenda-picker-option ${activa ? 'active' : ''}"
+                        data-agenda-linea-id="${escaparHTML(item.id)}"
+                        role="option"
+                        aria-selected="${activa}"
+                    >
+                        <span class="agenda-picker-avatar">${escaparHTML(obtenerAvatarLinea(item))}</span>
+                        <span class="agenda-picker-option-copy">
+                            <strong>${escaparHTML(item.nombre || 'Línea sin nombre')}</strong>
+                            <small>${escaparHTML(item.numero || 'Número no disponible')}</small>
+                        </span>
+                        ${activa ? iconoSVG('check') : '<span></span>'}
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function renderizarSelectorCuentasAgendamiento(cuentas = [], { forzar = false } = {}) {
+            const picker = document.getElementById('agenda-account-picker');
+            const boton = document.getElementById('agenda-account-button');
+            const menu = document.getElementById('agenda-account-menu');
+            const etiqueta = document.getElementById('agenda-account-label');
+            if (!picker || !boton || !menu || !etiqueta) return;
+
+            const lista = Array.isArray(cuentas) ? cuentas : [];
+            const seleccionada = lista.find(cuenta => idCuentaAgenda(cuenta) === String(agendaCuentaId));
+            picker.hidden = !lista.length;
+            boton.disabled = !agendaLineaId;
+            etiqueta.textContent = seleccionada
+                ? nombreCuentaAgenda(seleccionada)
+                : 'Seleccionar cuenta';
+
+            const firma = JSON.stringify({
+                seleccionada: String(agendaCuentaId || ''),
+                cuentas: lista.map(cuenta => [idCuentaAgenda(cuenta), nombreCuentaAgenda(cuenta)])
+            });
+            const interactuando = picker.classList.contains('open') || picker.contains(document.activeElement);
+            if (!forzar && (firma === agendaFirmaCuentas || interactuando)) return;
+            agendaFirmaCuentas = firma;
+
+            menu.innerHTML = lista.map(cuenta => {
+                const id = idCuentaAgenda(cuenta);
+                const nombre = nombreCuentaAgenda(cuenta);
+                const activa = id === String(agendaCuentaId);
+                return `
+                    <button
+                        type="button"
+                        class="agenda-picker-option ${activa ? 'active' : ''}"
+                        data-agenda-cuenta-id="${escaparHTML(id)}"
+                        role="option"
+                        aria-selected="${activa}"
+                    >
+                        <span class="agenda-picker-avatar">G</span>
+                        <span class="agenda-picker-option-copy">
+                            <strong>${escaparHTML(nombre)}</strong>
+                            <small>Google Contacts</small>
+                        </span>
+                        ${activa ? iconoSVG('check') : '<span></span>'}
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function numeroAgenda(valor) {
+            const numero = Number(valor);
+            return Number.isFinite(numero) && numero > 0 ? Math.round(numero) : 0;
+        }
+
+        function describirFuenteAgenda(fuente) {
+            const etiquetas = {
+                mensaje: 'Usuario detectado',
+                plantilla: 'Usuario detectado',
+                vio_estado: 'Vio tu estado',
+                vista_estado: 'Vio tu estado',
+                publico_estado: 'Publicó un estado',
+                publicacion_estado: 'Publicó un estado'
+            };
+            return etiquetas[fuente] || String(fuente || '').replaceAll('_', ' ');
+        }
+
+        function estadoVisualCandidatoAgenda(candidato = {}) {
+            const estado = String(candidato.estado || 'pendiente').toLocaleLowerCase('es');
+            if (['agendado', 'sincronizado', 'actualizado', 'completado'].includes(estado)) {
+                return { clase: 'done', texto: 'Agendado' };
+            }
+            if (['error', 'fallido', 'revision', 'requiere_revision', 'duplicado'].includes(estado)) {
+                return {
+                    clase: 'error',
+                    texto: estado.includes('revision') || estado === 'duplicado' ? 'Revisar' : 'Error'
+                };
+            }
+            if (['procesando', 'agendando'].includes(estado)) {
+                return { clase: '', texto: 'Agendando…' };
+            }
+            if (estado === 'omitido') return { clase: 'error', texto: 'Omitido' };
+            return { clase: '', texto: 'Pendiente' };
+        }
+
+        function renderizarCandidatosAgendamiento(candidatos = []) {
+            const contenedor = document.getElementById('agenda-contact-list');
+            if (!contenedor) return;
+            const lista = Array.isArray(candidatos) ? candidatos : [];
+
+            if (!lista.length) {
+                const mensaje = agendaLineaId
+                    ? 'Todavía no se detectaron usuarios válidos en esta línea.'
+                    : 'Seleccioná una línea para ver sus usuarios detectados.';
+                contenedor.innerHTML = `
+                    <div class="agenda-empty">
+                        <div>${iconoSVG('users')}<br>${escaparHTML(mensaje)}</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const prefijo = prefijoAgendaLinea(lineaAgendaSeleccionada() || {});
+            contenedor.innerHTML = lista.map(candidato => {
+                const usuario = String(candidato.usuario || '').trim();
+                const nombreGenerado = `${prefijo} ${usuario || 'usuario'}${candidato.mutuo ? ' 🟣' : ''}`;
+                let nombre = String(candidato.nombre || nombreGenerado).trim();
+                if (candidato.mutuo && !nombre.includes('🟣')) nombre += ' 🟣';
+                const telefono = String(candidato.telefono || '').trim();
+                const fuentes = Array.isArray(candidato.fuentes)
+                    ? candidato.fuentes.map(describirFuenteAgenda).filter(Boolean)
+                    : [];
+                const estado = estadoVisualCandidatoAgenda(candidato);
+                const detalle = String(candidato.detalle || '').trim();
+                return `
+                    <div class="agenda-contact-row" ${detalle ? `title="${escaparHTML(detalle)}"` : ''}>
+                        <span class="agenda-contact-main">
+                            <strong>${escaparHTML(nombre)}</strong>
+                            <span>${telefono ? escaparHTML(`+${telefono.replace(/^\+/, '')}`) : 'Número pendiente de resolver'}</span>
+                        </span>
+                        <span class="agenda-contact-meta">
+                            <span>${usuario ? escaparHTML(`Usuario: ${usuario}`) : 'Usuario sin resolver'}</span>
+                            <span>${escaparHTML(fuentes.join(' · ') || (candidato.mutuo ? 'Contacto mutuo' : 'Plantilla detectada'))}</span>
+                        </span>
+                        <span class="agenda-contact-status ${estado.clase}">${escaparHTML(estado.texto)}</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderizarAgendamiento(data = {}) {
+            agendaEstado = data && typeof data === 'object' ? data : {};
+            if (Object.prototype.hasOwnProperty.call(agendaEstado, 'lineaId') && agendaEstado.lineaId) {
+                agendaLineaId = String(agendaEstado.lineaId);
+            }
+            if (Object.prototype.hasOwnProperty.call(agendaEstado, 'cuentaId')) {
+                agendaCuentaId = agendaEstado.cuentaId ? String(agendaEstado.cuentaId) : null;
+            }
+
+            renderizarSelectorLineasAgendamiento();
+            const cuentas = Array.isArray(agendaEstado.cuentas) ? agendaEstado.cuentas : [];
+            renderizarSelectorCuentasAgendamiento(cuentas);
+
+            const credencialesConfiguradas = agendaEstado.credencialesConfiguradas === true;
+            const cuenta = cuentas.find(item => idCuentaAgenda(item) === String(agendaCuentaId));
+            const tituloGoogle = document.getElementById('agenda-google-title');
+            const subtituloGoogle = document.getElementById('agenda-google-subtitle');
+            const mensajeGoogle = document.getElementById('agenda-google-message');
+            const botonCredenciales = document.getElementById('btn-agenda-credentials');
+            const botonConectar = document.getElementById('btn-agenda-connect-google');
+
+            if (!credencialesConfiguradas) {
+                tituloGoogle.textContent = 'Google no configurado';
+                subtituloGoogle.textContent = 'Cargá las credenciales de aplicación de escritorio.';
+            } else if (cuenta) {
+                tituloGoogle.textContent = nombreCuentaAgenda(cuenta);
+                subtituloGoogle.textContent = 'Cuenta asignada a la línea seleccionada.';
+            } else if (cuentas.length) {
+                tituloGoogle.textContent = `${cuentas.length} cuenta${cuentas.length === 1 ? '' : 's'} disponible${cuentas.length === 1 ? '' : 's'}`;
+                subtituloGoogle.textContent = agendaLineaId
+                    ? 'Elegí la cuenta que recibirá los contactos de esta línea.'
+                    : 'Seleccioná una línea para asignarle una cuenta.';
+            } else {
+                tituloGoogle.textContent = 'Google listo para conectar';
+                subtituloGoogle.textContent = 'Autorizá una cuenta desde tu navegador.';
+            }
+            botonCredenciales.querySelector('span').textContent =
+                credencialesConfiguradas ? 'Cambiar credenciales' : 'Credenciales';
+            botonConectar.disabled = !credencialesConfiguradas;
+            botonConectar.querySelector('span').textContent = cuentas.length ? 'Agregar cuenta' : 'Conectar Google';
+            mensajeGoogle.textContent = String(agendaEstado.mensajeGoogle || agendaEstado.mensaje || '');
+
+            const resumen = agendaEstado.resumen || {};
+            const detectados = numeroAgenda(resumen.detectados);
+            const pendientes = numeroAgenda(resumen.pendientes);
+            const agendados = numeroAgenda(resumen.agendados);
+            const mutuos = numeroAgenda(resumen.mutuos);
+            const usuariosPendientesJid = numeroAgenda(
+                resumen.usuariosPendientesJid
+            );
+            document.getElementById('agenda-stat-detected').textContent = detectados;
+            document.getElementById('agenda-stat-pending').textContent = pendientes;
+            document.getElementById('agenda-stat-synced').textContent = agendados;
+            document.getElementById('agenda-stat-mutual').textContent = mutuos;
+
+            const proceso = agendaEstado.proceso || {};
+            const activo = proceso.activo === true;
+            const procesados = numeroAgenda(proceso.procesados);
+            const total = numeroAgenda(proceso.total);
+            const porcentaje = total ? Math.min(100, Math.max(0, (procesados / total) * 100)) : 0;
+            document.getElementById('agenda-progress-title').textContent = activo
+                ? 'Agendando contactos'
+                : total
+                    ? 'Último proceso'
+                    : 'Sin proceso activo';
+            document.getElementById('agenda-progress-count').textContent = `${procesados} de ${total}`;
+            document.getElementById('agenda-progress-bar').style.width = `${porcentaje}%`;
+            document.getElementById('agenda-progress-message').textContent = String(
+                proceso.mensaje || (agendaLineaId
+                    ? 'La cola está lista para procesar los contactos pendientes.'
+                    : 'Seleccioná una línea y una cuenta Google.')
+            );
+            document.getElementById('agenda-progress-current').textContent =
+                String(proceso.actual || '—');
+
+            document.getElementById('agenda-line-button').disabled = activo;
+            document.getElementById('agenda-account-button').disabled =
+                activo || !agendaLineaId;
+            botonCredenciales.disabled = activo || agendaOAuthEnCurso;
+            botonConectar.disabled =
+                activo || agendaOAuthEnCurso || !credencialesConfiguradas;
+            document.getElementById('btn-agenda-start').disabled =
+                activo || !agendaLineaId || !agendaCuentaId || !credencialesConfiguradas ||
+                (pendientes < 1 && usuariosPendientesJid < 1);
+            document.getElementById('btn-agenda-stop').disabled = !activo || !agendaLineaId;
+            renderizarCandidatosAgendamiento(agendaEstado.candidatos);
+            programarActualizacionAgendamiento();
+        }
+
+        function programarActualizacionAgendamiento() {
+            if (agendaTemporizador) {
+                clearTimeout(agendaTemporizador);
+                agendaTemporizador = null;
+            }
+            const procesoActivo = agendaEstado?.proceso?.activo === true;
+            if (seccionActual !== 'agendamiento' && !procesoActivo) return;
+            agendaTemporizador = setTimeout(() => {
+                agendaTemporizador = null;
+                actualizarAgendamiento(false);
+            }, 2000);
+        }
+
+        async function actualizarAgendamiento(mostrarError = false) {
+            renderizarSelectorLineasAgendamiento();
+            if (agendaActualizando) {
+                agendaActualizacionPendiente = agendaActualizacionPendiente || mostrarError;
+                return;
+            }
+
+            agendaActualizando = true;
+            const secuencia = ++agendaSecuencia;
+            const lineaConsultada = String(agendaLineaId || '');
+            try {
+                const url = lineaConsultada
+                    ? `/agendamiento?${new URLSearchParams({ lineaId: lineaConsultada })}`
+                    : '/agendamiento';
+                const respuesta = await fetch(url);
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo cargar el agendamiento.'
+                );
+                if (
+                    secuencia !== agendaSecuencia ||
+                    lineaConsultada !== String(agendaLineaId || '')
+                ) return;
+                renderizarAgendamiento(data);
+            } catch (error) {
+                document.getElementById('agenda-progress-message').textContent =
+                    error.message || 'No se pudo actualizar el agendamiento.';
+                if (mostrarError) toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                agendaActualizando = false;
+                if (agendaActualizacionPendiente) {
+                    agendaActualizacionPendiente = false;
+                    actualizarAgendamiento(true);
+                } else {
+                    programarActualizacionAgendamiento();
+                }
+            }
+        }
+
+        async function seleccionarCuentaAgendamiento(cuentaId) {
+            if (!agendaLineaId || !cuentaId) return;
+            const boton = document.getElementById('agenda-account-button');
+            boton.disabled = true;
+            try {
+                const respuesta = await fetch(
+                    `/agendamiento/lineas/${encodeURIComponent(agendaLineaId)}/cuenta`,
+                    {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cuentaId })
+                    }
+                );
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo asignar la cuenta Google.'
+                );
+                agendaCuentaId = String(cuentaId);
+                agendaFirmaCuentas = '';
+                cerrarSelectoresAgendamiento();
+                toast(data.mensaje || 'Cuenta asignada a la línea.', 'success');
+                await actualizarAgendamiento(true);
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                boton.disabled = !agendaLineaId ||
+                    agendaEstado?.proceso?.activo === true;
+            }
+        }
+
+        async function guardarCredencialesAgendamiento(archivo) {
+            if (!archivo) return;
+            const boton = document.getElementById('btn-agenda-credentials');
+            boton.disabled = true;
+            try {
+                let credenciales;
+                try {
+                    credenciales = JSON.parse(await archivo.text());
+                } catch {
+                    throw new Error('El archivo de credenciales no contiene un JSON válido.');
+                }
+                if (!credenciales || typeof credenciales !== 'object' || Array.isArray(credenciales)) {
+                    throw new Error('Seleccioná las credenciales JSON de una aplicación de escritorio.');
+                }
+
+                const respuesta = await fetch('/agendamiento/credenciales', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(credenciales)
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudieron guardar las credenciales de Google.'
+                );
+                toast(data.mensaje || 'Credenciales de Google guardadas.', 'success');
+                await actualizarAgendamiento(true);
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                boton.disabled = agendaEstado?.proceso?.activo === true;
+                document.getElementById('agenda-google-credentials-file').value = '';
+            }
+        }
+
+        async function conectarGoogleAgendamiento() {
+            const boton = document.getElementById('btn-agenda-connect-google');
+            agendaOAuthEnCurso = true;
+            boton.disabled = true;
+            boton.setAttribute('aria-busy', 'true');
+            try {
+                const respuesta = await fetch('/agendamiento/google/conectar', {
+                    method: 'POST'
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo iniciar la conexión con Google.'
+                );
+                toast(
+                    data.mensaje || 'Completá la autorización en el navegador.',
+                    'success'
+                );
+                await actualizarAgendamiento(true);
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                agendaOAuthEnCurso = false;
+                boton.removeAttribute('aria-busy');
+                renderizarAgendamiento(agendaEstado || {});
+            }
+        }
+
+        async function cambiarProcesoAgendamiento(accion) {
+            if (!agendaLineaId) {
+                toast('Seleccioná primero una línea.', 'warning');
+                return;
+            }
+            if (accion === 'iniciar' && !agendaCuentaId) {
+                toast('Asigná una cuenta Google a esta línea.', 'warning');
+                return;
+            }
+
+            const boton = document.getElementById(
+                accion === 'iniciar' ? 'btn-agenda-start' : 'btn-agenda-stop'
+            );
+            boton.disabled = true;
+            try {
+                const respuesta = await fetch(
+                    `/agendamiento/lineas/${encodeURIComponent(agendaLineaId)}/${accion}`,
+                    { method: 'POST' }
+                );
+                const data = await exigirRespuesta(
+                    respuesta,
+                    accion === 'iniciar'
+                        ? 'No se pudo iniciar el agendamiento.'
+                        : 'No se pudo detener el agendamiento.'
+                );
+                toast(
+                    data.mensaje || (accion === 'iniciar'
+                        ? 'Agendamiento iniciado.'
+                        : 'Agendamiento detenido.'),
+                    accion === 'iniciar' ? 'success' : 'warning'
+                );
+                await actualizarAgendamiento(true);
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+                renderizarAgendamiento(agendaEstado || {});
+            }
+        }
+
         function lineaListaParaPublicar(linea = {}) {
             if (linea.conexionEnVerificacion === true) return false;
             if (linea.requiereRevisionEnvio === true) return false;
@@ -8952,6 +10234,7 @@
                 sincronizarModalQr(data.lineas);
 
                 cacheLineasSeccion = conectadas;
+                renderizarSelectorLineasAgendamiento();
 
                 idsLineasConectadas = conectadas
                     .filter(lineaListaParaPublicar)
@@ -9909,10 +11192,97 @@
             mostrarSeccion(nombre, { actualizarHash: false });
         });
 
+        document.getElementById('agenda-line-button').addEventListener('click', evento => {
+            evento.stopPropagation();
+            alternarPickerAgendamiento(document.getElementById('agenda-line-picker'));
+        });
+
+        document.getElementById('agenda-account-button').addEventListener('click', evento => {
+            evento.stopPropagation();
+            alternarPickerAgendamiento(document.getElementById('agenda-account-picker'));
+        });
+
+        document.getElementById('agenda-line-menu').addEventListener('click', evento => {
+            const opcion = evento.target.closest('[data-agenda-linea-id]');
+            if (!opcion) return;
+            evento.stopPropagation();
+            const id = String(opcion.dataset.agendaLineaId || '').trim();
+            if (!id) return;
+
+            agendaLineaId = id;
+            agendaCuentaId = null;
+            agendaSecuencia += 1;
+            agendaFirmaLineas = '';
+            agendaFirmaCuentas = '';
+            cerrarSelectoresAgendamiento();
+            renderizarAgendamiento({
+                credencialesConfiguradas: agendaEstado?.credencialesConfiguradas === true,
+                cuentas: agendaEstado?.cuentas || [],
+                lineaId: id,
+                cuentaId: null,
+                resumen: {},
+                proceso: {},
+                candidatos: []
+            });
+            actualizarAgendamiento(true);
+        });
+
+        document.getElementById('agenda-account-menu').addEventListener('click', evento => {
+            const opcion = evento.target.closest('[data-agenda-cuenta-id]');
+            if (!opcion) return;
+            evento.stopPropagation();
+            seleccionarCuentaAgendamiento(
+                String(opcion.dataset.agendaCuentaId || '').trim()
+            );
+        });
+
+        document.getElementById('btn-agenda-credentials').onclick = () => {
+            document.getElementById('agenda-google-credentials-file').click();
+        };
+
+        document.getElementById('agenda-google-credentials-file').addEventListener('change', evento => {
+            guardarCredencialesAgendamiento(evento.target.files?.[0]);
+        });
+
+        document.getElementById('btn-agenda-connect-google').onclick = () => {
+            conectarGoogleAgendamiento();
+        };
+
+        document.getElementById('btn-agenda-refresh').onclick = () => {
+            actualizarAgendamiento(true);
+        };
+
+        document.getElementById('btn-agenda-start').onclick = () => {
+            cambiarProcesoAgendamiento('iniciar');
+        };
+
+        document.getElementById('btn-agenda-stop').onclick = () => {
+            cambiarProcesoAgendamiento('detener');
+        };
+
+        document.addEventListener('click', evento => {
+            if (!evento.target.closest('.agenda-picker')) cerrarSelectoresAgendamiento();
+        });
+
+        document.addEventListener('keydown', evento => {
+            if (evento.key !== 'Escape') return;
+            const abierto = document.querySelector('.agenda-picker.open');
+            if (!abierto) return;
+            cerrarSelectoresAgendamiento();
+            abierto.querySelector('.agenda-picker-button')?.focus({ preventScroll: true });
+        });
+
         document.querySelectorAll('[data-line-view]').forEach(boton => {
             boton.addEventListener('click', () => {
                 vistaLineas = boton.dataset.lineView;
                 renderizarLineasConectadas(cacheLineasSeccion);
+            });
+        });
+
+        document.querySelectorAll('[data-active-status-view]').forEach(boton => {
+            boton.addEventListener('click', () => {
+                vistaEstadosActivos = boton.dataset.activeStatusView;
+                aplicarVistaEstadosActivos();
             });
         });
 
@@ -10185,7 +11555,7 @@
                 claveIdempotencia = iniciarSolicitudIdempotente(claveAccion, boton);
                 if (!claveIdempotencia) return;
 
-                mensaje.textContent = 'Preparando publicación...';
+                mensaje.textContent = 'Optimizando imagen y preparando publicación...';
                 mensaje.style.color = '#fbbf24';
 
                 const respuesta = await fetch('/subir', {
@@ -10232,7 +11602,7 @@
                 claveIdempotencia = iniciarSolicitudIdempotente(claveAccion, boton);
                 if (!claveIdempotencia) return;
 
-                mensaje.textContent = 'Guardando programación...';
+                mensaje.textContent = 'Optimizando imagen y guardando programación...';
                 mensaje.style.color = '#fbbf24';
 
                 const respuesta = await fetch('/programar', {
@@ -10302,7 +11672,9 @@
 
             try {
                 boton.disabled = true;
-                mensaje.textContent = 'Guardando cambios...';
+                mensaje.textContent = archivo
+                    ? 'Optimizando imagen y guardando cambios...'
+                    : 'Guardando cambios...';
                 mensaje.style.color = '#fbbf24';
 
                 const respuesta = await fetch(
@@ -10621,7 +11993,7 @@
             const botonDescargar = document.getElementById('btn-update-download');
             const botonInstalar = document.getElementById('btn-update-install');
 
-            const versionActual = estado.versionActual || '1.0.9';
+            const versionActual = estado.versionActual || '1.1.0';
             version.textContent = `v${versionActual}`;
             if (versionSidebar) versionSidebar.textContent = `AutoStatues ${versionActual}`;
             mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';

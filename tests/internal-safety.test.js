@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const sharp = require('sharp');
 
 const RAIZ_PROYECTO = path.resolve(__dirname, '..');
 const ID_LINEA = '11111111-1111-4111-8111-111111111111';
@@ -277,6 +278,69 @@ test('middleware defensivo de AutoStatues (sin WhatsApp real)', async t => {
             assert.equal(primerIntento.respuesta.status, 400);
             assert.equal(segundoIntento.respuesta.status, 400);
             assert.notEqual(segundoIntento.datos.codigo, 'SOLICITUD_DUPLICADA');
+        });
+
+        await t.test('optimiza y almacena la imagen de una programación', async () => {
+            const imagenOriginal = await sharp({
+                create: {
+                    width: 1600,
+                    height: 3200,
+                    channels: 3,
+                    background: { r: 29, g: 78, b: 216 }
+                }
+            }).png().toBuffer();
+            const formulario = new FormData();
+            formulario.append(
+                'imagen',
+                new Blob([imagenOriginal], { type: 'image/png' }),
+                'estado-grande.png'
+            );
+            formulario.append('texto', 'Prueba de compresión');
+            formulario.append('lineas', JSON.stringify([ID_LINEA]));
+            formulario.append('modoRitmo', 'secuencial');
+            formulario.append('intervaloSegundos', '45');
+            formulario.append('variacionSegundos', '5');
+            formulario.append('lineasPorGrupo', '1');
+            formulario.append('intervaloMinutos', '0');
+            formulario.append('hora', '12:34');
+            formulario.append('diasSemana', JSON.stringify([1]));
+
+            const creacion = await solicitarJSON(
+                servidor.baseURL,
+                '/programar',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Idempotency-Key': 'prueba-compresion-programada-0001'
+                    },
+                    body: formulario
+                }
+            );
+
+            assert.equal(creacion.respuesta.status, 201);
+            const id = creacion.datos.programacion.id;
+            const respuestaImagen = await fetch(
+                `${servidor.baseURL}/programaciones/${id}/imagen`
+            );
+            const imagenOptimizada = Buffer.from(
+                await respuestaImagen.arrayBuffer()
+            );
+            const metadatos = await sharp(imagenOptimizada).metadata();
+
+            assert.equal(respuestaImagen.status, 200);
+            assert.equal(metadatos.format, 'jpeg');
+            assert.equal(metadatos.width, 960);
+            assert.equal(metadatos.height, 1920);
+            assert.ok(imagenOptimizada.length <= Math.floor(1.5 * 1024 * 1024));
+
+            const lista = await solicitarJSON(
+                servidor.baseURL,
+                '/programaciones'
+            );
+            const guardada = lista.datos.programaciones.find(
+                item => item.id === id
+            );
+            assert.equal(guardada.nombreArchivo, 'estado-grande.jpg');
         });
 
         await t.test('Alto total es seguro aunque no haya una publicación activa', async () => {
