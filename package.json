@@ -1,12 +1,13 @@
 {
   "name": "autostatues",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Aplicación de escritorio para gestionar estados de WhatsApp",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "test:internal": "node --test tests/internal-safety.test.js tests/emergency-stop.test.js",
     "build": "electron-builder --win --x64",
     "release": "electron-builder --win --x64 --publish always"
   },

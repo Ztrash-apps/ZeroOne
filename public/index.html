@@ -2417,6 +2417,62 @@
             box-shadow: 0 22px 42px rgba(124,114,255,.30);
         }
 
+        .emergency-stop-button {
+            position: fixed;
+            right: 100px;
+            bottom: 26px;
+            z-index: 21;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            min-width: 142px;
+            height: 62px;
+            padding: 0 18px;
+            border: 1px solid rgba(255,95,115,.34);
+            border-radius: 20px;
+            background: linear-gradient(
+                145deg,
+                rgba(88,27,42,.98),
+                rgba(52,20,34,.98)
+            );
+            color: #ffd6dc;
+            box-shadow: 0 16px 34px rgba(255,54,87,.20);
+            font: inherit;
+            font-weight: 850;
+            cursor: pointer;
+            transition: transform .18s ease, border-color .18s ease,
+                box-shadow .18s ease, opacity .18s ease;
+        }
+
+        .emergency-stop-button[hidden] {
+            display: none;
+        }
+
+        .emergency-stop-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            border-color: rgba(255,120,137,.62);
+            box-shadow: 0 20px 40px rgba(255,54,87,.27);
+        }
+
+        .emergency-stop-button:disabled {
+            cursor: not-allowed;
+            opacity: .52;
+            filter: saturate(.68);
+            box-shadow: 0 10px 24px rgba(255,54,87,.10);
+        }
+
+        .emergency-stop-button[aria-busy="true"] {
+            cursor: wait;
+            opacity: .74;
+            filter: none;
+        }
+
+        .emergency-stop-button .icon {
+            width: 19px;
+            height: 19px;
+        }
+
         .modal {
             background: rgba(5,8,14,.72);
             backdrop-filter: blur(10px);
@@ -2468,6 +2524,11 @@
             .main {
                 padding: 18px 18px 90px;
             }
+
+            .emergency-stop-button {
+                right: 92px;
+                bottom: 18px;
+            }
         }
 
         @media (max-width: 680px) {
@@ -2517,6 +2578,15 @@
             .fab {
                 width: 58px;
                 height: 58px;
+                border-radius: 18px;
+            }
+
+            .emergency-stop-button {
+                right: 88px;
+                bottom: 18px;
+                min-width: 132px;
+                height: 58px;
+                padding: 0 14px;
                 border-radius: 18px;
             }
         }
@@ -4358,9 +4428,28 @@
 
         .connected-health-item span { display: block; color: #66748d; font-size: 9px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase; }
         .connected-health-item strong { display: block; margin-top: 5px; overflow: hidden; color: #aab5c9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-        .connected-line-audience { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .connected-line-audience { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; min-width: 0; }
         .audience-pill { border-color: rgba(124,114,255,.18); background: rgba(124,114,255,.08); color: #b4afff; }
         .audience-syncing { color: #e7bd68; }
+        .audience-activity-summary {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 100%;
+            color: #7f8ba3;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.4;
+        }
+        .audience-activity-summary::before {
+            content: "";
+            flex: 0 0 auto;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #62f5c5, #7c72ff);
+            box-shadow: 0 0 0 3px rgba(124,114,255,.08);
+        }
 
         .connected-line-card .tag-picker { width: 100%; }
         .connected-line-card .tag-picker-button { justify-content: center; width: 100%; }
@@ -4406,6 +4495,7 @@
         .connected-lines-grid.view-small .connected-line-audience { min-width: 0; }
         .connected-lines-grid.view-small .audience-pill { max-width: 100%; }
         .connected-lines-grid.view-small .audience-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .connected-lines-grid.view-small .audience-activity-summary { display: none; }
         .connected-lines-grid.view-small .connected-line-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .connected-lines-grid.view-small .connected-line-actions button { padding: 0 5px; }
 
@@ -4473,6 +4563,876 @@
         }
     </style>
 
+    <style id="publication-pacing-ui">
+        .settings-grid { grid-template-columns: minmax(0, 900px); }
+
+        .pacing-block {
+            display: grid;
+            gap: 13px;
+            padding: 15px;
+            border: 1px solid rgba(255,255,255,.065);
+            border-radius: 17px;
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.09), transparent 42%),
+                rgba(7,11,22,.24);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+        }
+
+        .pacing-block-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+        }
+
+        .pacing-block-header > span { display: grid; gap: 3px; }
+        .pacing-block-header strong { color: #edf0f8; font-size: 13px; }
+        .pacing-block-header small { color: #77849c; font-size: 11px; line-height: 1.45; }
+
+        .pacing-mode-selector {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .pacing-mode-option { position: relative; min-width: 0; cursor: pointer; }
+        .pacing-mode-option > input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .pacing-mode-card {
+            display: grid;
+            grid-template-columns: 38px minmax(0, 1fr) 17px;
+            gap: 10px;
+            align-items: center;
+            min-height: 76px;
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 14px;
+            background: rgba(255,255,255,.025);
+            color: #95a1b8;
+            transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
+        }
+
+        .pacing-mode-option:hover .pacing-mode-card {
+            transform: translateY(-1px);
+            border-color: rgba(124,114,255,.22);
+            background: rgba(124,114,255,.055);
+        }
+
+        .pacing-mode-option > input:focus-visible + .pacing-mode-card {
+            outline: 2px solid rgba(124,114,255,.72);
+            outline-offset: 2px;
+        }
+
+        .pacing-mode-option > input:checked + .pacing-mode-card {
+            border-color: rgba(98,245,197,.26);
+            background: linear-gradient(135deg, rgba(124,114,255,.15), rgba(98,245,197,.075));
+            box-shadow: 0 12px 28px rgba(0,0,0,.14), inset 0 1px 0 rgba(255,255,255,.035);
+            color: #f3f5fb;
+        }
+
+        .pacing-mode-icon {
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            border: 1px solid rgba(124,114,255,.18);
+            border-radius: 12px;
+            background: rgba(124,114,255,.10);
+            color: #aaa4ff;
+        }
+
+        .pacing-mode-icon .icon { width: 17px; height: 17px; }
+        .pacing-mode-option > input:checked + .pacing-mode-card .pacing-mode-icon {
+            border-color: rgba(98,245,197,.20);
+            background: rgba(98,245,197,.10);
+            color: #78f3ce;
+        }
+
+        .pacing-mode-copy { display: grid; gap: 3px; min-width: 0; }
+        .pacing-mode-copy strong { color: inherit; font-size: 12px; font-weight: 850; }
+        .pacing-mode-copy small { color: #748198; font-size: 10px; line-height: 1.35; }
+        .pacing-mode-check {
+            display: grid;
+            place-items: center;
+            width: 17px;
+            height: 17px;
+            border: 1px solid rgba(255,255,255,.13);
+            border-radius: 999px;
+        }
+
+        .pacing-mode-option > input:checked + .pacing-mode-card .pacing-mode-check {
+            border-color: rgba(98,245,197,.45);
+            background: rgba(98,245,197,.13);
+        }
+
+        .pacing-mode-option > input:checked + .pacing-mode-card .pacing-mode-check::after {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 999px;
+            background: #62f5c5;
+            box-shadow: 0 0 8px rgba(98,245,197,.45);
+        }
+
+        .pacing-fields {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 13px;
+            padding-top: 2px;
+        }
+
+        .pacing-fields[hidden] { display: none !important; }
+        .pacing-note {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            padding: 9px 11px;
+            border: 1px solid rgba(98,245,197,.10);
+            border-radius: 11px;
+            background: rgba(98,245,197,.045);
+            color: #8291a8;
+            font-size: 10px;
+            line-height: 1.45;
+        }
+        .pacing-note .icon { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 1px; color: #70e9c3; }
+
+        .pacing-progress-context {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 11px 0 0;
+        }
+        .pacing-progress-context[hidden] { display: none !important; }
+        .pacing-progress-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 28px;
+            padding: 5px 9px;
+            border: 1px solid rgba(255,255,255,.065);
+            border-radius: 999px;
+            background: rgba(255,255,255,.03);
+            color: #9aa7bd;
+            font-size: 10px;
+            font-weight: 720;
+        }
+        .pacing-progress-chip .icon { width: 12px; height: 12px; color: #948dff; }
+        .pacing-progress-chip.error { border-color: rgba(255,95,115,.15); background: rgba(255,95,115,.07); color: #ffabb6; }
+        .pacing-progress-chip.error .icon { color: #ff7f90; }
+
+        .middleware-alert {
+            border-color: rgba(124,114,255,.28);
+            background:
+                radial-gradient(circle at 0 0, rgba(124,114,255,.14), transparent 48%),
+                linear-gradient(135deg, rgba(124,114,255,.09), rgba(255,191,75,.055));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+        }
+        .middleware-alert strong { color: #d7d3ff; }
+        .middleware-alert p { color: #aeb8cc; line-height: 1.5; }
+        .middleware-alert .middleware-countdown {
+            min-width: 112px;
+            justify-content: center;
+            border-color: rgba(255,191,75,.18);
+            background: rgba(255,191,75,.075);
+            color: #ffd991;
+            font-variant-numeric: tabular-nums;
+        }
+        .middleware-alert .middleware-countdown .icon { color: #ffd06f; }
+
+        .publication-review-notice {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 11px;
+            border: 1px solid rgba(255,191,75,.16);
+            border-radius: 11px;
+            background: rgba(255,191,75,.055);
+            color: #b7c0d1;
+            font-size: 10px;
+            line-height: 1.45;
+        }
+        .publication-review-copy {
+            display: flex;
+            align-items: flex-start;
+            gap: 7px;
+            min-width: 0;
+        }
+        .publication-review-copy .icon {
+            flex: 0 0 auto;
+            width: 13px;
+            height: 13px;
+            margin-top: 1px;
+            color: #ffd06f;
+        }
+        .connected-lines-grid.view-list .publication-review-notice {
+            grid-column: 1 / 3;
+            grid-row: 4;
+        }
+        .btn-habilitar-publicaciones {
+            flex: 0 0 auto;
+            min-height: 30px;
+            padding: 0 10px;
+            border: 1px solid rgba(98,245,197,.18);
+            border-radius: 9px;
+            background: rgba(98,245,197,.09);
+            color: #91f8d7;
+            font-size: 10px;
+            font-weight: 820;
+            cursor: pointer;
+        }
+        .btn-habilitar-publicaciones:hover { filter: brightness(1.12); }
+        .btn-habilitar-publicaciones:disabled { cursor: wait; opacity: .62; }
+        .selector-line-publication-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 3px;
+            color: #ffd991;
+            font-size: 10px;
+            line-height: 1.35;
+        }
+        .selector-line-publication-state .icon { width: 11px; height: 11px; }
+        .selector-line:has(.line-check:disabled) { opacity: .7; cursor: not-allowed; }
+        .connected-state-pill.warning {
+            border-color: rgba(255,191,75,.17);
+            background: rgba(255,191,75,.07);
+            color: #ffd991;
+        }
+        .connected-state-pill.warning .icon { color: #ffd06f; }
+        .toast.warning { border-color: rgba(255,191,75,.24); }
+        .toast.warning .icon { color: #ffd06f; }
+
+        @media (max-width: 1250px) {
+            .connected-lines-grid.view-list .publication-review-notice {
+                grid-column: 1 / -1;
+                grid-row: auto;
+            }
+        }
+
+        .history-rhythm { color: #b7b1ff; }
+        .history-status.warning {
+            color: #ffd991;
+            background: rgba(255,200,87,.10);
+        }
+        .result-error-type {
+            display: inline-flex;
+            margin-left: 5px;
+            padding: 3px 6px;
+            border: 1px solid rgba(255,95,115,.14);
+            border-radius: 999px;
+            background: rgba(255,95,115,.07);
+            color: #ff9cab;
+            font-size: 10px;
+            font-weight: 820;
+            letter-spacing: .2px;
+        }
+
+        .history-failures {
+            overflow: hidden;
+            border: 1px solid rgba(255,95,115,.12);
+            border-radius: 12px;
+            background: rgba(255,95,115,.035);
+        }
+
+        .history-failures summary {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 11px;
+            color: #ffadb8;
+            font-size: 11px;
+            font-weight: 800;
+            cursor: pointer;
+            list-style: none;
+        }
+
+        .history-failures summary::-webkit-details-marker { display: none; }
+        .history-failures summary::after {
+            content: "+";
+            margin-left: auto;
+            color: #8e9ab0;
+            font-size: 15px;
+            font-weight: 500;
+        }
+        .history-failures[open] summary::after { content: "−"; }
+
+        .history-failure-list {
+            display: grid;
+            gap: 8px;
+            margin: 0;
+            padding: 0 10px 10px;
+            list-style: none;
+        }
+
+        .history-failure-item {
+            display: grid;
+            gap: 5px;
+            padding: 9px 10px;
+            border: 1px solid rgba(255,255,255,.055);
+            border-radius: 10px;
+            background: rgba(5,8,17,.32);
+        }
+
+        .history-failure-heading,
+        .history-failure-meta {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .history-failure-heading strong { color: #e8ebf4; font-size: 11px; }
+        .history-failure-item > span { color: #a8b2c5; font-size: 11px; line-height: 1.45; }
+        .history-failure-meta small {
+            padding: 2px 6px;
+            border-radius: 999px;
+            background: rgba(255,255,255,.055);
+            color: #9ca8bc;
+            font-size: 10px;
+            font-weight: 750;
+        }
+        .history-failure-meta small.confirmed {
+            background: rgba(255,200,87,.09);
+            color: #ffd991;
+        }
+
+        .reconnect-detail.critical {
+            color: #ff9eac;
+            font-weight: 750;
+        }
+
+        @media (max-width: 900px) {
+            #modal-crear .create-modal-card { overflow-y: auto; }
+            #modal-crear .create-layout {
+                display: block;
+                height: auto;
+                min-height: 0;
+            }
+            #modal-crear .create-image-column {
+                border-right: 0;
+                border-bottom: 1px solid var(--border-soft);
+            }
+            #modal-crear .create-image-column .field {
+                grid-template-rows: auto auto;
+                flex: none;
+            }
+            #modal-crear .create-image-column .upload-zone {
+                height: min(420px, 48dvh);
+                min-height: 260px;
+                max-height: 420px;
+            }
+            #modal-crear .create-info-column {
+                max-height: none;
+                overflow: visible;
+            }
+        }
+
+        @media (max-width: 680px) {
+            .pacing-mode-selector,
+            .pacing-fields { grid-template-columns: 1fr; }
+            .pacing-block { padding: 12px; }
+            .middleware-alert { grid-template-columns: 1fr; }
+            .middleware-alert .middleware-countdown { justify-self: start; }
+            .publication-review-notice { flex-direction: column; }
+        }
+    </style>
+
+    <style id="visual-coherence-1-0-6">
+        :root {
+            color-scheme: dark;
+            --control-height: 44px;
+            --control-radius: 13px;
+            --motion-standard: cubic-bezier(.2, .8, .2, 1);
+        }
+
+        :where(button, input, textarea, [tabindex]):focus-visible {
+            outline: 2px solid rgba(124, 114, 255, .86);
+            outline-offset: 2px;
+        }
+
+        .input,
+        .textarea {
+            border-radius: var(--control-radius);
+            background: linear-gradient(180deg, rgba(19, 24, 42, .96), rgba(15, 19, 34, .96));
+            transition: border-color .18s var(--motion-standard),
+                box-shadow .18s var(--motion-standard),
+                background .18s var(--motion-standard);
+        }
+
+        .input:focus,
+        .textarea:focus {
+            border-color: rgba(124, 114, 255, .58);
+            background: rgba(17, 22, 39, .98);
+            box-shadow: 0 0 0 4px rgba(124, 114, 255, .10),
+                0 0 26px rgba(98, 245, 197, .035);
+        }
+
+        input[type="number"] {
+            appearance: textfield;
+            -moz-appearance: textfield;
+            font-variant-numeric: tabular-nums;
+        }
+
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            margin: 0;
+            -webkit-appearance: none;
+        }
+
+        .check-all input,
+        .line-check {
+            display: grid;
+            flex: 0 0 18px;
+            place-content: center;
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            appearance: none;
+            border: 1px solid rgba(148, 163, 184, .30);
+            border-radius: 6px;
+            background: rgba(6, 10, 20, .52);
+            cursor: pointer;
+            transition: border-color .16s var(--motion-standard),
+                background .16s var(--motion-standard),
+                box-shadow .16s var(--motion-standard),
+                transform .16s var(--motion-standard);
+        }
+
+        .check-all input::after,
+        .line-check::after {
+            content: "";
+            width: 5px;
+            height: 9px;
+            margin-top: -2px;
+            border: solid #08121d;
+            border-width: 0 2px 2px 0;
+            opacity: 0;
+            transform: rotate(45deg) scale(.6);
+            transition: opacity .14s ease, transform .14s var(--motion-standard);
+        }
+
+        .check-all input:checked,
+        .line-check:checked,
+        .check-all input:indeterminate,
+        .line-check:indeterminate {
+            border-color: rgba(98, 245, 197, .72);
+            background: linear-gradient(135deg, #7c72ff, #62f5c5);
+            box-shadow: 0 0 0 3px rgba(98, 245, 197, .07);
+        }
+
+        .check-all input:checked::after,
+        .line-check:checked::after {
+            opacity: 1;
+            transform: rotate(45deg) scale(1);
+        }
+
+        .check-all input:indeterminate::after,
+        .line-check:indeterminate::after {
+            width: 8px;
+            height: 2px;
+            margin: 0;
+            border: 0;
+            background: #08121d;
+            opacity: 1;
+            transform: none;
+        }
+
+        .check-all input:disabled,
+        .line-check:disabled {
+            cursor: not-allowed;
+            opacity: .4;
+        }
+
+        .selector-line:has(.line-check:checked) {
+            border-color: rgba(98, 245, 197, .20);
+            background: linear-gradient(135deg, rgba(124, 114, 255, .09), rgba(98, 245, 197, .055));
+        }
+
+        .all-days-check input:focus-visible + .all-days-box,
+        .weekday-picker input:focus-visible + span,
+        .toggle-field input:focus-visible + .toggle-control {
+            outline: 2px solid rgba(124, 114, 255, .86);
+            outline-offset: 2px;
+        }
+
+        .range-row input[type="range"] {
+            height: 22px;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        .range-row input[type="range"]::-webkit-slider-runnable-track {
+            height: 6px;
+            border: 1px solid rgba(255, 255, 255, .055);
+            border-radius: 999px;
+            background: linear-gradient(90deg, rgba(124, 114, 255, .58), rgba(98, 245, 197, .38));
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, .28);
+        }
+
+        .range-row input[type="range"]::-webkit-slider-thumb {
+            width: 18px;
+            height: 18px;
+            margin-top: -7px;
+            appearance: none;
+            border: 3px solid #15192b;
+            border-radius: 50%;
+            background: #73efd0;
+            box-shadow: 0 0 0 1px rgba(98, 245, 197, .38),
+                0 5px 14px rgba(0, 0, 0, .30);
+        }
+
+        #section-configuracion .settings-grid {
+            width: min(1180px, 100%);
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        #section-configuracion .panel {
+            padding: clamp(20px, 2.2vw, 28px);
+        }
+
+        #section-configuracion .form-grid {
+            gap: 16px;
+        }
+
+        #section-configuracion .settings-control-card,
+        #section-configuracion .settings-toggle-card {
+            align-content: start;
+            padding: 15px 16px;
+            border: 1px solid rgba(255, 255, 255, .06);
+            border-radius: 16px;
+            background: rgba(7, 11, 22, .25);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .02);
+        }
+
+        #section-configuracion .settings-toggle-card {
+            min-height: 74px;
+        }
+
+        #section-configuracion .settings-actions {
+            margin-top: 20px;
+            padding-top: 18px;
+            border-top: 1px solid rgba(255, 255, 255, .055);
+        }
+
+        .line-management-toolbar > .line-clear-button {
+            min-height: var(--control-height);
+        }
+
+        .line-view-button {
+            transition: color .16s var(--motion-standard),
+                background .16s var(--motion-standard),
+                box-shadow .16s var(--motion-standard),
+                transform .16s var(--motion-standard);
+        }
+
+        .line-view-button:active,
+        .line-order-direction:active,
+        .connected-line-actions button:active,
+        .primary-button:active,
+        .secondary-button:active,
+        .small-secondary:active,
+        .small-danger:active {
+            transform: translateY(0) scale(.975);
+        }
+
+        .line-order-direction .icon {
+            width: 16px;
+            height: 16px;
+            color: #958eff;
+            transition: transform .22s var(--motion-standard);
+        }
+
+        .line-order-direction[data-direction="desc"] .icon {
+            transform: rotate(180deg);
+        }
+
+        .connected-lines-grid.view-large {
+            align-items: stretch;
+        }
+
+        .connected-lines-grid.view-large .connected-line-card {
+            height: 100%;
+        }
+
+        .connected-line-card {
+            transition: transform .22s var(--motion-standard),
+                border-color .22s var(--motion-standard),
+                box-shadow .22s var(--motion-standard);
+        }
+
+        .connected-line-card:hover {
+            transform: translate3d(0, -2px, 0);
+        }
+
+        .connected-line-card:has(.tag-picker.open),
+        .line-card:has(.tag-picker.open) {
+            z-index: 30;
+        }
+
+        .connected-line-actions {
+            margin-top: auto;
+        }
+
+        .connected-lines-grid.view-small .connected-line-actions button {
+            min-width: 38px;
+            padding: 0;
+        }
+
+        .connected-lines-grid.view-small {
+            align-items: stretch;
+            grid-auto-rows: 1fr;
+        }
+
+        .connected-lines-grid.view-small .connected-line-card {
+            height: 100%;
+            min-height: 280px;
+        }
+
+        .connected-lines-grid.view-small .connected-line-actions button > span {
+            display: none;
+        }
+
+        .connected-lines-grid.view-small .publication-review-notice {
+            gap: 8px;
+            padding: 9px;
+            flex-direction: column;
+        }
+
+        .connected-lines-grid.view-small .btn-habilitar-publicaciones {
+            width: 100%;
+        }
+
+        .pacing-fields > .field {
+            grid-template-rows: minmax(18px, auto) 50px minmax(32px, auto);
+            align-content: start;
+        }
+
+        .pacing-fields > .field > .input {
+            height: 50px;
+            min-height: 50px;
+        }
+
+        .tag-menu {
+            display: grid;
+            gap: 8px;
+            visibility: hidden;
+            opacity: 0;
+            transform: translateY(-5px) scale(.985);
+            transform-origin: top right;
+            pointer-events: none;
+            transition: opacity .16s ease, transform .16s var(--motion-standard), visibility .16s ease;
+        }
+
+        .tag-picker.open .tag-menu {
+            display: grid;
+            visibility: visible;
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: auto;
+        }
+
+        .modal {
+            display: flex;
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .18s ease, visibility 0s linear .18s;
+        }
+
+        .modal.open {
+            display: flex;
+            visibility: visible;
+            opacity: 1;
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+
+        .modal > .modal-card {
+            opacity: 0;
+            transform: translateY(10px) scale(.985);
+            transition: opacity .19s ease, transform .22s var(--motion-standard);
+        }
+
+        .modal.open > .modal-card {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        .confirmation-modal {
+            z-index: 220;
+        }
+
+        .confirmation-card {
+            width: min(460px, calc(100vw - 32px));
+            overflow: hidden;
+        }
+
+        .confirmation-body {
+            display: grid;
+            justify-items: center;
+            gap: 14px;
+            padding: 26px 25px 23px;
+            text-align: center;
+        }
+
+        .confirmation-icon {
+            display: grid;
+            place-items: center;
+            width: 54px;
+            height: 54px;
+            border: 1px solid rgba(255, 95, 115, .22);
+            border-radius: 17px;
+            background: rgba(255, 95, 115, .10);
+            color: #ff9cab;
+            box-shadow: 0 14px 32px rgba(255, 54, 87, .09);
+        }
+
+        .confirmation-icon .icon {
+            width: 24px;
+            height: 24px;
+        }
+
+        .confirmation-card[data-tone="primary"] .confirmation-icon {
+            border-color: rgba(98, 245, 197, .20);
+            background: rgba(98, 245, 197, .09);
+            color: #7df3d0;
+            box-shadow: 0 14px 32px rgba(98, 245, 197, .07);
+        }
+
+        .confirmation-copy {
+            display: grid;
+            gap: 8px;
+        }
+
+        .confirmation-copy h2 {
+            margin: 0;
+            color: #f4f5fb;
+            font-size: 20px;
+            letter-spacing: -.4px;
+        }
+
+        .confirmation-copy p {
+            margin: 0;
+            color: #96a2b8;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-line;
+        }
+
+        .confirmation-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 9px;
+            width: 100%;
+            margin-top: 4px;
+        }
+
+        .confirmation-confirm.danger {
+            border: 1px solid rgba(255, 95, 115, .26);
+            background: linear-gradient(135deg, rgba(112, 34, 52, .96), rgba(74, 25, 41, .96));
+            color: #ffd3da;
+            box-shadow: 0 12px 26px rgba(255, 54, 87, .12);
+        }
+
+        .confirmation-confirm.danger:hover {
+            border-color: rgba(255, 125, 142, .46);
+            background: linear-gradient(135deg, rgba(132, 39, 59, .98), rgba(88, 28, 47, .98));
+        }
+
+        .toast {
+            overflow: hidden;
+            animation: toastIn .24s var(--motion-standard) both;
+        }
+
+        .toast > span {
+            flex: 1 1 auto;
+            line-height: 1.45;
+        }
+
+        .toast-close {
+            display: grid;
+            flex: 0 0 26px;
+            place-items: center;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #7f8ba3;
+            cursor: pointer;
+        }
+
+        .toast-close:hover {
+            background: rgba(255, 255, 255, .065);
+            color: #eef1f7;
+        }
+
+        .toast-close .icon {
+            width: 13px;
+            height: 13px;
+        }
+
+        .toast.leaving {
+            animation: toastOut .18s ease forwards;
+        }
+
+        @keyframes toastOut {
+            to {
+                opacity: 0;
+                transform: translateX(10px) scale(.98);
+            }
+        }
+
+        .section.active {
+            animation: sectionEnter .22s var(--motion-standard) both;
+        }
+
+        @keyframes sectionEnter {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+        }
+
+        @media (max-width: 760px) {
+            #section-configuracion .settings-control-card {
+                grid-column: 1 / -1;
+            }
+
+            .confirmation-actions {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                scroll-behavior: auto !important;
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .01ms !important;
+            }
+
+            .connected-line-card,
+            .connected-line-card:hover,
+            .program-card:hover,
+            .line-card:hover,
+            button:hover {
+                transform: none !important;
+            }
+        }
+    </style>
+
 </head>
 <body>
 
@@ -4481,6 +5441,7 @@
         <symbol id="i-dashboard" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
         <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
         <symbol id="i-lines" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+        <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 6h12M8 12h9M8 18h6"/><path d="M4 4v16M1.5 17.5 4 20l2.5-2.5"/></symbol>
         <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
         <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -4563,7 +5524,7 @@
             <div class="update-panel">
                 <div class="update-panel-header">
                     <span class="update-panel-title title-with-icon"><svg class="icon"><use href="#i-update"></use></svg><span>Actualizaciones</span></span>
-                    <span id="update-version" class="update-version">v1.0.6</span>
+                    <span id="update-version" class="update-version">v1.0.7</span>
                 </div>
 
                 <p id="update-message" class="update-message">
@@ -4590,7 +5551,7 @@
                 </button>
             </div>
 
-            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.0.6</div>
+            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.0.7</div>
         </aside>
 
         <main class="main">
@@ -4668,7 +5629,7 @@
                 <div class="stats-row">
                     <div class="stat-card">
                         <div class="stat-icon"><svg class="icon"><use href="#i-upload"></use></svg></div>
-                        <span>Publicadas</span>
+                        <span>Procesadas</span>
                         <strong id="progreso-procesadas">0</strong>
                     </div>
                     <div class="stat-card">
@@ -4693,7 +5654,7 @@
 
                     <div class="line-summary">
                         <span>
-                            Grupo:
+                            <span id="progreso-unidad-label">Grupo:</span>
                             <strong id="progreso-grupo">0 de 0</strong>
                         </span>
                         <span>
@@ -4710,11 +5671,43 @@
                         No hay una publicación activa.
                     </p>
 
+                    <div id="progreso-contexto" class="pacing-progress-context" hidden>
+                        <span id="progreso-linea-chip" class="pacing-progress-chip" hidden>
+                            <svg class="icon"><use href="#i-phone"></use></svg>
+                            <span id="progreso-linea-actual"></span>
+                        </span>
+                        <span id="progreso-causa-chip" class="pacing-progress-chip error" hidden>
+                            <svg class="icon"><use href="#i-alert"></use></svg>
+                            <span id="progreso-causa"></span>
+                        </span>
+                    </div>
+
+                    <div
+                        id="alerta-middleware"
+                        class="security-alert middleware-alert"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        <div>
+                            <strong class="title-with-icon">
+                                <svg class="icon"><use href="#i-timer"></use></svg>
+                                <span>Enfriamiento preventivo</span>
+                            </strong>
+                            <p id="detalle-middleware">
+                                Las publicaciones están pausadas temporalmente por seguridad.
+                            </p>
+                        </div>
+                        <span id="contador-middleware" class="pacing-progress-chip middleware-countdown">
+                            <svg class="icon"><use href="#i-clock"></use></svg>
+                            <span>--</span>
+                        </span>
+                    </div>
+
                     <div id="alerta-seguridad" class="security-alert">
                         <div>
                             <strong class="title-with-icon"><svg class="icon"><use href="#i-alert"></use></svg><span>Corte automático de seguridad</span></strong>
                             <p id="detalle-seguridad">
-                                La publicación fue detenida al alcanzar el porcentaje de fallos configurado.
+                                La publicación fue pausada al alcanzar la cantidad de fallos configurada.
                             </p>
                         </div>
 
@@ -4919,8 +5912,8 @@
                             aria-label="Cambiar a orden descendente"
                             title="Cambiar a orden descendente"
                         >
-                            <span class="line-order-direction-icon" aria-hidden="true">⇅</span>
-                            <span id="texto-direccion-lineas">1 → 10</span>
+                            <svg class="icon" aria-hidden="true"><use href="#i-sort"></use></svg>
+                            <span id="texto-direccion-lineas">Sin líneas</span>
                         </button>
 
                         <button
@@ -4960,23 +5953,83 @@
                     <div class="panel">
                         <h2 class="title-with-icon"><svg class="icon"><use href="#i-settings"></use></svg><span>Preferencias de publicación</span></h2>
                         <div class="form-grid">
-                            <div class="field">
-                                <label for="config-lineas-grupo">Líneas por grupo predeterminadas</label>
-                                <input id="config-lineas-grupo" class="input" type="number" min="1" max="50" step="1">
-                            </div>
-                            <div class="field">
-                                <label for="config-intervalo">Minutos entre grupos</label>
-                                <input id="config-intervalo" class="input" type="number" min="0" max="1440" step="0.5">
-                            </div>
-                            <div class="field full">
-                                <label for="config-umbral">Corte de seguridad</label>
-                                <div class="range-row">
-                                    <input id="config-umbral" type="range" min="10" max="100" step="5">
-                                    <strong id="config-umbral-valor">80%</strong>
+                            <div class="field full pacing-block">
+                                <div class="pacing-block-header">
+                                    <span>
+                                        <strong>Ritmo predeterminado</strong>
+                                        <small>Elegí cómo se distribuyen las líneas durante cada publicación.</small>
+                                    </span>
                                 </div>
-                                <span class="help">La publicación se detiene si un grupo alcanza este porcentaje de fallos.</span>
+
+                                <div class="pacing-mode-selector" role="radiogroup" aria-label="Ritmo predeterminado">
+                                    <label class="pacing-mode-option">
+                                        <input type="radio" name="config-modo-ritmo" value="secuencial" checked>
+                                        <span class="pacing-mode-card">
+                                            <span class="pacing-mode-icon"><svg class="icon"><use href="#i-timer"></use></svg></span>
+                                            <span class="pacing-mode-copy">
+                                                <strong>Una línea a la vez</strong>
+                                                <small>Publicación secuencial con espera en segundos.</small>
+                                            </span>
+                                            <span class="pacing-mode-check"></span>
+                                        </span>
+                                    </label>
+                                    <label class="pacing-mode-option">
+                                        <input type="radio" name="config-modo-ritmo" value="grupos">
+                                        <span class="pacing-mode-card">
+                                            <span class="pacing-mode-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                                            <span class="pacing-mode-copy">
+                                                <strong>Publicar por grupos</strong>
+                                                <small>Varias líneas por tanda con espera en minutos.</small>
+                                            </span>
+                                            <span class="pacing-mode-check"></span>
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <div id="config-ritmo-secuencial" class="pacing-fields">
+                                    <div class="field">
+                                        <label for="config-intervalo-segundos">Segundos entre líneas</label>
+                                        <input id="config-intervalo-segundos" class="input" type="number" min="10" max="3600" step="1" value="45">
+                                        <span class="help">Entre 10 segundos y 1 hora.</span>
+                                    </div>
+                                    <div class="field">
+                                        <label for="config-variacion-segundos">Variación adicional</label>
+                                        <input id="config-variacion-segundos" class="input" type="number" min="0" max="30" step="1" value="5">
+                                        <span class="help">Agrega de 0 a este valor para repartir la carga; no puede superar el intervalo base. Usá 0 para desactivarla.</span>
+                                    </div>
+                                    <div class="pacing-note">
+                                        <svg class="icon"><use href="#i-info"></use></svg>
+                                        <span>El intervalo se aplica después de cada línea, antes de continuar con la siguiente.</span>
+                                    </div>
+                                </div>
+
+                                <div id="config-ritmo-grupos" class="pacing-fields" hidden>
+                                    <div class="field">
+                                        <label for="config-lineas-grupo">Líneas por grupo</label>
+                                        <input id="config-lineas-grupo" class="input" type="number" min="1" max="10" step="1" value="10">
+                                        <span class="help">Entre 1 y 10 líneas procesadas por tanda.</span>
+                                    </div>
+                                    <div class="field">
+                                        <label for="config-intervalo">Minutos entre grupos</label>
+                                        <input id="config-intervalo" class="input" type="number" min="0" max="1440" step="0.5" value="5">
+                                        <span class="help">Usá 0 para continuar sin espera.</span>
+                                    </div>
+                                </div>
                             </div>
-                            <label class="toggle-field field full">
+                            <div class="field settings-control-card">
+                                <label for="config-maximo-destinatarios">Destinatarios por estado</label>
+                                <input id="config-maximo-destinatarios" class="input" type="number" min="1" max="1000" step="1" value="1000">
+                                <span class="help">Se crea una base con los 1.000 contactos más recientes. Este límite toma el inicio de esa base: por ejemplo, 500 usa exactamente sus primeros 500.</span>
+                            </div>
+                            <div class="field settings-control-card">
+                                <label for="config-limite-fallos">Corte de seguridad por líneas</label>
+                                <div class="range-row">
+                                    <input id="config-limite-fallos" type="range" min="1" max="10" step="1" value="1">
+                                    <strong id="config-limite-fallos-valor">1 línea</strong>
+                                </div>
+                                <span class="help">Entre 1 y 10 líneas con fallos acumulados. Con 1, el sistema pausa antes de continuar con la siguiente línea; una desconexión crítica detiene toda la publicación inmediatamente.</span>
+                            </div>
+                            <label class="toggle-field field full settings-toggle-card">
                                 <input id="config-notificaciones" type="checkbox">
                                 <span class="toggle-control"></span>
                                 <span>
@@ -5001,9 +6054,22 @@
         </main>
     </div>
 
+    <button
+        type="button"
+        id="btn-alto-total"
+        class="emergency-stop-button"
+        title="Detener toda la publicación"
+        aria-label="Detener toda la publicación"
+        aria-busy="false"
+        disabled
+    >
+        <svg class="icon"><use href="#i-stop"></use></svg>
+        <span>Alto total</span>
+    </button>
+
     <button id="btn-nuevo-estado" class="fab" title="Crear nuevo estado" aria-label="Crear nuevo estado"><svg class="icon"><use href="#i-plus"></use></svg></button>
 
-    <div id="modal-crear" class="modal">
+    <div id="modal-crear" class="modal" aria-hidden="true">
         <div class="modal-card create-modal-card">
             <div class="modal-header">
                 <h2 class="title-with-icon"><svg class="icon"><use href="#i-plus"></use></svg><span>Nuevo estado</span></h2>
@@ -5047,34 +6113,64 @@
                             </div>
 
                             <div class="form-grid">
-                                <div class="field">
-                                    <label for="lineas-por-grupo" class="label-with-icon"><svg class="icon"><use href="#i-layers"></use></svg><span>Líneas por envío</span></label>
-                                    <input
-                                        type="number"
-                                        id="lineas-por-grupo"
-                                        class="input"
-                                        min="1"
-                                        max="50"
-                                        step="1"
-                                        value="10"
-                                        required
-                                    >
-                                    <span class="help">Cantidad de líneas procesadas por grupo.</span>
-                                </div>
+                                <div class="field full pacing-block">
+                                    <div class="pacing-block-header">
+                                        <span>
+                                            <strong>Ritmo de esta publicación</strong>
+                                            <small>Podés usar el ritmo recomendado o conservar el envío por grupos.</small>
+                                        </span>
+                                    </div>
 
-                                <div class="field">
-                                    <label for="intervalo-minutos" class="label-with-icon"><svg class="icon"><use href="#i-timer"></use></svg><span>Minutos entre envíos</span></label>
-                                    <input
-                                        type="number"
-                                        id="intervalo-minutos"
-                                        class="input"
-                                        min="0"
-                                        max="1440"
-                                        step="0.5"
-                                        value="5"
-                                        required
-                                    >
-                                    <span class="help">Usá 0 para continuar sin espera.</span>
+                                    <div class="pacing-mode-selector" role="radiogroup" aria-label="Ritmo de publicación">
+                                        <label class="pacing-mode-option">
+                                            <input type="radio" name="modo-ritmo" value="secuencial" checked>
+                                            <span class="pacing-mode-card">
+                                                <span class="pacing-mode-icon"><svg class="icon"><use href="#i-timer"></use></svg></span>
+                                                <span class="pacing-mode-copy">
+                                                    <strong>Una línea a la vez</strong>
+                                                    <small>Espera en segundos entre cada publicación.</small>
+                                                </span>
+                                                <span class="pacing-mode-check"></span>
+                                            </span>
+                                        </label>
+                                        <label class="pacing-mode-option">
+                                            <input type="radio" name="modo-ritmo" value="grupos">
+                                            <span class="pacing-mode-card">
+                                                <span class="pacing-mode-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                                                <span class="pacing-mode-copy">
+                                                    <strong>Publicar por grupos</strong>
+                                                    <small>Varias líneas por tanda y pausa en minutos.</small>
+                                                </span>
+                                                <span class="pacing-mode-check"></span>
+                                            </span>
+                                        </label>
+                                    </div>
+
+                                    <div id="crear-ritmo-secuencial" class="pacing-fields">
+                                        <div class="field">
+                                            <label for="intervalo-segundos" class="label-with-icon"><svg class="icon"><use href="#i-timer"></use></svg><span>Segundos entre líneas</span></label>
+                                            <input type="number" id="intervalo-segundos" class="input" min="10" max="3600" step="1" value="45">
+                                            <span class="help">Entre 10 segundos y 1 hora.</span>
+                                        </div>
+                                        <div class="field">
+                                            <label for="variacion-segundos" class="label-with-icon"><svg class="icon"><use href="#i-activity"></use></svg><span>Variación adicional</span></label>
+                                            <input type="number" id="variacion-segundos" class="input" min="0" max="30" step="1" value="5">
+                                            <span class="help">Agrega de 0 a este valor para repartir la carga; no puede superar el intervalo base. Usá 0 para desactivarla.</span>
+                                        </div>
+                                    </div>
+
+                                    <div id="crear-ritmo-grupos" class="pacing-fields" hidden>
+                                        <div class="field">
+                                            <label for="lineas-por-grupo" class="label-with-icon"><svg class="icon"><use href="#i-layers"></use></svg><span>Líneas por envío</span></label>
+                                            <input type="number" id="lineas-por-grupo" class="input" min="1" max="10" step="1" value="10">
+                                            <span class="help">Entre 1 y 10 líneas procesadas por grupo.</span>
+                                        </div>
+                                        <div class="field">
+                                            <label for="intervalo-minutos" class="label-with-icon"><svg class="icon"><use href="#i-timer"></use></svg><span>Minutos entre envíos</span></label>
+                                            <input type="number" id="intervalo-minutos" class="input" min="0" max="1440" step="0.5" value="5">
+                                            <span class="help">Usá 0 para continuar sin espera.</span>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div class="field full">
@@ -5128,7 +6224,6 @@
                                 <div class="line-selector-summary">
                                     <label class="check-all">
                                         <input type="checkbox" id="seleccionar-todas">
-                                        <svg class="icon"><use href="#i-check-circle"></use></svg>
                                         <span>Seleccionar todas</span>
                                     </label>
 
@@ -5158,7 +6253,7 @@
         </div>
     </div>
 
-    <div id="modal-editar" class="modal">
+    <div id="modal-editar" class="modal" aria-hidden="true">
         <div class="modal-card" style="width: min(600px, 96vw);">
             <div class="modal-header">
                 <h2 class="title-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Editar estado programado</span></h2>
@@ -5263,7 +6358,7 @@
         </div>
     </div>
 
-    <div id="modal-editar-linea" class="modal">
+    <div id="modal-editar-linea" class="modal" aria-hidden="true">
         <div class="modal-card">
             <div class="modal-header">
                 <h2 class="title-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Editar línea</span></h2>
@@ -5293,6 +6388,38 @@
         </div>
     </div>
 
+    <div
+        id="modal-confirmacion"
+        class="modal confirmation-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="confirmacion-titulo"
+        aria-describedby="confirmacion-mensaje"
+    >
+        <div class="modal-card confirmation-card" data-tone="danger">
+            <div class="confirmation-body">
+                <span class="confirmation-icon" aria-hidden="true">
+                    <svg class="icon"><use id="confirmacion-icono" href="#i-alert"></use></svg>
+                </span>
+                <div class="confirmation-copy">
+                    <h2 id="confirmacion-titulo">Confirmar acción</h2>
+                    <p id="confirmacion-mensaje"></p>
+                </div>
+                <div class="confirmation-actions">
+                    <button type="button" id="confirmacion-cancelar" class="secondary-button">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                        <span>Cancelar</span>
+                    </button>
+                    <button type="button" id="confirmacion-aceptar" class="primary-button confirmation-confirm danger">
+                        <svg class="icon"><use id="confirmacion-aceptar-icono" href="#i-check"></use></svg>
+                        <span id="confirmacion-aceptar-texto">Confirmar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="toast-container" class="toast-container"></div>
 
     <script>
@@ -5313,6 +6440,14 @@
         let direccionLineas = 'asc';
         let lineaEditandoId = null;
         let cargandoEstadosActivos = false;
+        let proteccionMiddlewareActual = null;
+        let publicacionActivaActual = false;
+        let altoTotalSolicitado = false;
+        let secuenciaActualizacionLineas = 0;
+        let resolverConfirmacion = null;
+        let focoPrevioConfirmacion = null;
+
+        const solicitudesIdempotentesEnCurso = new Set();
 
         const titulos = {
             dashboard: 'Panel general',
@@ -5322,6 +6457,84 @@
             historial: 'Historial de publicaciones',
             configuracion: 'Configuración'
         };
+
+        const MODOS_RITMO_VALIDOS = new Set(['secuencial', 'grupos']);
+
+        function normalizarModoRitmo(valor, respaldo = 'secuencial') {
+            return MODOS_RITMO_VALIDOS.has(valor) ? valor : respaldo;
+        }
+
+        function establecerModoRitmo(nombre, valor) {
+            const modo = normalizarModoRitmo(valor);
+            const radios = document.querySelectorAll(`input[name="${nombre}"]`);
+
+            radios.forEach(radio => {
+                radio.checked = radio.value === modo;
+            });
+
+            const prefijo = nombre === 'config-modo-ritmo' ? 'config' : 'crear';
+            const panelSecuencial = document.getElementById(`${prefijo}-ritmo-secuencial`);
+            const panelGrupos = document.getElementById(`${prefijo}-ritmo-grupos`);
+
+            if (panelSecuencial) panelSecuencial.hidden = modo !== 'secuencial';
+            if (panelGrupos) panelGrupos.hidden = modo !== 'grupos';
+
+            return modo;
+        }
+
+        function obtenerModoRitmo(nombre) {
+            const seleccionado = document.querySelector(`input[name="${nombre}"]:checked`);
+            return normalizarModoRitmo(seleccionado?.value);
+        }
+
+        function numeroConfigurado(valor, minimo, maximo, respaldo) {
+            const numero = Number(valor);
+            return Number.isFinite(numero) && numero >= minimo && numero <= maximo
+                ? numero
+                : respaldo;
+        }
+
+        function textoLimiteFallos(valor) {
+            const cantidad = Math.max(1, Math.min(10, Math.round(Number(valor) || 1)));
+            return `${cantidad} ${cantidad === 1 ? 'línea' : 'líneas'}`;
+        }
+
+        function describirRitmoPublicacion(item) {
+            const modo = normalizarModoRitmo(item?.modoRitmo, 'grupos');
+
+            if (modo === 'secuencial') {
+                const segundos = Math.round(numeroConfigurado(
+                    item?.intervaloSegundos,
+                    10,
+                    3600,
+                    45
+                ));
+                const variacion = Math.round(numeroConfigurado(
+                    item?.variacionSegundos,
+                    0,
+                    30,
+                    5
+                ));
+
+                return {
+                    modo,
+                    principal: `Una línea cada ${segundos} s`,
+                    detalle: variacion > 0 ? `Variación adicional: 0–${variacion} s` : ''
+                };
+            }
+
+            const lineasGuardadas = Number(item?.lineasPorGrupo);
+            const lineas = Number.isFinite(lineasGuardadas) && lineasGuardadas >= 1
+                ? Math.round(lineasGuardadas)
+                : 10;
+            const minutos = numeroConfigurado(item?.intervaloMinutos, 0, 1440, 5);
+
+            return {
+                modo,
+                principal: `Grupos de ${lineas}`,
+                detalle: `${minutos} min entre grupos`
+            };
+        }
 
         function escaparHTML(texto) {
             return String(texto ?? '').replace(/[&<>"']/g, caracter => {
@@ -5417,24 +6630,165 @@
             const elemento = document.createElement('div');
 
             elemento.className = `toast ${tipo}`.trim();
+            elemento.setAttribute('role', tipo === 'error' ? 'alert' : 'status');
+            elemento.setAttribute('aria-live', tipo === 'error' ? 'assertive' : 'polite');
             const icono = tipo === 'success'
                 ? 'check-circle'
                 : tipo === 'error'
                     ? 'x-circle'
-                    : 'info';
-            elemento.innerHTML = `${iconoSVG(icono)}<span>${escaparHTML(mensaje)}</span>`;
+                    : tipo === 'warning'
+                        ? 'alert'
+                        : 'info';
+            elemento.innerHTML = `
+                ${iconoSVG(icono)}
+                <span>${escaparHTML(mensaje)}</span>
+                <button type="button" class="toast-close" aria-label="Cerrar aviso">
+                    ${iconoSVG('x')}
+                </button>
+            `;
             contenedor.appendChild(elemento);
 
-            setTimeout(() => elemento.remove(), 4200);
+            let retirando = false;
+            const retirar = () => {
+                if (retirando || !elemento.isConnected) return;
+                retirando = true;
+                elemento.classList.add('leaving');
+                elemento.addEventListener('animationend', () => elemento.remove(), {
+                    once: true
+                });
+                setTimeout(() => elemento.remove(), 260);
+            };
+
+            elemento.querySelector('.toast-close').onclick = retirar;
+            setTimeout(retirar, 4200);
         }
 
         function abrirModal(id) {
-            document.getElementById(id).classList.add('open');
+            const modal = document.getElementById(id);
+            if (!modal) return;
+            if (!modal.classList.contains('open')) {
+                modal.__focoPrevio = document.activeElement instanceof HTMLElement
+                    ? document.activeElement
+                    : null;
+            }
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
         }
 
         function cerrarModal(id) {
-            document.getElementById(id).classList.remove('open');
+            const modal = document.getElementById(id);
+            if (!modal) return;
+            const focoPrevio = modal.__focoPrevio;
+            if (modal.contains(document.activeElement)) {
+                document.activeElement.blur();
+            }
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+            modal.__focoPrevio = null;
+
+            if (id !== 'modal-confirmacion') {
+                requestAnimationFrame(() => {
+                    if (focoPrevio?.isConnected && !focoPrevio.matches(':disabled')) {
+                        focoPrevio.focus({ preventScroll: true });
+                    }
+                });
+            }
         }
+
+        function solicitarConfirmacion({
+            titulo = 'Confirmar acción',
+            mensaje = '',
+            textoConfirmar = 'Confirmar',
+            tono = 'danger',
+            icono = 'alert'
+        } = {}) {
+            if (resolverConfirmacion) return Promise.resolve(false);
+
+            const modal = document.getElementById('modal-confirmacion');
+            const tarjeta = modal.querySelector('.confirmation-card');
+            const botonConfirmar = document.getElementById('confirmacion-aceptar');
+
+            focoPrevioConfirmacion = document.activeElement instanceof HTMLElement
+                ? document.activeElement
+                : null;
+            tarjeta.dataset.tone = tono === 'primary' ? 'primary' : 'danger';
+            document.getElementById('confirmacion-titulo').textContent = titulo;
+            document.getElementById('confirmacion-mensaje').textContent = mensaje;
+            document.getElementById('confirmacion-aceptar-texto').textContent = textoConfirmar;
+            document.getElementById('confirmacion-icono').setAttribute('href', `#i-${icono}`);
+            document.getElementById('confirmacion-aceptar-icono').setAttribute(
+                'href',
+                tono === 'primary' ? '#i-check' : `#i-${icono}`
+            );
+            botonConfirmar.classList.toggle('danger', tono !== 'primary');
+            botonConfirmar.classList.add('primary-button');
+
+            abrirModal('modal-confirmacion');
+            requestAnimationFrame(() => {
+                document.getElementById('confirmacion-cancelar').focus({
+                    preventScroll: true
+                });
+            });
+
+            return new Promise(resolve => {
+                resolverConfirmacion = resolve;
+            });
+        }
+
+        function resolverModalConfirmacion(resultado) {
+            if (!resolverConfirmacion) return;
+
+            const resolver = resolverConfirmacion;
+            const foco = focoPrevioConfirmacion;
+            resolverConfirmacion = null;
+            focoPrevioConfirmacion = null;
+            cerrarModal('modal-confirmacion');
+            resolver(resultado);
+
+            requestAnimationFrame(() => {
+                if (!resultado && foco?.isConnected && !foco.matches(':disabled')) {
+                    foco.focus({ preventScroll: true });
+                }
+            });
+        }
+
+        document.getElementById('confirmacion-cancelar').onclick = () => {
+            resolverModalConfirmacion(false);
+        };
+
+        document.getElementById('confirmacion-aceptar').onclick = () => {
+            resolverModalConfirmacion(true);
+        };
+
+        document.getElementById('modal-confirmacion').addEventListener('click', evento => {
+            if (evento.target.id === 'modal-confirmacion') {
+                resolverModalConfirmacion(false);
+            }
+        });
+
+        document.addEventListener('keydown', evento => {
+            const modal = document.getElementById('modal-confirmacion');
+            if (!modal.classList.contains('open')) return;
+
+            if (evento.key === 'Escape') {
+                evento.preventDefault();
+                resolverModalConfirmacion(false);
+                return;
+            }
+
+            if (evento.key !== 'Tab') return;
+            const controles = [
+                document.getElementById('confirmacion-cancelar'),
+                document.getElementById('confirmacion-aceptar')
+            ];
+            const indiceActual = controles.indexOf(document.activeElement);
+            const siguiente = evento.shiftKey
+                ? (indiceActual <= 0 ? controles.length - 1 : indiceActual - 1)
+                : (indiceActual >= controles.length - 1 ? 0 : indiceActual + 1);
+
+            evento.preventDefault();
+            controles[siguiente].focus({ preventScroll: true });
+        });
 
         function actualizarCantidadSeleccionadas() {
             document.getElementById('cantidad-lineas-seleccionadas').textContent =
@@ -5509,7 +6863,8 @@
                 'error',
                 'sesion_cerrada',
                 'desconectado',
-                'reconectando'
+                'reconectando',
+                'requiere_intervencion'
             ].includes(estado)) return 'error';
             return '';
         }
@@ -5521,6 +6876,7 @@
                 conectado: ['check-circle', 'Conectado'],
                 desconectado: ['x-circle', 'Desconectado'],
                 reconectando: ['refresh', 'Desconectado · reconectando'],
+                requiere_intervencion: ['alert', 'Intervención manual requerida'],
                 sesion_cerrada: ['alert', 'Sesión cerrada'],
                 error: ['x-circle', 'Error']
             };
@@ -5532,9 +6888,10 @@
 
 
         function normalizarEtiquetaVisual(etiqueta) {
-            return ['activa', 'indefinida', 'caida', 'reposo'].includes(etiqueta)
-                ? etiqueta
-                : 'activa';
+            const valor = String(etiqueta || '').trim().toLowerCase();
+            return ['activa', 'indefinida', 'caida', 'reposo'].includes(valor)
+                ? valor
+                : 'indefinida';
         }
 
         function nombreEtiqueta(etiqueta) {
@@ -5671,13 +7028,17 @@
             const textoDireccion = document.getElementById('texto-direccion-lineas');
             const esAscendente = direccionLineas === 'asc';
             const esAlfabetico = ordenLineas === 'alfabetico';
+            const totalLineas = cacheLineasSeccion.length;
             const etiqueta = esAlfabetico
                 ? (esAscendente ? 'A → Z' : 'Z → A')
-                : (esAscendente ? '1 → 10' : '10 → 1');
+                : totalLineas
+                    ? (esAscendente ? `1 → ${totalLineas}` : `${totalLineas} → 1`)
+                    : 'Sin líneas';
             const siguiente = esAscendente ? 'descendente' : 'ascendente';
 
             if (textoDireccion) textoDireccion.textContent = etiqueta;
             if (botonDireccion) {
+                botonDireccion.dataset.direction = direccionLineas;
                 botonDireccion.title = `Cambiar a orden ${siguiente}`;
                 botonDireccion.setAttribute('aria-label', `Cambiar a orden ${siguiente}`);
             }
@@ -5706,17 +7067,90 @@
             const visibles = filtradas;
 
             contenedor.className = `connected-lines-grid view-${vistaLineas}`;
-            contenedor.innerHTML = '';
+            const tarjetasExistentes = new Map(
+                Array.from(
+                    contenedor.querySelectorAll('.connected-line-card[data-line-id]')
+                ).map(tarjeta => [tarjeta.dataset.lineId, tarjeta])
+            );
+            const idsVisibles = new Set();
+            let indiceTarjeta = 0;
+
+            if (visibles.length) {
+                contenedor.querySelector('.connected-lines-empty')?.remove();
+            }
 
             for (const linea of visibles) {
-                const tarjeta = document.createElement('article');
+                const idLinea = String(linea.id);
+                idsVisibles.add(idLinea);
+                const tarjeta = tarjetasExistentes.get(idLinea) ||
+                    document.createElement('article');
                 tarjeta.className = 'connected-line-card';
+                tarjeta.dataset.lineId = idLinea;
                 const audienciaLista = Boolean(linea.audienciaEstadosLista);
+                const audienciaSeleccionada = Number(linea.destinatariosEstado) || 0;
+                const audienciaTotal = Number(
+                    linea.destinatariosEstadoTotales ?? linea.destinatariosEstado
+                ) || 0;
+                const audienciaBase = Number(
+                    linea.destinatariosEstadoBase ??
+                    Math.min(audienciaTotal, 1000)
+                ) || 0;
                 const audiencia = audienciaLista
-                    ? `${Number(linea.destinatariosEstado) || 0} contacto(s)`
+                    ? audienciaBase > audienciaSeleccionada
+                        ? `${audienciaSeleccionada.toLocaleString('es')} de ${audienciaBase.toLocaleString('es')} recientes`
+                        : `${audienciaSeleccionada.toLocaleString('es')} contacto(s)`
                     : 'Sincronizando...';
+                const priorizacionAudiencia = linea.priorizacionAudiencia || {};
+                const actividadConocida = Math.max(
+                    0,
+                    Number(priorizacionAudiencia.actividadConocida) || 0
+                );
+                const actividadDesconocida = Math.max(
+                    0,
+                    Number(priorizacionAudiencia.actividadDesconocida) || 0
+                );
+                const muestraPrioridadActividad = audienciaLista &&
+                    priorizacionAudiencia.criterio === 'actividad_reciente';
+                const actualizandoActividad =
+                    priorizacionAudiencia.sincronizandoActividad === true;
+                const resumenActividad = muestraPrioridadActividad
+                    ? `${actualizandoActividad ? 'Actualizando actividad' : 'Más recientes primero'} · ${actividadConocida.toLocaleString('es')} con actividad conocida · ${actividadDesconocida.toLocaleString('es')} sin datos`
+                    : '';
+                const detalleBase = audienciaLista && audienciaTotal > audienciaBase
+                    ? `Base reciente: ${audienciaBase.toLocaleString('es')} de ${audienciaTotal.toLocaleString('es')} contactos disponibles`
+                    : '';
+                const detalleAudiencia = [
+                    linea.ultimoError,
+                    detalleBase,
+                    resumenActividad
+                ]
+                    .filter(Boolean)
+                    .join(' · ');
+                const enVerificacion = linea.conexionEnVerificacion === true;
+                const requiereRevision = linea.requiereRevisionEnvio === true;
+                const listaParaPublicar = lineaListaParaPublicar(linea);
+                const estadoPublicacion = requiereRevision
+                    ? { icono: 'alert', texto: 'Publicaciones pausadas', clase: 'warning' }
+                    : enVerificacion
+                        ? { icono: 'loader', texto: 'Verificando conexión', clase: 'warning', iconoClase: 'spin' }
+                        : listaParaPublicar
+                            ? { icono: 'check-circle', texto: 'Lista para publicar', clase: '' }
+                            : { icono: 'pause', texto: 'Publicación no disponible', clase: 'warning' };
+                const avisoPublicacion = !listaParaPublicar
+                    ? `
+                        <div class="publication-review-notice">
+                            <span class="publication-review-copy">
+                                ${iconoSVG(requiereRevision ? 'alert' : enVerificacion ? 'loader' : 'info', enVerificacion ? 'spin' : '')}
+                                <span>${escaparHTML(motivoLineaNoPublicable(linea))}</span>
+                            </span>
+                            ${requiereRevision
+                                ? `<button type="button" class="btn-habilitar-publicaciones" data-id="${linea.id}">Revisé la línea</button>`
+                                : ''}
+                        </div>
+                    `
+                    : '';
 
-                tarjeta.innerHTML = `
+                const contenidoTarjeta = `
                     <div class="connected-line-card-header">
                         <span class="connected-line-avatar">${escaparHTML(obtenerAvatarLinea(linea))}</span>
                         <div class="connected-line-identity">
@@ -5733,7 +7167,10 @@
                     </div>
 
                     <div class="connected-line-state-row">
-                        <span class="connected-state-pill">${iconoSVG('check-circle')}<span>Conectado</span></span>
+                        <span class="connected-state-pill ${estadoPublicacion.clase}">
+                            ${iconoSVG(estadoPublicacion.icono, estadoPublicacion.iconoClase || '')}
+                            <span>${estadoPublicacion.texto}</span>
+                        </span>
                         <span class="connected-original-order">Conexión original #${Number(linea.ordenOriginal) || 0}</span>
                     </div>
 
@@ -5748,12 +7185,17 @@
                         </div>
                     </div>
 
-                    <div class="connected-line-audience" ${linea.ultimoError ? `title="${escaparHTML(linea.ultimoError)}"` : ''}>
+                    <div class="connected-line-audience" ${detalleAudiencia ? `title="${escaparHTML(detalleAudiencia)}"` : ''}>
                         <span class="audience-pill ${audienciaLista ? '' : 'audience-syncing'}">
                             ${iconoSVG(audienciaLista ? 'users' : 'loader', audienciaLista ? '' : 'spin')}
                             <span>Audiencia: ${escaparHTML(audiencia)}</span>
                         </span>
+                        ${muestraPrioridadActividad
+                            ? `<span class="audience-activity-summary">${escaparHTML(resumenActividad)}</span>`
+                            : ''}
                     </div>
+
+                    ${avisoPublicacion}
 
                     ${selectorEtiquetaHTML(linea)}
 
@@ -5772,24 +7214,45 @@
                         </button>
                     </div>
                 `;
-                contenedor.appendChild(tarjeta);
+
+                if (tarjeta.__contenidoRenderizado !== contenidoTarjeta) {
+                    tarjeta.innerHTML = contenidoTarjeta;
+                    tarjeta.__contenidoRenderizado = contenidoTarjeta;
+                }
+
+                const posicionActual = contenedor.children[indiceTarjeta];
+                if (posicionActual !== tarjeta) {
+                    contenedor.insertBefore(tarjeta, posicionActual || null);
+                }
+                indiceTarjeta += 1;
             }
 
+            tarjetasExistentes.forEach((tarjeta, idLinea) => {
+                if (!idsVisibles.has(idLinea)) tarjeta.remove();
+            });
+
             if (!visibles.length) {
-                contenedor.innerHTML = `
-                    <div class="empty-state" style="grid-column:1/-1;">
+                let estadoVacio = contenedor.querySelector('.connected-lines-empty');
+                if (!estadoVacio) {
+                    estadoVacio = document.createElement('div');
+                    estadoVacio.className = 'empty-state connected-lines-empty';
+                    estadoVacio.style.gridColumn = '1 / -1';
+                    contenedor.appendChild(estadoVacio);
+                }
+
+                estadoVacio.innerHTML = `
                         <div class="empty-state-content">
                             <span class="empty-state-icon">${iconoSVG('lines')}</span>
                             <strong>${busqueda ? 'No se encontraron líneas' : 'No hay líneas conectadas'}</strong>
                             <span>${busqueda ? 'Probá con otro nombre o número.' : 'Las líneas aparecerán acá cuando terminen de vincularse.'}</span>
                         </div>
-                    </div>
                 `;
             }
 
+            const listasParaPublicar = cacheLineasSeccion.filter(lineaListaParaPublicar).length;
             document.getElementById('resultado-busqueda-seccion').textContent = busqueda
                 ? `${filtradas.length} resultado(s) de ${cacheLineasSeccion.length}.`
-                : `${cacheLineasSeccion.length} línea(s) conectada(s).`;
+                : `${cacheLineasSeccion.length} conectada(s) · ${listasParaPublicar} lista(s) para publicar.`;
             actualizarControlesVistaLineas();
         }
 
@@ -5978,7 +7441,14 @@
         }
 
         async function eliminarEstadoActivo(id) {
-            if (!id || !confirm('¿Querés eliminar este grupo de estados de todas sus líneas?')) return;
+            if (!id) return;
+            const confirmado = await solicitarConfirmacion({
+                titulo: 'Eliminar grupo de estados',
+                mensaje: 'Se eliminarán los estados de todas las líneas incluidas en este grupo. Esta acción no se puede deshacer.',
+                textoConfirmar: 'Eliminar grupo',
+                icono: 'trash'
+            });
+            if (!confirmado) return;
 
             try {
                 const respuesta = await fetch(`/estados-activos/${encodeURIComponent(id)}`, {
@@ -5997,6 +7467,45 @@
         }
 
         async function manejarClickLineasConectadas(evento) {
+            const botonHabilitar = evento.target.closest('.btn-habilitar-publicaciones');
+            if (botonHabilitar) {
+                const id = botonHabilitar.dataset.id;
+                const confirmado = await solicitarConfirmacion({
+                    titulo: 'Habilitar publicaciones',
+                    mensaje: 'Confirmá que revisaste la línea y que su conexión funciona correctamente antes de volver a publicar.',
+                    textoConfirmar: 'Habilitar línea',
+                    tono: 'primary',
+                    icono: 'check-circle'
+                });
+                if (!confirmado) return;
+
+                const contenidoOriginal = botonHabilitar.innerHTML;
+                botonHabilitar.disabled = true;
+                botonHabilitar.innerHTML = `${iconoSVG('loader', 'spin')}<span>Habilitando...</span>`;
+
+                try {
+                    const respuesta = await fetch(
+                        `/lineas/${encodeURIComponent(id)}/habilitar-publicaciones`,
+                        {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ confirmar: true })
+                        }
+                    );
+                    const data = await exigirRespuesta(
+                        respuesta,
+                        'No se pudieron habilitar las publicaciones de esta línea.'
+                    );
+                    toast(data.mensaje || 'Línea habilitada para publicar.', 'success');
+                    actualizarLineas();
+                } catch (error) {
+                    botonHabilitar.disabled = false;
+                    botonHabilitar.innerHTML = contenidoOriginal;
+                    toast(error.message, tipoToastErrorHTTP(error));
+                }
+                return;
+            }
+
             const botonEditar = evento.target.closest('.btn-editar-linea');
             if (botonEditar) {
                 abrirEditorLinea(botonEditar.dataset.id);
@@ -6063,6 +7572,8 @@
                     }
 
                     toast(data.mensaje || 'Reconexión iniciada.', 'success');
+                    const tarjeta = botonReconectar.closest('.connected-line-card');
+                    if (tarjeta) tarjeta.__contenidoRenderizado = null;
                     setTimeout(actualizarLineas, 700);
                 } catch (error) {
                     botonReconectar.disabled = false;
@@ -6076,7 +7587,13 @@
             if (!botonEliminar) return;
 
             const id = botonEliminar.dataset.id;
-            if (!confirm('¿Querés eliminar esta línea y cerrar su sesión?')) return;
+            const confirmado = await solicitarConfirmacion({
+                titulo: 'Eliminar línea',
+                mensaje: 'La línea se quitará de AutoStatues y su sesión se cerrará. Para usarla otra vez tendrás que vincularla nuevamente.',
+                textoConfirmar: 'Eliminar línea',
+                icono: 'trash'
+            });
+            if (!confirmado) return;
 
             try {
                 botonEliminar.disabled = true;
@@ -6118,19 +7635,244 @@
             }
         }
 
+        function crearClaveIdempotencia(accion) {
+            const identificador = globalThis.crypto?.randomUUID?.() ||
+                `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+            return `autostatues-${accion}-${identificador}`;
+        }
+
+        function iniciarSolicitudIdempotente(claveAccion, boton) {
+            if (solicitudesIdempotentesEnCurso.has(claveAccion)) return null;
+            solicitudesIdempotentesEnCurso.add(claveAccion);
+            if (boton) boton.disabled = true;
+            actualizarAccionesPublicacion();
+            return crearClaveIdempotencia(claveAccion.replace(/[^a-z0-9_-]+/gi, '-'));
+        }
+
+        function finalizarSolicitudIdempotente(claveAccion, boton) {
+            solicitudesIdempotentesEnCurso.delete(claveAccion);
+            if (boton) boton.disabled = false;
+            actualizarAccionesPublicacion();
+        }
+
+        function crearErrorHTTP(respuesta, data, respaldo) {
+            if (
+                respuesta.status === 429 &&
+                data?.codigo === 'MIDDLEWARE_ENFRIAMIENTO'
+            ) {
+                actualizarProteccionMiddleware(data.proteccionMiddleware);
+            }
+            if (
+                respuesta.status === 409 &&
+                data?.codigo === 'PUBLICACION_OCUPADA'
+            ) {
+                publicacionActivaActual = true;
+                actualizarAccionesPublicacion();
+            }
+
+            const error = new Error(
+                data?.error || data?.mensaje || respaldo || 'No se pudo completar la solicitud.'
+            );
+            error.httpStatus = respuesta.status;
+            error.codigo = data?.codigo || null;
+            error.data = data;
+            return error;
+        }
+
+        async function exigirRespuesta(respuesta, respaldo) {
+            const data = await leerRespuesta(respuesta);
+            if (!respuesta.ok) throw crearErrorHTTP(respuesta, data, respaldo);
+            return data;
+        }
+
+        function tipoToastErrorHTTP(error) {
+            return [409, 429].includes(Number(error?.httpStatus))
+                ? 'warning'
+                : 'error';
+        }
+
+        function lineaListaParaPublicar(linea = {}) {
+            if (linea.conexionEnVerificacion === true) return false;
+            if (linea.requiereRevisionEnvio === true) return false;
+            if (normalizarEtiquetaVisual(linea.etiqueta) !== 'activa') return false;
+            return linea.listaParaPublicar !== false;
+        }
+
+        function motivoLineaNoPublicable(linea = {}) {
+            if (linea.requiereRevisionEnvio === true) {
+                return linea.motivoRevisionEnvio ||
+                    'Requiere revisión antes de volver a publicar.';
+            }
+            if (linea.conexionEnVerificacion === true) {
+                return linea.motivoBloqueoPublicacion ||
+                    'La conexión todavía se está verificando.';
+            }
+            const etiqueta = normalizarEtiquetaVisual(linea.etiqueta);
+            if (etiqueta !== 'activa') {
+                return `La etiqueta ${nombreEtiqueta(etiqueta).toLocaleLowerCase('es')} bloquea la publicación de estados.`;
+            }
+            if (linea.listaParaPublicar === false) {
+                return linea.motivoBloqueoPublicacion ||
+                    'La línea no está habilitada para publicar.';
+            }
+            return '';
+        }
+
+        function segundosRestantesProteccion(proteccion = {}) {
+            const informados = Number(proteccion.segundosRestantes);
+            const bloqueadaHastaMs = Date.parse(proteccion.bloqueadaHasta || '');
+            const calculados = Number.isFinite(bloqueadaHastaMs)
+                ? Math.max(0, Math.ceil((bloqueadaHastaMs - Date.now()) / 1000))
+                : 0;
+
+            if (Number.isFinite(informados) && informados >= 0) {
+                return Number.isFinite(bloqueadaHastaMs)
+                    ? Math.max(Math.floor(informados), calculados)
+                    : Math.floor(informados);
+            }
+
+            return calculados;
+        }
+
+        function proteccionMiddlewareActiva() {
+            return proteccionMiddlewareActual?.activa === true &&
+                Number(proteccionMiddlewareActual.segundosRestantes) > 0;
+        }
+
+        function actualizarAccionesPublicacion() {
+            const bloqueada = proteccionMiddlewareActiva();
+            const botonPublicar = document.getElementById('btn-publicar');
+            const botonAltoTotal = document.getElementById('btn-alto-total');
+
+            if (botonPublicar) {
+                botonPublicar.disabled = publicacionActivaActual ||
+                    bloqueada ||
+                    solicitudesIdempotentesEnCurso.has('subir');
+                botonPublicar.title = bloqueada
+                    ? 'Esperá a que termine el enfriamiento preventivo.'
+                    : '';
+            }
+
+            if (botonAltoTotal) {
+                const icono = botonAltoTotal.querySelector('.icon');
+                const usoIcono = botonAltoTotal.querySelector('use');
+                const texto = botonAltoTotal.querySelector('span');
+
+                botonAltoTotal.hidden = false;
+                botonAltoTotal.removeAttribute('aria-hidden');
+                botonAltoTotal.disabled = !publicacionActivaActual ||
+                    altoTotalSolicitado;
+                botonAltoTotal.setAttribute(
+                    'aria-busy',
+                    altoTotalSolicitado ? 'true' : 'false'
+                );
+                botonAltoTotal.title = altoTotalSolicitado
+                    ? 'Deteniendo la publicación...'
+                    : publicacionActivaActual
+                        ? 'Detener toda la publicación'
+                        : 'No hay una publicación en curso';
+                botonAltoTotal.setAttribute(
+                    'aria-label',
+                    botonAltoTotal.title
+                );
+                icono?.classList.toggle('spin', altoTotalSolicitado);
+                usoIcono?.setAttribute(
+                    'href',
+                    altoTotalSolicitado ? '#i-loader' : '#i-stop'
+                );
+                if (texto) {
+                    texto.textContent = altoTotalSolicitado
+                        ? 'Deteniendo...'
+                        : 'Alto total';
+                }
+            }
+
+            document.querySelectorAll('.btn-ejecutar-programacion').forEach(boton => {
+                const clave = `ejecutar:${boton.dataset.id}`;
+                const deshabilitadaBase = boton.dataset.disabledBase === 'true';
+                boton.disabled = deshabilitadaBase ||
+                    publicacionActivaActual ||
+                    bloqueada ||
+                    solicitudesIdempotentesEnCurso.has(clave);
+                boton.title = bloqueada
+                    ? 'Ejecución pausada durante el enfriamiento preventivo.'
+                    : publicacionActivaActual
+                        ? 'Ya existe una publicación en curso.'
+                        : '';
+            });
+
+            document.querySelectorAll('.btn-reintentar-historial').forEach(boton => {
+                const clave = `reintentar:${boton.dataset.id}`;
+                const deshabilitadaBase = boton.dataset.disabledBase === 'true';
+                boton.disabled = deshabilitadaBase ||
+                    publicacionActivaActual ||
+                    bloqueada ||
+                    solicitudesIdempotentesEnCurso.has(clave);
+                boton.title = bloqueada
+                    ? 'Reintento pausado durante el enfriamiento preventivo.'
+                    : publicacionActivaActual
+                        ? 'Ya existe una publicación en curso.'
+                        : '';
+            });
+        }
+
+        function actualizarProteccionMiddleware(proteccion = {}) {
+            const yaEstabaActiva = proteccionMiddlewareActiva();
+            const segundosRestantes = segundosRestantesProteccion(proteccion);
+            const activa = proteccion?.activa === true && segundosRestantes > 0;
+            const panel = document.getElementById('alerta-middleware');
+            const detalle = document.getElementById('detalle-middleware');
+            const contador = document.querySelector('#contador-middleware > span');
+
+            proteccionMiddlewareActual = activa
+                ? { ...proteccion, activa: true, segundosRestantes }
+                : null;
+
+            if (panel) panel.classList.toggle('visible', activa);
+
+            if (activa) {
+                const linea = typeof proteccion.linea === 'object'
+                    ? String(proteccion.linea?.nombre || '').trim()
+                    : String(proteccion.linea || '').trim();
+                const partes = [
+                    String(proteccion.motivo || 'Las publicaciones están pausadas temporalmente por seguridad.').trim(),
+                    linea ? `Línea: ${linea}.` : '',
+                    proteccion.codigo ? `Código: ${proteccion.codigo}.` : ''
+                ].filter(Boolean);
+
+                if (detalle) detalle.textContent = partes.join(' ');
+                if (contador) {
+                    contador.textContent = `Disponible en ${formatearTiempo(segundosRestantes)}`;
+                }
+                if (!yaEstabaActiva) {
+                    toast(
+                        `Enfriamiento preventivo activo · ${formatearTiempo(segundosRestantes)}.`,
+                        'warning'
+                    );
+                }
+            } else {
+                if (detalle) {
+                    detalle.textContent = 'Las publicaciones están disponibles.';
+                }
+                if (contador) contador.textContent = '--';
+            }
+
+            actualizarAccionesPublicacion();
+        }
+
         async function actualizarLineas() {
+            const secuencia = ++secuenciaActualizacionLineas;
+
             try {
                 const respuesta = await fetch('/estado');
                 const data = await respuesta.json();
+                if (secuencia !== secuenciaActualizacionLineas) return;
 
                 const selector = document.getElementById('lista-lineas');
-                const contenedorConectadas =
-                    document.getElementById('lista-lineas-conectadas');
                 const contenedorPendientes =
                     document.getElementById('lista-lineas-pendientes');
 
                 selector.innerHTML = '';
-                contenedorConectadas.innerHTML = '';
                 contenedorPendientes.innerHTML = '';
 
                 const conectadas = data.lineas.filter(
@@ -6145,7 +7887,9 @@
                     ordenOriginal: Number(linea.ordenConexion) || indice + 1
                 }));
 
-                idsLineasConectadas = conectadas.map(linea => linea.id);
+                idsLineasConectadas = conectadas
+                    .filter(lineaListaParaPublicar)
+                    .map(linea => linea.id);
 
                 for (const id of Array.from(lineasSeleccionadas)) {
                     if (!idsLineasConectadas.includes(id)) {
@@ -6175,12 +7919,15 @@
                 for (const linea of visibles) {
                     const opcion = document.createElement('label');
                     opcion.className = 'selector-line';
+                    const listaParaPublicar = lineaListaParaPublicar(linea);
+                    const motivoNoPublicable = motivoLineaNoPublicable(linea);
                     opcion.innerHTML = `
                         <input
                             type="checkbox"
                             class="line-check seleccionar-linea"
                             value="${linea.id}"
-                            ${lineasSeleccionadas.has(linea.id) ? 'checked' : ''}
+                            ${listaParaPublicar && lineasSeleccionadas.has(linea.id) ? 'checked' : ''}
+                            ${listaParaPublicar ? '' : 'disabled'}
                         >
                         <span class="selector-line-info">
                             <strong>
@@ -6188,6 +7935,9 @@
                                 ${etiquetaHTML(linea.etiqueta)}
                             </strong>
                             <span class="meta-with-icon">${iconoSVG('phone-call')}<span>${linea.numero ? escaparHTML(linea.numero) : 'Número no disponible'}</span></span>
+                            ${motivoNoPublicable
+                                ? `<span class="selector-line-publication-state">${iconoSVG(linea.conexionEnVerificacion ? 'loader' : 'alert', linea.conexionEnVerificacion ? 'spin' : '')}<span>${escaparHTML(motivoNoPublicable)}</span></span>`
+                                : ''}
                         </span>
                     `;
                     selector.appendChild(opcion);
@@ -6209,6 +7959,30 @@
                 for (const linea of pendientes) {
                     const tarjeta = document.createElement('article');
                     tarjeta.className = 'line-card';
+                    const intentosReconexion = Math.max(
+                        0,
+                        Number(linea.intentosReconexion) || 0
+                    );
+                    const maximosIntentosReconexion = Math.max(
+                        1,
+                        Number(linea.maximosIntentosReconexion) || 5
+                    );
+                    const requiereIntervencion =
+                        linea.reconexionBloqueada === true ||
+                        linea.estado === 'requiere_intervencion';
+                    const mostrarIntentos =
+                        intentosReconexion > 0 ||
+                        linea.estado === 'reconectando';
+                    const detalleIntentos = mostrarIntentos
+                        ? `<span>Intentos automáticos: ${intentosReconexion} de ${maximosIntentosReconexion}</span>`
+                        : '';
+                    const detalleProximoIntento =
+                        !requiereIntervencion && linea.proximoIntentoReconexion
+                            ? `<span>Próximo intento: ${escaparHTML(formatearFecha(linea.proximoIntentoReconexion))}</span>`
+                            : '';
+                    const detalleIntervencion = requiereIntervencion
+                        ? '<span class="reconnect-detail critical">Los reintentos automáticos se detuvieron. Reconectá esta línea manualmente.</span>'
+                        : '';
                     tarjeta.innerHTML = `
                         <div>
                             <h3 class="line-title">
@@ -6222,6 +7996,9 @@
                                 <span class="line-health">
                                     <span>Última conexión: ${escaparHTML(formatearFecha(linea.ultimaConexion, 'Sin registro'))}</span>
                                     ${linea.ultimoError ? `<span>Detalle: ${escaparHTML(linea.ultimoError)}</span>` : ''}
+                                    ${detalleIntentos}
+                                    ${detalleProximoIntento}
+                                    ${detalleIntervencion}
                                 </span>
                             </div>
                         </div>
@@ -6238,7 +8015,7 @@
                                 data-id="${linea.id}"
                             >
                                 ${iconoSVG('refresh')}
-                                <span>Reconectar</span>
+                                <span>${requiereIntervencion ? 'Reconectar manualmente' : 'Reconectar'}</span>
                             </button>
                             <button
                                 type="button"
@@ -6264,10 +8041,11 @@
                 document.getElementById('nav-line-count').textContent =
                     conectadas.length;
 
+                const visiblesPublicables = visibles.filter(lineaListaParaPublicar).length;
                 document.getElementById('resultado-busqueda').textContent =
                     busqueda
-                        ? `${visibles.length} resultado(s) de ${conectadas.length}.`
-                        : `${conectadas.length} línea(s) conectada(s).`;
+                        ? `${visibles.length} resultado(s) · ${visiblesPublicables} lista(s) para publicar.`
+                        : `${conectadas.length} conectada(s) · ${idsLineasConectadas.length} lista(s) para publicar.`;
 
                 document
                     .querySelectorAll('.seleccionar-linea')
@@ -6405,9 +8183,13 @@
                         boton.addEventListener('click', async evento => {
                             const id = evento.currentTarget.dataset.id;
 
-                            if (!confirm('¿Querés eliminar esta línea y cerrar su sesión?')) {
-                                return;
-                            }
+                            const confirmado = await solicitarConfirmacion({
+                                titulo: 'Eliminar línea',
+                                mensaje: 'La línea se quitará de AutoStatues y su sesión se cerrará. Para usarla otra vez tendrás que vincularla nuevamente.',
+                                textoConfirmar: 'Eliminar línea',
+                                icono: 'trash'
+                            });
+                            if (!confirmado) return;
 
                             const respuestaEliminar = await fetch(
                                 `/lineas/${id}`,
@@ -6438,6 +8220,7 @@
 
                 actualizarCheckboxGeneral();
             } catch (error) {
+                if (secuencia !== secuenciaActualizacionLineas) return;
                 console.error('Error consultando las líneas:', error);
             }
         }
@@ -6449,10 +8232,251 @@
             return `${minutos}:${String(segundosRestantes).padStart(2, '0')}`;
         }
 
+        function nombreCausaPublicacion(valor) {
+            if (valor === undefined || valor === null || valor === '') return '';
+
+            const etiquetas = {
+                desconexion: 'Desconexión',
+                desconectada: 'Desconexión',
+                conexion: 'Conexión',
+                sincronizacion: 'Sincronización pendiente',
+                audiencia: 'Audiencia no sincronizada',
+                privacidad: 'Privacidad incompleta',
+                sincronizacion_audiencia: 'Sincronización de audiencia',
+                limite_audiencia: 'Límite de audiencia',
+                limite_temporal: 'Limitación temporal',
+                middleware_enfriamiento: 'Enfriamiento preventivo',
+                proteccion_middleware: 'Protección preventiva',
+                seguridad_linea: 'Protección de línea',
+                registro_local: 'Registro local',
+                envio: 'Fallo de envío',
+                envio_incierto: 'Envío sin confirmación',
+                omitida_por_corte: 'No procesada por corte',
+                cancelacion: 'Cancelación de seguridad',
+                cancelacion_manual: 'Cancelación manual',
+                desconocido: 'Error sin clasificar'
+            };
+            const clave = String(valor).trim().toLowerCase();
+            return etiquetas[clave] || String(valor).replace(/[_-]+/g, ' ');
+        }
+
+        function nombreFasePublicacion(valor) {
+            const fases = {
+                preparacion: 'Preparación',
+                audiencia: 'Audiencia',
+                envio: 'Envío',
+                registro: 'Registro local',
+                no_procesada: 'No procesada'
+            };
+            const clave = String(valor || '').trim().toLowerCase();
+            return fases[clave] || nombreCausaPublicacion(valor);
+        }
+
+        function describirEstadoHistorial(estado) {
+            const estados = {
+                completado: {
+                    texto: 'Completado',
+                    clase: 'success',
+                    icono: 'check-circle'
+                },
+                completado_con_errores: {
+                    texto: 'Completado con errores',
+                    clase: 'warning',
+                    icono: 'alert'
+                },
+                error: {
+                    texto: 'Error',
+                    clase: 'error',
+                    icono: 'x-circle'
+                },
+                cancelado: {
+                    texto: 'Cancelado',
+                    clase: 'error',
+                    icono: 'stop'
+                },
+                cancelado_seguridad: {
+                    texto: 'Cancelado por seguridad',
+                    clase: 'error',
+                    icono: 'stop'
+                },
+                detenido_desconexion: {
+                    texto: 'Detenido por desconexión',
+                    clase: 'error',
+                    icono: 'x-circle'
+                },
+                detenido_limite_temporal: {
+                    texto: 'Detenido temporalmente',
+                    clase: 'warning',
+                    icono: 'alert'
+                },
+                detenido_envio_incierto: {
+                    texto: 'Detenido · envío sin confirmar',
+                    clase: 'warning',
+                    icono: 'alert'
+                },
+                detenido_seguridad_linea: {
+                    texto: 'Detenido por protección de línea',
+                    clase: 'warning',
+                    icono: 'alert'
+                },
+                detenido_alto_total: {
+                    texto: 'Detenido con Alto total',
+                    clase: 'error',
+                    icono: 'stop'
+                },
+                ejecutando: {
+                    texto: 'Publicando',
+                    clase: '',
+                    icono: 'loader'
+                }
+            };
+
+            if (estados[estado]) return estados[estado];
+
+            const textoBase = String(estado || 'Sin estado').replace(/[_-]+/g, ' ');
+            return {
+                texto: textoBase.charAt(0).toUpperCase() + textoBase.slice(1),
+                clase: '',
+                icono: 'info'
+            };
+        }
+
+        function detalleFallosHistorial(lineasFallidas) {
+            const fallos = Array.isArray(lineasFallidas) ? lineasFallidas : [];
+            if (!fallos.length) return '';
+
+            const elementos = fallos.map(fallo => {
+                const tipo = nombreCausaPublicacion(
+                    fallo?.tipoError ?? fallo?.causa
+                );
+                const codigo = fallo?.codigoError === undefined || fallo?.codigoError === null
+                    ? ''
+                    : String(fallo.codigoError);
+                const fase = nombreFasePublicacion(fallo?.fase);
+                const envioConfirmado = fallo?.envioConfirmado === true;
+                const envioIncierto = fallo?.envioIncierto === true;
+                const reintentoBloqueado = fallo?.reintentoSeguro !== true;
+                const reintentadaEn = fallo?.reintentadaEn;
+
+                return `
+                    <li class="history-failure-item">
+                        <div class="history-failure-heading">
+                            ${iconoSVG('x-circle')}
+                            <strong>${escaparHTML(fallo?.nombre || 'Línea sin nombre')}</strong>
+                        </div>
+                        <span>${escaparHTML(fallo?.error || 'Error sin detalle.')}</span>
+                        <div class="history-failure-meta">
+                            ${tipo ? `<small>${escaparHTML(tipo)}</small>` : ''}
+                            ${codigo ? `<small>Código: ${escaparHTML(codigo)}</small>` : ''}
+                            ${fase ? `<small>Fase: ${escaparHTML(fase)}</small>` : ''}
+                            ${envioConfirmado ? '<small class="confirmed">Envío confirmado: no duplicar</small>' : ''}
+                            ${!envioConfirmado && envioIncierto ? '<small class="confirmed">Resultado incierto: reintento bloqueado</small>' : ''}
+                            ${!envioConfirmado && !envioIncierto && reintentoBloqueado ? '<small class="confirmed">Seguridad de reintento no verificada: bloqueado</small>' : ''}
+                            ${reintentadaEn ? `<small>Reintentada: ${escaparHTML(formatearFecha(reintentadaEn))}</small>` : ''}
+                        </div>
+                    </li>
+                `;
+            }).join('');
+
+            return `
+                <details class="history-failures">
+                    <summary>
+                        ${iconoSVG('alert')}
+                        <span>Ver detalle de ${fallos.length} línea(s) con incidencias</span>
+                    </summary>
+                    <ul class="history-failure-list">${elementos}</ul>
+                </details>
+            `;
+        }
+
+        function extraerCausaProgreso(progreso) {
+            if (progreso.tipoErrorCorte) {
+                const tipoCorte = nombreCausaPublicacion(progreso.tipoErrorCorte);
+                const codigoCorte = progreso.codigoErrorCorte === undefined ||
+                    progreso.codigoErrorCorte === null
+                    ? ''
+                    : String(progreso.codigoErrorCorte);
+
+                return codigoCorte
+                    ? `${tipoCorte} · Código: ${codigoCorte}`
+                    : tipoCorte;
+            }
+
+            const valor = progreso.causaError ??
+                progreso.tipoError ??
+                progreso.tipoErrorActual ??
+                progreso.tipoErrorCorte ??
+                progreso.tipoFallo ??
+                progreso.causaFallo ??
+                progreso.causaActual ??
+                progreso.causaDetencion ??
+                progreso.motivoDetencion ??
+                progreso.codigoError ??
+                progreso.errorActual ??
+                progreso.proteccionMiddleware?.motivo;
+
+            if (!valor) return '';
+            if (typeof valor !== 'object') return nombreCausaPublicacion(valor);
+
+            const tipo = nombreCausaPublicacion(
+                valor.tipo ?? valor.codigo ?? valor.causa ?? valor.clasificacion
+            );
+            const detalle = String(valor.mensaje ?? valor.detalle ?? valor.error ?? '').trim();
+
+            if (tipo && detalle && tipo.toLowerCase() !== detalle.toLowerCase()) {
+                return `${tipo}: ${detalle}`;
+            }
+
+            return tipo || detalle;
+        }
+
+        function extraerLineaActual(progreso) {
+            const valor = progreso.lineaActual ??
+                progreso.lineaEnCurso ??
+                progreso.lineaEnProceso ??
+                progreso.lineaActualNombre ??
+                progreso.lineaCorte ??
+                progreso.proteccionMiddleware?.linea;
+
+            if (!valor) return '';
+            if (typeof valor !== 'object') return String(valor);
+
+            const nombre = String(valor.nombre ?? valor.alias ?? valor.id ?? '').trim();
+            const numero = String(valor.numero ?? '').trim();
+            return [nombre, numero].filter(Boolean).join(' · ');
+        }
+
+        function actualizarContextoProgreso(progreso) {
+            const contexto = document.getElementById('progreso-contexto');
+            const lineaChip = document.getElementById('progreso-linea-chip');
+            const causaChip = document.getElementById('progreso-causa-chip');
+            const linea = extraerLineaActual(progreso);
+            const causa = extraerCausaProgreso(progreso);
+
+            lineaChip.hidden = !linea;
+            causaChip.hidden = !causa;
+            document.getElementById('progreso-linea-actual').textContent = linea;
+            document.getElementById('progreso-causa').textContent = causa;
+            contexto.hidden = !linea && !causa;
+        }
+
         async function actualizarProgresoPublicacion() {
             try {
                 const respuesta = await fetch('/progreso');
                 const progreso = await respuesta.json();
+                publicacionActivaActual = Boolean(
+                    progreso.ocupada ?? (
+                        progreso.activo ||
+                        Number(progreso.publicacionesPendientes) > 0
+                    )
+                );
+                altoTotalSolicitado = Boolean(
+                    publicacionActivaActual && (
+                        altoTotalSolicitado ||
+                        progreso.altoTotalSolicitado === true
+                    )
+                );
+                actualizarProteccionMiddleware(progreso.proteccionMiddleware);
 
                 document.getElementById('progreso-procesadas').textContent =
                     progreso.procesadas || 0;
@@ -6462,19 +8486,55 @@
                     progreso.correctas || 0;
                 document.getElementById('progreso-fallidas').textContent =
                     progreso.fallidas || 0;
+                const modoRitmo = normalizarModoRitmo(progreso.modoRitmo, 'grupos');
+                const secuencial = modoRitmo === 'secuencial';
+                const unidadActual = secuencial
+                    ? (progreso.indiceLineaActual ?? progreso.lineaActualIndice ?? progreso.grupoActual ?? 0)
+                    : (progreso.grupoActual ?? 0);
+                const totalUnidades = secuencial
+                    ? (progreso.totalLineas ?? progreso.totalGrupos ?? progreso.total ?? 0)
+                    : (progreso.totalGrupos ?? 0);
+
+                document.getElementById('progreso-unidad-label').textContent =
+                    secuencial ? 'Línea:' : 'Grupo:';
                 document.getElementById('progreso-grupo').textContent =
-                    `${progreso.grupoActual || 0} de ${progreso.totalGrupos || 0}`;
+                    `${unidadActual} de ${totalUnidades}`;
+                actualizarContextoProgreso(progreso);
 
                 const proximo = document.getElementById('progreso-proximo');
 
-                if (progreso.estado === 'esperando_siguiente_grupo') {
-                    proximo.textContent = formatearTiempo(
-                        progreso.proximoGrupoSegundos || 0
+                if (['esperando_siguiente_grupo', 'esperando_siguiente_linea', 'esperando_siguiente_envio'].includes(progreso.estado)) {
+                    const segundosRestantes = progreso.proximoEnvioSegundos ?? (
+                        secuencial
+                            ? (progreso.proximaLineaSegundos ?? progreso.proximoGrupoSegundos ?? 0)
+                            : (progreso.proximoGrupoSegundos ?? 0)
                     );
+                    proximo.textContent = formatearTiempo(segundosRestantes);
+                } else if (progreso.estado === 'esperando_sincronizacion_audiencia') {
+                    proximo.textContent =
+                        `Sincronizando · ${formatearTiempo(
+                            progreso.sincronizacionAudienciaSegundos || 0
+                        )}`;
                 } else if (progreso.estado === 'completado') {
                     proximo.textContent = 'Finalizado';
+                } else if (progreso.estado === 'completado_con_errores') {
+                    proximo.textContent = 'Finalizado con errores';
                 } else if (progreso.estado === 'detenido_seguridad') {
                     proximo.textContent = 'Detenido por seguridad';
+                } else if (progreso.estado === 'detenido_desconexion') {
+                    proximo.textContent = 'Detenido por desconexión';
+                } else if (progreso.estado === 'detenido_limite_temporal') {
+                    proximo.textContent = 'Detenido temporalmente';
+                } else if (progreso.estado === 'detenido_envio_incierto') {
+                    proximo.textContent = 'Detenido · envío sin confirmar';
+                } else if (progreso.estado === 'detenido_seguridad_linea') {
+                    proximo.textContent = 'Línea no habilitada';
+                } else if (progreso.estado === 'deteniendo_alto_total') {
+                    proximo.textContent = progreso.envioEnCurso
+                        ? 'Guardando el envío en curso'
+                        : 'Deteniendo...';
+                } else if (progreso.estado === 'detenido_alto_total') {
+                    proximo.textContent = 'Detenido con Alto total';
                 } else if (progreso.estado === 'cancelado_seguridad') {
                     proximo.textContent = 'Cancelado';
                 } else if (progreso.estado === 'error') {
@@ -6498,9 +8558,9 @@
                 if (seguridadDetenida) {
                     detalleSeguridad.textContent =
                         progreso.mensajeSeguridad ||
-                        `Fallaron ${progreso.fallosGrupoActual || 0} de ` +
-                        `${progreso.totalGrupoActual || 0} líneas del grupo ` +
-                        `(${progreso.porcentajeFallosGrupo || 0}%).`;
+                        extraerCausaProgreso(progreso) ||
+                        `Se alcanzó el límite configurado de ` +
+                        `${progreso.limiteFallosSeguridad || 1} línea(s) con fallos.`;
                 }
 
                 const porcentaje = progreso.total > 0
@@ -6527,16 +8587,27 @@
 
                 document.getElementById('lista-fallidas').innerHTML =
                     (progreso.lineasFallidas || [])
-                        .map(linea => `
-                            <li>
-                                ${iconoSVG('x-circle')}
-                                <span>${escaparHTML(linea.nombre)} — ${escaparHTML(linea.error)}</span>
-                            </li>
-                        `)
+                        .map(linea => {
+                            const tipo = nombreCausaPublicacion(
+                                linea.tipoError ?? linea.causa ?? linea.codigoError
+                            );
+                            const codigo = linea.codigoError === undefined || linea.codigoError === null
+                                ? ''
+                                : String(linea.codigoError);
+                            return `
+                                <li>
+                                    ${iconoSVG('x-circle')}
+                                    <span>
+                                        ${escaparHTML(linea.nombre)} — ${escaparHTML(linea.error)}
+                                        ${tipo ? `<small class="result-error-type">${escaparHTML(tipo)}</small>` : ''}
+                                        ${codigo ? `<small class="result-error-type">Código: ${escaparHTML(codigo)}</small>` : ''}
+                                    </span>
+                                </li>
+                            `;
+                        })
                         .join('');
 
-                document.getElementById('btn-publicar').disabled =
-                    Boolean(progreso.activo);
+                actualizarAccionesPublicacion();
             } catch (error) {
                 console.error('No se pudo consultar el progreso:', error);
             }
@@ -6557,21 +8628,46 @@
         function validarDatosFormulario(paraProgramar) {
             const archivo = document.getElementById('foto').files[0];
             const texto = document.getElementById('texto').value;
-            const lineasPorGrupo = Number(document.getElementById('lineas-por-grupo').value);
-            const intervaloMinutos = Number(document.getElementById('intervalo-minutos').value);
+            const modoRitmo = obtenerModoRitmo('modo-ritmo');
+            let intervaloSegundos = Number(document.getElementById('intervalo-segundos').value);
+            let variacionSegundos = Number(document.getElementById('variacion-segundos').value);
+            let lineasPorGrupo = Number(document.getElementById('lineas-por-grupo').value);
+            let intervaloMinutos = Number(document.getElementById('intervalo-minutos').value);
             const hora = document.getElementById('hora-programada').value;
             const diasSemana = obtenerDiasSeleccionados('dias-programados');
 
             if (!lineasSeleccionadas.size) throw new Error('Seleccioná al menos una línea conectada.');
             if (!archivo) throw new Error('Seleccioná una imagen.');
 
-            if (!Number.isInteger(lineasPorGrupo) || lineasPorGrupo < 1 || lineasPorGrupo > 50) {
-                throw new Error('Indicá una cantidad entre 1 y 50 líneas por envío.');
+            if (!MODOS_RITMO_VALIDOS.has(modoRitmo)) {
+                throw new Error('Elegí un ritmo de publicación válido.');
             }
 
-            if (!Number.isFinite(intervaloMinutos) || intervaloMinutos < 0 || intervaloMinutos > 1440) {
+            const segundosValidos = Number.isInteger(intervaloSegundos) && intervaloSegundos >= 10 && intervaloSegundos <= 3600;
+            const variacionValida = Number.isInteger(variacionSegundos) && variacionSegundos >= 0 && variacionSegundos <= 30 && variacionSegundos <= intervaloSegundos;
+            const grupoValido = Number.isInteger(lineasPorGrupo) && lineasPorGrupo >= 1 && lineasPorGrupo <= 10;
+            const minutosValidos = Number.isFinite(intervaloMinutos) && intervaloMinutos >= 0 && intervaloMinutos <= 1440;
+
+            if (modoRitmo === 'secuencial' && !segundosValidos) {
+                throw new Error('Indicá un intervalo entre 10 y 3600 segundos.');
+            }
+
+            if (modoRitmo === 'secuencial' && !variacionValida) {
+                throw new Error('Indicá una variación entre 0 y 30 segundos que no supere el intervalo base.');
+            }
+
+            if (modoRitmo === 'grupos' && !grupoValido) {
+                throw new Error('Indicá una cantidad entre 1 y 10 líneas por envío.');
+            }
+
+            if (modoRitmo === 'grupos' && !minutosValidos) {
                 throw new Error('Indicá un intervalo entre 0 y 1440 minutos.');
             }
+
+            if (!segundosValidos) intervaloSegundos = 45;
+            if (!variacionValida) variacionSegundos = 5;
+            if (!grupoValido) lineasPorGrupo = 10;
+            if (!minutosValidos) intervaloMinutos = 5;
 
             if (paraProgramar && !/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)) {
                 throw new Error('Elegí una hora válida.');
@@ -6581,7 +8677,17 @@
                 throw new Error('Seleccioná al menos un día de la semana.');
             }
 
-            return { archivo, texto, lineasPorGrupo, intervaloMinutos, hora, diasSemana };
+            return {
+                archivo,
+                texto,
+                modoRitmo,
+                intervaloSegundos,
+                variacionSegundos,
+                lineasPorGrupo,
+                intervaloMinutos,
+                hora,
+                diasSemana
+            };
         }
 
         function crearFormData(datos, incluirHora) {
@@ -6589,6 +8695,9 @@
             formData.append('imagen', datos.archivo);
             formData.append('texto', datos.texto);
             formData.append('lineas', JSON.stringify(Array.from(lineasSeleccionadas)));
+            formData.append('modoRitmo', datos.modoRitmo);
+            formData.append('intervaloSegundos', String(datos.intervaloSegundos));
+            formData.append('variacionSegundos', String(datos.variacionSegundos));
             formData.append('lineasPorGrupo', String(datos.lineasPorGrupo));
             formData.append('intervaloMinutos', String(datos.intervaloMinutos));
 
@@ -6646,6 +8755,7 @@
                 ? escaparHTML(item.texto)
                 : '<em style="color:#8091a8;">Sin texto.</em>';
             const dias = describirDias(item.diasSemana);
+            const ritmo = describirRitmoPublicacion(item);
 
             return `
                 <article class="program-card ${item.activa === false ? 'program-paused' : ''}">
@@ -6658,8 +8768,8 @@
                         <div class="program-meta">
                             <span class="chip ${item.activa === false ? '' : 'success'}">${iconoSVG(item.activa === false ? 'pause' : 'calendar')}<span>${mostrarEstadoProgramacion(item.estado)}</span></span>
                             <span class="chip">${iconoSVG('users')}<span>${item.cantidadLineas} líneas</span></span>
-                            <span class="chip">${iconoSVG('layers')}<span>Grupos de ${item.lineasPorGrupo}</span></span>
-                            <span class="chip">${iconoSVG('timer')}<span>${item.intervaloMinutos} min</span></span>
+                            <span class="chip">${iconoSVG(ritmo.modo === 'secuencial' ? 'timer' : 'layers')}<span>${escaparHTML(ritmo.principal)}</span></span>
+                            ${ritmo.detalle ? `<span class="chip">${iconoSVG('activity')}<span>${escaparHTML(ritmo.detalle)}</span></span>` : ''}
                         </div>
                         <p class="program-card-text">${textoVisible}</p>
                         <div class="program-dates">
@@ -6668,7 +8778,7 @@
                         </div>
                         <div class="program-actions">
                             <button type="button" class="btn-edit btn-editar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('edit')}<span>Editar</span></button>
-                            <button type="button" class="btn-run btn-ejecutar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('play')}<span>Ejecutar</span></button>
+                            <button type="button" class="btn-run btn-ejecutar-programacion" data-id="${item.id}" data-disabled-base="${puedeModificar ? 'false' : 'true'}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('play')}<span>Ejecutar</span></button>
                             <button type="button" class="btn-pause btn-estado-programacion" data-id="${item.id}" data-activa="${item.activa === false ? 'true' : 'false'}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG(item.activa === false ? 'play' : 'pause')}<span>${item.activa === false ? 'Activar' : 'Pausar'}</span></button>
                             <button type="button" class="btn-neutral btn-duplicar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('copy')}<span>Duplicar</span></button>
                             <button type="button" class="btn-delete btn-eliminar-programacion" data-id="${item.id}" ${puedeModificar ? '' : 'disabled'}>${iconoSVG('trash')}<span>Eliminar</span></button>
@@ -6694,6 +8804,7 @@
                 }
 
                 contenedor.innerHTML = data.programaciones.map(tarjetaProgramacion).join('');
+                actualizarAccionesPublicacion();
 
                 document.querySelectorAll('.btn-editar-programacion').forEach(boton => {
                     boton.addEventListener('click', evento => abrirEditorProgramacion(evento.currentTarget.dataset.id));
@@ -6718,14 +8829,36 @@
 
                 document.querySelectorAll('.btn-ejecutar-programacion').forEach(boton => {
                     boton.addEventListener('click', async evento => {
+                        const botonActual = evento.currentTarget;
+                        const id = botonActual.dataset.id;
+                        const claveAccion = `ejecutar:${id}`;
+                        const claveIdempotencia = iniciarSolicitudIdempotente(
+                            claveAccion,
+                            botonActual
+                        );
+                        if (!claveIdempotencia) return;
+
                         try {
-                            const respuestaEjecucion = await fetch(`/programaciones/${evento.currentTarget.dataset.id}/ejecutar`, { method: 'POST' });
-                            const datos = await leerRespuesta(respuestaEjecucion);
-                            if (!respuestaEjecucion.ok) throw new Error(datos.error || 'No se pudo ejecutar.');
+                            const respuestaEjecucion = await fetch(
+                                `/programaciones/${encodeURIComponent(id)}/ejecutar`,
+                                {
+                                    method: 'POST',
+                                    headers: { 'Idempotency-Key': claveIdempotencia }
+                                }
+                            );
+                            const datos = await exigirRespuesta(
+                                respuestaEjecucion,
+                                'No se pudo ejecutar la programación.'
+                            );
+                            publicacionActivaActual = true;
                             toast(datos.mensaje, 'success');
                             mostrarSeccion('estados');
                             iniciarSeguimientoProgreso();
-                        } catch (error) { toast(error.message, 'error'); }
+                        } catch (error) {
+                            toast(error.message, tipoToastErrorHTTP(error));
+                        } finally {
+                            finalizarSolicitudIdempotente(claveAccion, botonActual);
+                        }
                     });
                 });
 
@@ -6744,7 +8877,13 @@
                 document.querySelectorAll('.btn-eliminar-programacion').forEach(boton => {
                     boton.addEventListener('click', async evento => {
                         const id = evento.currentTarget.dataset.id;
-                        if (!confirm('¿Querés eliminar esta programación?')) return;
+                        const confirmado = await solicitarConfirmacion({
+                            titulo: 'Eliminar programación',
+                            mensaje: 'Esta programación dejará de ejecutarse y desaparecerá del panel.',
+                            textoConfirmar: 'Eliminar',
+                            icono: 'trash'
+                        });
+                        if (!confirmado) return;
                         const respuestaEliminar = await fetch(`/programaciones/${id}`, { method: 'DELETE' });
                         const datos = await leerRespuesta(respuestaEliminar);
                         if (!respuestaEliminar.ok) return toast(datos.error || 'No se pudo eliminar.', 'error');
@@ -6795,35 +8934,70 @@
                 }
 
                 contenedor.innerHTML = data.historial.map(item => {
-                    const estadoError = ['error','cancelado'].includes(item.estado);
-                    const puedeReintentar = (item.lineasFallidas || []).length > 0 && item.estado !== 'ejecutando';
+                    const lineasFallidas = Array.isArray(item.lineasFallidas)
+                        ? item.lineasFallidas
+                        : [];
+                    const estadoVisual = describirEstadoHistorial(item.estado);
+                    const puedeReintentar =
+                        item.estado !== 'ejecutando' &&
+                        lineasFallidas.some(fallo =>
+                            fallo?.envioConfirmado !== true &&
+                            fallo?.reintentoSeguro === true &&
+                            !fallo?.reintentadaEn
+                        );
+                    const ritmo = describirRitmoPublicacion(item);
+                    const tipoCorte = nombreCausaPublicacion(item.tipoErrorCorte);
                     return `<article class="history-item">
                         <img class="history-thumb" src="/historial/${item.id}/imagen?v=${encodeURIComponent(item.fechaInicio || '')}" alt="Estado publicado">
                         <div class="history-main">
                             <div class="history-title">
                                 <strong>${escaparHTML(item.origen || 'Publicación')}</strong>
-                                <span class="history-status ${estadoError ? 'error' : item.estado === 'completado' ? 'success' : ''}">${iconoSVG(estadoError ? 'x-circle' : item.estado === 'completado' ? 'check-circle' : 'loader')}<span>${escaparHTML(item.estado)}</span></span>
+                                <span class="history-status ${estadoVisual.clase}">${iconoSVG(estadoVisual.icono)}<span>${escaparHTML(estadoVisual.texto)}</span></span>
                             </div>
-                            <div class="history-meta"><span>${escaparHTML(formatearFecha(item.fechaInicio))}</span><span>${item.total || 0} líneas</span><span>Grupos de ${item.lineasPorGrupo || 0}</span></div>
-                            <div class="history-results"><span>Correctas: <strong>${item.correctas || 0}</strong></span><span>Fallidas: <strong>${item.fallidas || 0}</strong></span></div>
+                            <div class="history-meta"><span>${escaparHTML(formatearFecha(item.fechaInicio))}</span><span>${item.total || 0} líneas</span><span class="history-rhythm">${escaparHTML(ritmo.principal)}${ritmo.detalle ? ` · ${escaparHTML(ritmo.detalle)}` : ''}</span>${tipoCorte ? `<span class="result-error-type">${escaparHTML(tipoCorte)}</span>` : ''}</div>
+                            <div class="history-results"><span>Correctas: <strong>${item.correctas || 0}</strong></span><span>Fallidas: <strong>${item.fallidas || 0}</strong></span>${Number(item.noProcesadas) > 0 ? `<span>No procesadas: <strong>${Number(item.noProcesadas)}</strong></span>` : ''}</div>
                             ${item.error ? `<span class="help">${escaparHTML(item.error)}</span>` : ''}
+                            ${detalleFallosHistorial(lineasFallidas)}
                         </div>
                         <div class="history-actions">
-                            <button type="button" class="secondary-button btn-reintentar-historial" data-id="${item.id}" ${puedeReintentar ? '' : 'disabled'}>${iconoSVG('refresh')}<span>Reintentar fallidas</span></button>
+                            <button type="button" class="secondary-button btn-reintentar-historial" data-id="${item.id}" data-disabled-base="${puedeReintentar ? 'false' : 'true'}" ${puedeReintentar ? '' : 'disabled'}>${iconoSVG('refresh')}<span>Reintentar fallidas</span></button>
                         </div>
                     </article>`;
                 }).join('');
+                actualizarAccionesPublicacion();
 
                 document.querySelectorAll('.btn-reintentar-historial').forEach(boton => {
                     boton.addEventListener('click', async evento => {
+                        const botonActual = evento.currentTarget;
+                        const id = botonActual.dataset.id;
+                        const claveAccion = `reintentar:${id}`;
+                        const claveIdempotencia = iniciarSolicitudIdempotente(
+                            claveAccion,
+                            botonActual
+                        );
+                        if (!claveIdempotencia) return;
+
                         try {
-                            const respuestaReintento = await fetch(`/historial/${evento.currentTarget.dataset.id}/reintentar-fallidas`, { method: 'POST' });
-                            const datos = await leerRespuesta(respuestaReintento);
-                            if (!respuestaReintento.ok) throw new Error(datos.error || 'No se pudo reintentar.');
+                            const respuestaReintento = await fetch(
+                                `/historial/${encodeURIComponent(id)}/reintentar-fallidas`,
+                                {
+                                    method: 'POST',
+                                    headers: { 'Idempotency-Key': claveIdempotencia }
+                                }
+                            );
+                            const datos = await exigirRespuesta(
+                                respuestaReintento,
+                                'No se pudo reintentar la publicación.'
+                            );
+                            publicacionActivaActual = true;
                             toast(datos.mensaje, 'success');
                             mostrarSeccion('estados');
                             iniciarSeguimientoProgreso();
-                        } catch (error) { toast(error.message, 'error'); }
+                        } catch (error) {
+                            toast(error.message, tipoToastErrorHTTP(error));
+                        } finally {
+                            finalizarSolicitudIdempotente(claveAccion, botonActual);
+                        }
                     });
                 });
             } catch (error) {
@@ -6836,10 +9010,34 @@
                 const respuesta = await fetch('/configuracion');
                 const data = await respuesta.json();
                 configuracionActual = data;
-                document.getElementById('config-lineas-grupo').value = data.lineasPorGrupoPredeterminado || 10;
-                document.getElementById('config-intervalo').value = data.intervaloMinutosPredeterminado ?? 5;
-                document.getElementById('config-umbral').value = Math.round((data.umbralFallosSeguridad || .8) * 100);
-                document.getElementById('config-umbral-valor').textContent = `${document.getElementById('config-umbral').value}%`;
+                establecerModoRitmo(
+                    'config-modo-ritmo',
+                    normalizarModoRitmo(data.modoRitmoPredeterminado)
+                );
+                document.getElementById('config-intervalo-segundos').value =
+                    numeroConfigurado(data.intervaloSegundosPredeterminado, 10, 3600, 45);
+                document.getElementById('config-variacion-segundos').value =
+                    numeroConfigurado(data.variacionSegundosPredeterminada, 0, 30, 5);
+                document.getElementById('config-lineas-grupo').value =
+                    numeroConfigurado(data.lineasPorGrupoPredeterminado, 1, 10, 10);
+                document.getElementById('config-intervalo').value =
+                    numeroConfigurado(data.intervaloMinutosPredeterminado, 0, 1440, 5);
+                document.getElementById('config-maximo-destinatarios').value =
+                    numeroConfigurado(
+                        data.maximoDestinatariosPorEstado,
+                        1,
+                        1000,
+                        1000
+                    );
+                const limiteFallosSeguridad = numeroConfigurado(
+                    data.limiteFallosSeguridad,
+                    1,
+                    10,
+                    1
+                );
+                document.getElementById('config-limite-fallos').value = limiteFallosSeguridad;
+                document.getElementById('config-limite-fallos-valor').textContent =
+                    textoLimiteFallos(limiteFallosSeguridad);
                 document.getElementById('config-notificaciones').checked = data.notificaciones !== false;
             } catch (error) {
                 toast('No se pudo cargar la configuración.', 'error');
@@ -6852,6 +9050,7 @@
             document.getElementById('preview-imagen').style.display = 'none';
             document.getElementById('preview-imagen').removeAttribute('src');
             document.getElementById('upload-placeholder').style.display = 'grid';
+            establecerModoRitmo('modo-ritmo', 'secuencial');
 
             if (urlPreviewActual) {
                 URL.revokeObjectURL(urlPreviewActual);
@@ -6936,8 +9135,20 @@
 
             if (!configuracionActual) await cargarConfiguracion();
             if (configuracionActual) {
-                document.getElementById('lineas-por-grupo').value = configuracionActual.lineasPorGrupoPredeterminado || 10;
-                document.getElementById('intervalo-minutos').value = configuracionActual.intervaloMinutosPredeterminado ?? 5;
+                establecerModoRitmo(
+                    'modo-ritmo',
+                    normalizarModoRitmo(configuracionActual.modoRitmoPredeterminado)
+                );
+                document.getElementById('intervalo-segundos').value =
+                    numeroConfigurado(configuracionActual.intervaloSegundosPredeterminado, 10, 3600, 45);
+                document.getElementById('variacion-segundos').value =
+                    numeroConfigurado(configuracionActual.variacionSegundosPredeterminada, 0, 30, 5);
+                document.getElementById('lineas-por-grupo').value =
+                    numeroConfigurado(configuracionActual.lineasPorGrupoPredeterminado, 1, 10, 10);
+                document.getElementById('intervalo-minutos').value =
+                    numeroConfigurado(configuracionActual.intervaloMinutosPredeterminado, 0, 1440, 5);
+            } else {
+                establecerModoRitmo('modo-ritmo', 'secuencial');
             }
             actualizarCantidadSeleccionadas();
             actualizarLineas();
@@ -7096,29 +9307,31 @@
             evento.preventDefault();
 
             const mensaje = document.getElementById('mensaje');
+            const boton = document.getElementById('btn-publicar');
+            const claveAccion = 'subir';
+            let claveIdempotencia = null;
 
             try {
                 const datos = validarDatosFormulario(false);
+                claveIdempotencia = iniciarSolicitudIdempotente(claveAccion, boton);
+                if (!claveIdempotencia) return;
 
                 mensaje.textContent = 'Preparando publicación...';
                 mensaje.style.color = '#fbbf24';
 
                 const respuesta = await fetch('/subir', {
                     method: 'POST',
+                    headers: { 'Idempotency-Key': claveIdempotencia },
                     body: crearFormData(datos, false)
                 });
 
-                const data = await leerRespuesta(respuesta);
-
-                if (!respuesta.ok) {
-                    throw new Error(
-                        data.error ||
-                        data.mensaje ||
-                        'No se pudo iniciar la publicación.'
-                    );
-                }
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo iniciar la publicación.'
+                );
 
                 mensaje.textContent = '';
+                publicacionActivaActual = true;
                 toast(
                     data.mensaje || 'Publicación iniciada.',
                     'success'
@@ -7129,35 +9342,40 @@
                 iniciarSeguimientoProgreso();
             } catch (error) {
                 mensaje.textContent = error.message;
-                mensaje.style.color = '#fb7185';
+                mensaje.style.color = [409, 429].includes(Number(error?.httpStatus))
+                    ? '#fbbf24'
+                    : '#fb7185';
+            } finally {
+                if (claveIdempotencia) {
+                    finalizarSolicitudIdempotente(claveAccion, boton);
+                }
             }
         };
 
         document.getElementById('btn-programar').onclick = async () => {
             const mensaje = document.getElementById('mensaje');
             const boton = document.getElementById('btn-programar');
+            const claveAccion = 'programar';
+            let claveIdempotencia = null;
 
             try {
                 const datos = validarDatosFormulario(true);
+                claveIdempotencia = iniciarSolicitudIdempotente(claveAccion, boton);
+                if (!claveIdempotencia) return;
 
                 mensaje.textContent = 'Guardando programación...';
                 mensaje.style.color = '#fbbf24';
-                boton.disabled = true;
 
                 const respuesta = await fetch('/programar', {
                     method: 'POST',
+                    headers: { 'Idempotency-Key': claveIdempotencia },
                     body: crearFormData(datos, true)
                 });
 
-                const data = await leerRespuesta(respuesta);
-
-                if (!respuesta.ok) {
-                    throw new Error(
-                        data.error ||
-                        data.mensaje ||
-                        'No se pudo programar el estado.'
-                    );
-                }
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo programar el estado.'
+                );
 
                 mensaje.textContent = '';
                 toast(
@@ -7171,9 +9389,13 @@
                 actualizarProgramaciones();
             } catch (error) {
                 mensaje.textContent = error.message;
-                mensaje.style.color = '#fb7185';
+                mensaje.style.color = [409, 429].includes(Number(error?.httpStatus))
+                    ? '#fbbf24'
+                    : '#fb7185';
             } finally {
-                boton.disabled = false;
+                if (claveIdempotencia) {
+                    finalizarSolicitudIdempotente(claveAccion, boton);
+                }
             }
         };
 
@@ -7341,19 +9563,77 @@
         });
 
         document.getElementById('btn-actualizar-historial').onclick = actualizarHistorial;
-        document.getElementById('config-umbral').addEventListener('input', evento => {
-            document.getElementById('config-umbral-valor').textContent = `${evento.target.value}%`;
+        ['config-modo-ritmo', 'modo-ritmo'].forEach(nombre => {
+            document.querySelectorAll(`input[name="${nombre}"]`).forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (radio.checked) establecerModoRitmo(nombre, radio.value);
+                });
+            });
+        });
+        document.getElementById('config-limite-fallos').addEventListener('input', evento => {
+            document.getElementById('config-limite-fallos-valor').textContent =
+                textoLimiteFallos(evento.target.value);
         });
 
         document.getElementById('btn-guardar-configuracion').onclick = async () => {
             try {
+                const modoRitmoPredeterminado = obtenerModoRitmo('config-modo-ritmo');
+                let intervaloSegundosPredeterminado = Number(
+                    document.getElementById('config-intervalo-segundos').value
+                );
+                let variacionSegundosPredeterminada = Number(
+                    document.getElementById('config-variacion-segundos').value
+                );
+                let lineasPorGrupoPredeterminado = Number(
+                    document.getElementById('config-lineas-grupo').value
+                );
+                let intervaloMinutosPredeterminado = Number(
+                    document.getElementById('config-intervalo').value
+                );
+                const maximoDestinatariosPorEstado = Number(
+                    document.getElementById('config-maximo-destinatarios').value
+                );
+
+                const segundosValidos = Number.isInteger(intervaloSegundosPredeterminado) && intervaloSegundosPredeterminado >= 10 && intervaloSegundosPredeterminado <= 3600;
+                const variacionValida = Number.isInteger(variacionSegundosPredeterminada) && variacionSegundosPredeterminada >= 0 && variacionSegundosPredeterminada <= 30 && variacionSegundosPredeterminada <= intervaloSegundosPredeterminado;
+                const grupoValido = Number.isInteger(lineasPorGrupoPredeterminado) && lineasPorGrupoPredeterminado >= 1 && lineasPorGrupoPredeterminado <= 10;
+                const minutosValidos = Number.isFinite(intervaloMinutosPredeterminado) && intervaloMinutosPredeterminado >= 0 && intervaloMinutosPredeterminado <= 1440;
+                const destinatariosValidos = Number.isInteger(maximoDestinatariosPorEstado) && maximoDestinatariosPorEstado >= 1 && maximoDestinatariosPorEstado <= 1000;
+
+                if (modoRitmoPredeterminado === 'secuencial' && !segundosValidos) {
+                    throw new Error('El intervalo secuencial debe estar entre 10 y 3600 segundos.');
+                }
+                if (modoRitmoPredeterminado === 'secuencial' && !variacionValida) {
+                    throw new Error('La variación debe estar entre 0 y 30 segundos y no superar el intervalo base.');
+                }
+                if (modoRitmoPredeterminado === 'grupos' && !grupoValido) {
+                    throw new Error('Las líneas por grupo deben estar entre 1 y 10.');
+                }
+                if (modoRitmoPredeterminado === 'grupos' && !minutosValidos) {
+                    throw new Error('El intervalo entre grupos debe estar entre 0 y 1440 minutos.');
+                }
+                if (!destinatariosValidos) {
+                    throw new Error('Los destinatarios por estado deben estar entre 1 y 1.000.');
+                }
+
+                if (!segundosValidos) intervaloSegundosPredeterminado = 45;
+                if (!variacionValida) variacionSegundosPredeterminada = 5;
+                if (!grupoValido) lineasPorGrupoPredeterminado = 10;
+                if (!minutosValidos) intervaloMinutosPredeterminado = 5;
+
                 const respuesta = await fetch('/configuracion', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        lineasPorGrupoPredeterminado: Number(document.getElementById('config-lineas-grupo').value),
-                        intervaloMinutosPredeterminado: Number(document.getElementById('config-intervalo').value),
-                        umbralFallosSeguridad: Number(document.getElementById('config-umbral').value) / 100,
+                        modoRitmoPredeterminado,
+                        intervaloSegundosPredeterminado,
+                        variacionSegundosPredeterminada,
+                        lineasPorGrupoPredeterminado,
+                        intervaloMinutosPredeterminado,
+                        maximoDestinatariosPorEstado,
+                        limiteFallosSeguridad: Number(
+                            document.getElementById('config-limite-fallos').value
+                        ),
                         notificaciones: document.getElementById('config-notificaciones').checked
                     })
                 });
@@ -7373,14 +9653,56 @@
             }
         };
 
+        document.getElementById('btn-alto-total').onclick = async () => {
+            if (!publicacionActivaActual || altoTotalSolicitado) return;
+
+            const confirmarAlto = await solicitarConfirmacion({
+                titulo: 'Alto total',
+                mensaje: 'Las líneas que todavía no comenzaron se cancelarán. Si un envío ya está en curso, se esperará su respuesta para guardar el ID y luego se detendrá.',
+                textoConfirmar: 'Detener todo',
+                icono: 'stop'
+            });
+            if (!confirmarAlto) return;
+
+            altoTotalSolicitado = true;
+            actualizarAccionesPublicacion();
+
+            try {
+                const respuesta = await fetch('/progreso/alto-total', {
+                    method: 'POST'
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo aplicar el Alto total.'
+                );
+
+                if (data.habiaTrabajo === false) {
+                    publicacionActivaActual = false;
+                    altoTotalSolicitado = false;
+                }
+
+                toast(data.mensaje, data.habiaTrabajo === false ? 'info' : 'warning');
+                iniciarSeguimientoProgreso();
+            } catch (error) {
+                altoTotalSolicitado = false;
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                actualizarAccionesPublicacion();
+            }
+        };
+
         document.getElementById('btn-reanudar-seguridad').onclick = () => {
             ejecutarAccionSeguridad('reanudar');
         };
 
-        document.getElementById('btn-cancelar-seguridad').onclick = () => {
-            if (confirm('¿Querés cancelar los grupos restantes de esta publicación?')) {
-                ejecutarAccionSeguridad('cancelar');
-            }
+        document.getElementById('btn-cancelar-seguridad').onclick = async () => {
+            const confirmado = await solicitarConfirmacion({
+                titulo: 'Cancelar líneas restantes',
+                mensaje: 'Las líneas que aún no se procesaron se cancelarán para esta publicación.',
+                textoConfirmar: 'Cancelar restantes',
+                icono: 'stop'
+            });
+            if (confirmado) ejecutarAccionSeguridad('cancelar');
         };
 
         document.getElementById('btn-cancelar-edicion').onclick =
@@ -7421,7 +9743,7 @@
             const botonDescargar = document.getElementById('btn-update-download');
             const botonInstalar = document.getElementById('btn-update-install');
 
-            const versionActual = estado.versionActual || '1.0.6';
+            const versionActual = estado.versionActual || '1.0.7';
             version.textContent = `v${versionActual}`;
             if (versionSidebar) versionSidebar.textContent = `AutoStatues ${versionActual}`;
             mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';
@@ -7533,10 +9855,15 @@
             ejecutarAccionActualizacion('descargar');
         };
 
-        document.getElementById('btn-update-install').onclick = () => {
-            if (confirm('La aplicación se cerrará para instalar la actualización. ¿Continuar?')) {
-                ejecutarAccionActualizacion('instalar');
-            }
+        document.getElementById('btn-update-install').onclick = async () => {
+            const confirmado = await solicitarConfirmacion({
+                titulo: 'Instalar actualización',
+                mensaje: 'AutoStatues se cerrará para completar la instalación.',
+                textoConfirmar: 'Instalar ahora',
+                tono: 'primary',
+                icono: 'install'
+            });
+            if (confirmado) ejecutarAccionActualizacion('instalar');
         };
 
         configurarSelectorTodosDias('dias-programados');

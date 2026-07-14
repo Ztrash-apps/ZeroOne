@@ -4,6 +4,8 @@ out/
 sesiones/
 uploads/
 programados/
+proteccion-publicacion.json
+idempotencia-publicacion.json
 .env
 .env.*
 *.log
