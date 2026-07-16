@@ -13,9 +13,11 @@ const {
     crearServicioAgendamiento,
     esNombreGestionado,
     indexarConexiones,
+    normalizarPalabrasClaveUsuario,
     normalizarTelefono,
     obtenerPrefijoLinea,
-    parsearPlantillaGreenvip
+    parsearPlantillaGreenvip,
+    parsearUsuarioPorPalabrasClave
 } = require('../src/agendamiento');
 
 function plantilla(usuario, conCeroAncho = false) {
@@ -120,6 +122,74 @@ test('el parser reconoce solamente la plantilla acordada y no expone la clave', 
         ),
         { usuario: 'cliente_78' }
     );
+});
+
+test('las palabras clave son literales, configurables y se conservan sin guardar chats', async t => {
+    assert.deepEqual(
+        normalizarPalabrasClaveUsuario(
+            ' Usuario: \r\nusuario:\n Cuenta (+): \nTu usuario es:'
+        ),
+        ['Usuario:', 'Cuenta (+):', 'Tu usuario es:']
+    );
+    assert.deepEqual(
+        parsearUsuarioPorPalabrasClave(
+            'Datos\nCuenta (+): jugador_88\nClave: secreta',
+            ['Cuenta (+):']
+        ),
+        { usuario: 'jugador_88' }
+    );
+    assert.equal(
+        parsearUsuarioPorPalabrasClave(
+            'Cuenta .*: no_debe_coincidir',
+            ['Cuenta (+):']
+        ),
+        null,
+        'las frases configuradas nunca se interpretan como regex'
+    );
+
+    const rutaDatos = crearTemporal(t);
+    const servicio = crearServicioAgendamiento({ rutaDatos });
+    const configuracion = servicio.configurarPalabrasClaveUsuario([
+        'Alias del jugador:',
+        'Usuario:'
+    ]);
+    assert.deepEqual(
+        configuracion.palabrasClave,
+        ['Alias del jugador:', 'Usuario:']
+    );
+
+    await servicio.registrarMensajes(
+        { id: 'linea-palabras', nombre: 'Línea 31' },
+        [{
+            key: {
+                fromMe: true,
+                remoteJid: '595981230031@s.whatsapp.net'
+            },
+            message: {
+                conversation:
+                    'Bienvenido\nAlias del jugador: cliente_31\nClave: no-guardar'
+            }
+        }]
+    );
+
+    const vista = servicio.obtenerVista({
+        id: 'linea-palabras',
+        nombre: 'Línea 31'
+    });
+    assert.equal(vista.candidatos[0].usuario, 'cliente_31');
+    servicio.cerrar();
+
+    const persistido = fs.readFileSync(rutaDatos, 'utf8');
+    assert.equal(persistido.includes('Alias del jugador:'), true);
+    assert.equal(persistido.includes('Bienvenido'), false);
+    assert.equal(persistido.includes('no-guardar'), false);
+
+    const recargado = crearServicioAgendamiento({ rutaDatos });
+    assert.deepEqual(
+        recargado.obtenerConfiguracionBusqueda().palabrasClave,
+        ['Alias del jugador:', 'Usuario:']
+    );
+    recargado.cerrar();
 });
 
 test('normaliza teléfonos y genera nombres idempotentes desde el último número de línea', () => {

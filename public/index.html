@@ -6073,6 +6073,214 @@
             transform: rotate(180deg);
         }
 
+        .agenda-picker-end {
+            display: inline-flex;
+            flex: 0 0 auto;
+            gap: 9px;
+            align-items: center;
+        }
+
+        .agenda-history-ring {
+            --history-progress: 0;
+            --history-color: #8b8cff;
+            position: relative;
+            display: grid;
+            flex: 0 0 30px;
+            place-items: center;
+            width: 30px;
+            height: 30px;
+            color: var(--history-color);
+        }
+
+        .agenda-history-ring.large {
+            flex-basis: 42px;
+            width: 42px;
+            height: 42px;
+        }
+
+        .agenda-history-ring svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+            transform: rotate(-90deg);
+        }
+
+        .agenda-history-ring circle {
+            fill: none;
+            stroke-width: 3.2;
+        }
+
+        .agenda-history-ring .track {
+            stroke: rgba(148, 163, 184, .14);
+        }
+
+        .agenda-history-ring .value {
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-dasharray: 100;
+            stroke-dashoffset: calc(100 - var(--history-progress));
+            filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 42%, transparent));
+            transition: stroke-dashoffset .35s ease, color .2s ease;
+        }
+
+        .agenda-history-ring-mark {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            place-items: center;
+            width: 15px;
+            height: 15px;
+            color: currentColor;
+            font-size: 10px;
+            font-weight: 950;
+            line-height: 1;
+        }
+
+        .agenda-history-ring[data-state="sincronizando"],
+        .agenda-history-ring[data-state="esperando_qr"] {
+            --history-color: #5eead4;
+        }
+
+        .agenda-history-ring[data-state="en_cola"],
+        .agenda-history-ring[data-state="pendiente"] {
+            --history-color: #9b9dfd;
+        }
+
+        .agenda-history-ring[data-state="lista"] {
+            --history-color: #45e69a;
+        }
+
+        .agenda-history-ring[data-state="pausada"],
+        .agenda-history-ring[data-state="parcial"] {
+            --history-color: #fbbf72;
+        }
+
+        .agenda-history-ring.indeterminate .value {
+            stroke-dasharray: 24 76;
+            stroke-dashoffset: 0;
+            transform-origin: center;
+            animation: agendaHistorySpin 1.05s linear infinite;
+        }
+
+        @keyframes agendaHistorySpin {
+            to { transform: rotate(360deg); }
+        }
+
+        .agenda-history-state {
+            display: grid;
+            grid-template-columns: 42px minmax(0, 1fr) auto;
+            gap: 11px;
+            align-items: center;
+            margin-top: 11px;
+            padding: 11px 12px;
+            border: 1px solid rgba(124, 114, 255, .18);
+            border-radius: 14px;
+            background:
+                linear-gradient(135deg, rgba(124, 114, 255, .075), rgba(45, 212, 191, .045)),
+                rgba(11, 17, 31, .62);
+        }
+
+        .agenda-history-state-copy {
+            display: grid;
+            gap: 3px;
+            min-width: 0;
+        }
+
+        .agenda-history-state-copy strong {
+            overflow: hidden;
+            font-size: 12px;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .agenda-history-state-copy span {
+            display: -webkit-box;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 10px;
+            line-height: 1.35;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+        }
+
+        .agenda-history-action {
+            min-height: 34px;
+            padding: 7px 10px;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+
+        .agenda-keywords-icon {
+            display: grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            color: #78f2d1;
+            border: 1px solid rgba(45, 212, 191, .25);
+            border-radius: 13px;
+            background:
+                linear-gradient(145deg, rgba(124, 114, 255, .16), rgba(45, 212, 191, .12));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+        }
+
+        .agenda-keywords-icon .icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        .agenda-keywords-modal-card {
+            width: min(570px, 94vw);
+        }
+
+        .agenda-keywords-intro {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        .agenda-keywords-example {
+            display: grid;
+            gap: 4px;
+            margin-top: 12px;
+            padding: 12px 13px;
+            color: #b9c7da;
+            font-size: 11px;
+            border: 1px solid rgba(45, 212, 191, .18);
+            border-radius: 13px;
+            background: rgba(45, 212, 191, .06);
+        }
+
+        .agenda-keywords-example code {
+            color: #79f2d1;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+
+        .agenda-keywords-editor {
+            min-height: 190px;
+            resize: vertical;
+            line-height: 1.55;
+        }
+
+        .agenda-keywords-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 7px;
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .agenda-keywords-meta strong {
+            color: #8eeed3;
+            font-weight: 800;
+        }
+
+        #agenda-palabras-mensaje[data-tone="error"] { color: #fb7185; }
+        #agenda-palabras-mensaje[data-tone="info"] { color: #93c5fd; }
+
         .agenda-picker-menu {
             position: absolute;
             z-index: 80;
@@ -6378,6 +6586,14 @@
             .agenda-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .agenda-contact-row { grid-template-columns: minmax(0, 1fr) auto; }
             .agenda-contact-meta { display: none; }
+            .agenda-history-state {
+                grid-template-columns: 42px minmax(0, 1fr);
+            }
+            .agenda-history-action {
+                grid-column: 1 / -1;
+                width: 100%;
+                justify-content: center;
+            }
         }
     </style>
 
@@ -6477,7 +6693,7 @@
             <div class="update-panel">
                 <div class="update-panel-header">
                     <span class="update-panel-title title-with-icon"><svg class="icon"><use href="#i-update"></use></svg><span>Actualizaciones</span></span>
-                    <span id="update-version" class="update-version">v1.1.0</span>
+                    <span id="update-version" class="update-version">v1.1.1</span>
                 </div>
 
                 <p id="update-message" class="update-message">
@@ -6504,7 +6720,7 @@
                 </button>
             </div>
 
-            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.1.0</div>
+            <div id="sidebar-app-version" class="sidebar-version">AutoStatues 1.1.1</div>
         </aside>
 
         <main class="main">
@@ -6921,16 +7137,32 @@
                                         <small>Línea de WhatsApp</small>
                                         <strong id="agenda-line-label">Seleccionar línea</strong>
                                     </span>
-                                    <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                                    <span class="agenda-picker-end">
+                                        <svg class="icon"><use href="#i-chevron-down"></use></svg>
+                                    </span>
                                 </button>
                                 <div id="agenda-line-menu" class="agenda-picker-menu" role="listbox"></div>
                             </div>
 
+                            <div class="agenda-history-state agenda-keywords-state">
+                                <span class="agenda-keywords-icon" aria-hidden="true">
+                                    <svg class="icon"><use href="#i-search"></use></svg>
+                                </span>
+                                <span class="agenda-history-state-copy">
+                                    <strong id="agenda-keywords-title">Búsqueda en chats recientes</strong>
+                                    <span id="agenda-keywords-detail">Configurá las frases que aparecen justo antes del usuario.</span>
+                                </span>
+                                <button type="button" id="btn-agenda-keywords" class="secondary-button agenda-history-action">
+                                    <svg class="icon"><use href="#i-settings"></use></svg>
+                                    <span>Configurar</span>
+                                </button>
+                            </div>
+
                             <div class="agenda-security-note">
                                 <svg class="icon"><use href="#i-check-circle"></use></svg>
-                                <span>Solo se consideran chats individuales de la línea seleccionada.</span>
+                                <span>Solo se revisan mensajes enviados por la línea en chats individuales. Los grupos, estados y mensajes recibidos se ignoran.</span>
                             </div>
-                            <p class="help" style="margin:10px 0 0;">Las vinculaciones nuevas solicitan el historial ampliado. En una sesión antigua, WhatsApp puede no reenviar chats previos y puede ser necesario volver a vincularla con QR.</p>
+                            <p class="help" style="margin:10px 0 0;">No se solicita el historial completo ni se reinicia la sesión. Se usan los bloques recientes que WhatsApp entregue normalmente y los mensajes nuevos.</p>
                         </div>
 
                         <div class="panel agenda-panel">
@@ -6978,7 +7210,7 @@
                                 <div>
                                     <span class="agenda-eyebrow"><svg class="icon"><use href="#i-users"></use></svg> Cola segura</span>
                                     <h2>Agendamiento uno a uno</h2>
-                                    <p>Formato: <strong id="agenda-name-example">L— usuario</strong>. El punto 🟣 se agrega al detectar reciprocidad. La detección usa el historial que WhatsApp sincroniza y los mensajes nuevos.</p>
+                                    <p>Formato: <strong id="agenda-name-example">L— usuario</strong>. El punto 🟣 se agrega al detectar reciprocidad. La detección usa chats recientes disponibles y mensajes nuevos.</p>
                                 </div>
                                 <button type="button" id="btn-agenda-refresh" class="secondary-button">
                                     <svg class="icon"><use href="#i-refresh"></use></svg>
@@ -6988,7 +7220,7 @@
 
                             <div class="agenda-security-note">
                                 <svg class="icon"><use href="#i-info"></use></svg>
-                                <span>Se extrae únicamente el usuario del mensaje de Greenvip. La clave y el contenido del chat se descartan inmediatamente y nunca se guardan.</span>
+                                <span>Se extrae únicamente el usuario ubicado después de una frase configurada. Las claves y el contenido completo del chat nunca se guardan en disco.</span>
                             </div>
 
                             <div class="agenda-stats">
@@ -7541,6 +7773,75 @@
     </div>
 
     <div
+        id="modal-agenda-palabras"
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="agenda-palabras-titulo"
+    >
+        <div class="modal-card agenda-keywords-modal-card">
+            <div class="modal-header">
+                <h2 id="agenda-palabras-titulo" class="title-with-icon">
+                    <svg class="icon"><use href="#i-search"></use></svg>
+                    <span>Palabras clave de usuario</span>
+                </h2>
+                <button
+                    type="button"
+                    id="cerrar-modal-agenda-palabras"
+                    class="icon-button"
+                    aria-label="Cerrar"
+                >
+                    <svg class="icon"><use href="#i-x"></use></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="agenda-keywords-intro">
+                    Escribí una frase por línea. AutoStatues buscará cada frase
+                    literalmente y tomará como usuario el primer texto válido
+                    que aparezca justo después, dentro de la misma línea.
+                </p>
+
+                <div class="agenda-keywords-example">
+                    <span>Ejemplo: si configurás <code>👤 Usuario:</code></span>
+                    <span>En <code>👤 Usuario: cliente_77</code> se detectará <code>cliente_77</code>.</span>
+                </div>
+
+                <div class="field" style="margin-top:16px;">
+                    <label for="agenda-palabras-texto" class="label-with-icon">
+                        <svg class="icon"><use href="#i-text"></use></svg>
+                        <span>Frases de búsqueda</span>
+                    </label>
+                    <textarea
+                        id="agenda-palabras-texto"
+                        class="textarea agenda-keywords-editor"
+                        maxlength="3000"
+                        spellcheck="false"
+                        placeholder="Usuario:&#10;Tu usuario es:&#10;Cuenta creada:"
+                    ></textarea>
+                    <div class="agenda-keywords-meta">
+                        <span>Usá frases específicas para evitar coincidencias incorrectas.</span>
+                        <strong id="agenda-palabras-contador">0 de 30</strong>
+                    </div>
+                </div>
+
+                <p id="agenda-palabras-mensaje" class="modal-message"></p>
+
+                <div class="modal-actions">
+                    <button type="button" id="btn-guardar-agenda-palabras" class="primary-button">
+                        <svg class="icon"><use href="#i-search"></use></svg>
+                        <span>Guardar y buscar</span>
+                    </button>
+                    <button type="button" id="btn-cancelar-agenda-palabras" class="secondary-button">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                        <span>Cancelar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div
         id="modal-qr-linea"
         class="modal qr-line-modal"
         role="dialog"
@@ -7604,6 +7905,7 @@
         let configuracionActual = null;
         let seccionActual = 'dashboard';
         let cacheLineasSeccion = [];
+        let cacheLineasAgendamiento = [];
         let cacheLineasPendientes = [];
         let vistaLineas = 'large';
         let vistaEstadosActivos = 'medium';
@@ -9507,8 +9809,126 @@
             ).trim() || 'Cuenta de Google';
         }
 
+        function normalizarHistorialAgenda(historial = {}) {
+            const estados = new Set([
+                'pendiente',
+                'en_cola',
+                'esperando_qr',
+                'sincronizando',
+                'lista',
+                'parcial',
+                'pausada'
+            ]);
+            const estado = estados.has(historial?.estado)
+                ? historial.estado
+                : 'pendiente';
+            const numero = Number(historial?.progreso);
+            const progreso = historial?.progreso === null ||
+                historial?.progreso === undefined ||
+                !Number.isFinite(numero)
+                ? null
+                : Math.min(100, Math.max(0, Math.round(numero)));
+
+            return {
+                ...historial,
+                estado,
+                progreso,
+                indeterminado:
+                    historial?.indeterminado === true ||
+                    (
+                        ['en_cola', 'esperando_qr', 'sincronizando'].includes(estado) &&
+                        progreso === null
+                    ),
+                listoParaAgendar:
+                    historial?.listoParaAgendar === true || estado === 'lista'
+            };
+        }
+
+        function presentacionHistorialAgenda(historial = {}) {
+            const datos = normalizarHistorialAgenda(historial);
+            const presentaciones = {
+                pendiente: {
+                    titulo: 'Historial pendiente',
+                    detalle:
+                        'Todavía no se preparó el historial de esta línea.',
+                    marca: '•'
+                },
+                en_cola: {
+                    titulo: datos.posicionCola
+                        ? `En cola · turno ${datos.posicionCola}`
+                        : 'En cola',
+                    detalle:
+                        'Esperando mientras otra línea termina su sincronización.',
+                    marca: '•'
+                },
+                esperando_qr: {
+                    titulo: 'Esperando el QR',
+                    detalle:
+                        'Escaneá el QR para comenzar la sincronización exclusiva.',
+                    marca: ''
+                },
+                sincronizando: {
+                    titulo: 'Sincronizando historial',
+                    detalle:
+                        'WhatsApp está enviando y AutoStatues está procesando los datos.',
+                    marca: ''
+                },
+                lista: {
+                    titulo: 'Lista para agendar',
+                    detalle:
+                        'El historial recibido terminó de procesarse correctamente.',
+                    marca: '✓'
+                },
+                parcial: {
+                    titulo: 'Historial parcial',
+                    detalle:
+                        'Se conservaron los datos disponibles, pero WhatsApp no entregó el historial completo.',
+                    marca: '!'
+                },
+                pausada: {
+                    titulo: 'Sincronización pausada',
+                    detalle:
+                        'Podés volver a prepararla cuando la línea esté estable.',
+                    marca: 'Ⅱ'
+                }
+            };
+            const visual = presentaciones[datos.estado] || presentaciones.pendiente;
+            return {
+                ...datos,
+                ...visual,
+                detalle: String(datos.motivo || visual.detalle)
+            };
+        }
+
+        function anilloHistorialAgendaHTML(historial = {}, grande = false) {
+            const visual = presentacionHistorialAgenda(historial);
+            const progreso = visual.progreso ?? 0;
+            const indeterminado = visual.indeterminado
+                ? ' indeterminate'
+                : '';
+            const descripcion = visual.progreso === null
+                ? visual.titulo
+                : `${visual.titulo}: ${visual.progreso}%`;
+            return `
+                <span
+                    class="agenda-history-ring${grande ? ' large' : ''}${indeterminado}"
+                    data-state="${escaparHTML(visual.estado)}"
+                    style="--history-progress:${progreso}"
+                    role="img"
+                    aria-label="${escaparHTML(descripcion)}"
+                    title="${escaparHTML(descripcion)}"
+                >
+                    <svg viewBox="0 0 36 36" aria-hidden="true">
+                        <circle class="track" cx="18" cy="18" r="15.5" pathLength="100"></circle>
+                        <circle class="value" cx="18" cy="18" r="15.5" pathLength="100"></circle>
+                    </svg>
+                    <span class="agenda-history-ring-mark">${escaparHTML(visual.marca)}</span>
+                </span>
+            `;
+        }
+
         function lineaAgendaSeleccionada() {
-            return cacheLineasSeccion.find(
+            return cacheLineasAgendamiento.find(
                 linea => String(linea.id) === String(agendaLineaId)
             ) || null;
         }
@@ -9551,9 +9971,9 @@
             if (
                 !agendaLineaId &&
                 seccionActual === 'agendamiento' &&
-                cacheLineasSeccion.length
+                cacheLineasAgendamiento.length
             ) {
-                agendaLineaId = String(cacheLineasSeccion[0].id);
+                agendaLineaId = String(cacheLineasAgendamiento[0].id);
             }
 
             const linea = lineaAgendaSeleccionada();
@@ -9567,7 +9987,7 @@
 
             const firma = JSON.stringify({
                 seleccionada: String(agendaLineaId || ''),
-                lineas: cacheLineasSeccion.map(item => [
+                lineas: cacheLineasAgendamiento.map(item => [
                     String(item.id),
                     item.nombre || '',
                     item.numero || '',
@@ -9578,12 +9998,12 @@
             if (!forzar && (firma === agendaFirmaLineas || interactuando)) return;
             agendaFirmaLineas = firma;
 
-            if (!cacheLineasSeccion.length) {
-                menu.innerHTML = '<div class="agenda-empty" style="min-height:90px;padding:14px;">No hay líneas conectadas.</div>';
+            if (!cacheLineasAgendamiento.length) {
+                menu.innerHTML = '<div class="agenda-empty" style="min-height:90px;padding:14px;">No hay líneas disponibles.</div>';
                 return;
             }
 
-            menu.innerHTML = cacheLineasSeccion.map(item => {
+            menu.innerHTML = cacheLineasAgendamiento.map(item => {
                 const activa = String(item.id) === String(agendaLineaId);
                 return `
                     <button
@@ -9596,7 +10016,9 @@
                         <span class="agenda-picker-avatar">${escaparHTML(obtenerAvatarLinea(item))}</span>
                         <span class="agenda-picker-option-copy">
                             <strong>${escaparHTML(item.nombre || 'Línea sin nombre')}</strong>
-                            <small>${escaparHTML(item.numero || 'Número no disponible')}</small>
+                            <small>${escaparHTML(
+                                `${item.numero || 'Número no disponible'} · Chats recientes`
+                            )}</small>
                         </span>
                         ${activa ? iconoSVG('check') : '<span></span>'}
                     </button>
@@ -9785,6 +10207,17 @@
             document.getElementById('agenda-stat-synced').textContent = agendados;
             document.getElementById('agenda-stat-mutual').textContent = mutuos;
 
+            const palabrasClave = Array.isArray(agendaEstado?.busqueda?.palabrasClave)
+                ? agendaEstado.busqueda.palabrasClave
+                : ['Usuario:'];
+            const cantidadPalabras = palabrasClave.length;
+            document.getElementById('agenda-keywords-title').textContent =
+                `${cantidadPalabras} frase${cantidadPalabras === 1 ? '' : 's'} configurada${cantidadPalabras === 1 ? '' : 's'}`;
+            document.getElementById('agenda-keywords-detail').textContent =
+                agendaLineaId
+                    ? 'Abrí la configuración para guardar cambios y revisar los mensajes recientes disponibles de esta línea.'
+                    : 'Las frases se aplicarán a todas las líneas de esta instalación.';
+
             const proceso = agendaEstado.proceso || {};
             const activo = proceso.activo === true;
             const procesados = numeroAgenda(proceso.procesados);
@@ -9814,7 +10247,9 @@
             document.getElementById('btn-agenda-start').disabled =
                 activo || !agendaLineaId || !agendaCuentaId || !credencialesConfiguradas ||
                 (pendientes < 1 && usuariosPendientesJid < 1);
-            document.getElementById('btn-agenda-stop').disabled = !activo || !agendaLineaId;
+            document.getElementById('btn-agenda-stop').disabled =
+                !activo || !agendaLineaId;
+            document.getElementById('btn-agenda-keywords').disabled = activo;
             renderizarCandidatosAgendamiento(agendaEstado.candidatos);
             programarActualizacionAgendamiento();
         }
@@ -9959,6 +10394,106 @@
                 agendaOAuthEnCurso = false;
                 boton.removeAttribute('aria-busy');
                 renderizarAgendamiento(agendaEstado || {});
+            }
+        }
+
+        function frasesAgendaDesdeTexto(texto) {
+            const frases = [];
+            const vistas = new Set();
+            for (const valor of String(texto || '').split(/\r?\n/)) {
+                const frase = valor
+                    .replace(/[\u200B-\u200D\u2060\uFEFF]/gu, '')
+                    .normalize('NFC')
+                    .replace(/\s+/gu, ' ')
+                    .trim();
+                if (!frase) continue;
+                const clave = frase.toLocaleLowerCase('es');
+                if (vistas.has(clave)) continue;
+                vistas.add(clave);
+                frases.push(frase);
+            }
+            return frases;
+        }
+
+        function actualizarContadorPalabrasAgenda() {
+            const texto = document.getElementById('agenda-palabras-texto').value;
+            const cantidad = frasesAgendaDesdeTexto(texto).length;
+            document.getElementById('agenda-palabras-contador').textContent =
+                `${cantidad} de 30`;
+        }
+
+        function abrirPalabrasClaveAgendamiento() {
+            const palabras = Array.isArray(agendaEstado?.busqueda?.palabrasClave)
+                ? agendaEstado.busqueda.palabrasClave
+                : ['Usuario:'];
+            const textarea = document.getElementById('agenda-palabras-texto');
+            const mensaje = document.getElementById('agenda-palabras-mensaje');
+            textarea.value = palabras.join('\n');
+            mensaje.textContent = '';
+            mensaje.removeAttribute('data-tone');
+            actualizarContadorPalabrasAgenda();
+            abrirModal('modal-agenda-palabras');
+            requestAnimationFrame(() => {
+                textarea.focus({ preventScroll: true });
+                textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+            });
+        }
+
+        function cerrarPalabrasClaveAgendamiento() {
+            cerrarModal('modal-agenda-palabras');
+        }
+
+        async function guardarPalabrasClaveAgendamiento() {
+            const textarea = document.getElementById('agenda-palabras-texto');
+            const mensaje = document.getElementById('agenda-palabras-mensaje');
+            const boton = document.getElementById('btn-guardar-agenda-palabras');
+            const palabrasClave = frasesAgendaDesdeTexto(textarea.value);
+
+            if (!palabrasClave.length) {
+                mensaje.textContent =
+                    'Escribí al menos una frase para localizar el usuario.';
+                mensaje.dataset.tone = 'error';
+                textarea.focus({ preventScroll: true });
+                return;
+            }
+
+            boton.disabled = true;
+            boton.setAttribute('aria-busy', 'true');
+            mensaje.textContent = agendaLineaId
+                ? 'Guardando y revisando los mensajes recientes disponibles…'
+                : 'Guardando las frases…';
+            mensaje.dataset.tone = 'info';
+
+            try {
+                const respuesta = await fetch('/agendamiento/palabras-clave', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        palabrasClave,
+                        lineaId: agendaLineaId || null
+                    })
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudieron guardar las palabras clave.'
+                );
+                agendaEstado = {
+                    ...(agendaEstado || {}),
+                    busqueda: data.busqueda || { palabrasClave }
+                };
+                cerrarPalabrasClaveAgendamiento();
+                toast(
+                    data.mensaje || 'Palabras clave guardadas.',
+                    'success'
+                );
+                await actualizarAgendamiento(true);
+            } catch (error) {
+                mensaje.textContent =
+                    error.message || 'No se pudieron guardar las palabras clave.';
+                mensaje.dataset.tone = 'error';
+            } finally {
+                boton.disabled = false;
+                boton.removeAttribute('aria-busy');
             }
         }
 
@@ -10221,19 +10756,22 @@
 
                 selector.innerHTML = '';
 
-                const conectadas = data.lineas
-                    .filter(linea => linea.estado === 'conectado')
+                const todasLasLineas = data.lineas
                     .map((linea, indice) => ({
                         ...linea,
                         ordenOriginal: Number(linea.ordenConexion) || indice + 1
                     }));
-                const pendientes = data.lineas.filter(
+                const conectadas = todasLasLineas.filter(
+                    linea => linea.estado === 'conectado'
+                );
+                const pendientes = todasLasLineas.filter(
                     linea => linea.estado !== 'conectado'
                 );
 
                 sincronizarModalQr(data.lineas);
 
                 cacheLineasSeccion = conectadas;
+                cacheLineasAgendamiento = todasLasLineas;
                 renderizarSelectorLineasAgendamiento();
 
                 idsLineasConectadas = conectadas
@@ -11218,6 +11756,7 @@
             renderizarAgendamiento({
                 credencialesConfiguradas: agendaEstado?.credencialesConfiguradas === true,
                 cuentas: agendaEstado?.cuentas || [],
+                busqueda: agendaEstado?.busqueda || { palabrasClave: ['Usuario:'] },
                 lineaId: id,
                 cuentaId: null,
                 resumen: {},
@@ -11252,6 +11791,32 @@
             actualizarAgendamiento(true);
         };
 
+        document.getElementById('btn-agenda-keywords').onclick = () => {
+            abrirPalabrasClaveAgendamiento();
+        };
+
+        document.getElementById('agenda-palabras-texto').addEventListener(
+            'input',
+            actualizarContadorPalabrasAgenda
+        );
+
+        document.getElementById('btn-guardar-agenda-palabras').onclick = () => {
+            guardarPalabrasClaveAgendamiento();
+        };
+
+        document.getElementById('btn-cancelar-agenda-palabras').onclick =
+            cerrarPalabrasClaveAgendamiento;
+        document.getElementById('cerrar-modal-agenda-palabras').onclick =
+            cerrarPalabrasClaveAgendamiento;
+        document.getElementById('modal-agenda-palabras').addEventListener(
+            'click',
+            evento => {
+                if (evento.target.id === 'modal-agenda-palabras') {
+                    cerrarPalabrasClaveAgendamiento();
+                }
+            }
+        );
+
         document.getElementById('btn-agenda-start').onclick = () => {
             cambiarProcesoAgendamiento('iniciar');
         };
@@ -11266,6 +11831,13 @@
 
         document.addEventListener('keydown', evento => {
             if (evento.key !== 'Escape') return;
+            const modalPalabras =
+                document.getElementById('modal-agenda-palabras');
+            if (modalPalabras.classList.contains('open')) {
+                evento.preventDefault();
+                cerrarPalabrasClaveAgendamiento();
+                return;
+            }
             const abierto = document.querySelector('.agenda-picker.open');
             if (!abierto) return;
             cerrarSelectoresAgendamiento();
@@ -11993,7 +12565,7 @@
             const botonDescargar = document.getElementById('btn-update-download');
             const botonInstalar = document.getElementById('btn-update-install');
 
-            const versionActual = estado.versionActual || '1.1.0';
+            const versionActual = estado.versionActual || '1.1.1';
             version.textContent = `v${versionActual}`;
             if (versionSidebar) versionSidebar.textContent = `AutoStatues ${versionActual}`;
             mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';

@@ -1,0 +1,219 @@
+AUTOSTATUES 1.1.1
+GUÍA DEL NUEVO SISTEMA DE AGENDAMIENTO
+========================================
+
+1. ¿QUÉ CAMBIÓ?
+---------------
+
+El Agendamiento ya no solicita el historial completo de WhatsApp, no cierra
+sesiones y no requiere volver a vincular las líneas mediante QR.
+
+Ahora AutoStatues trabaja con:
+
+- Los chats recientes que WhatsApp entregue normalmente.
+- Los mensajes nuevos que lleguen mientras AutoStatues está funcionando.
+- Frases de búsqueda configuradas por el usuario.
+
+El contenido completo de los chats y las contraseñas no se guardan en disco.
+AutoStatues conserva únicamente el usuario detectado y los datos necesarios
+para crear o actualizar el contacto.
+
+
+2. CÓMO CONFIGURAR LAS FRASES DE BÚSQUEDA
+-----------------------------------------
+
+1. Entrar en el apartado "Agendamiento".
+2. Seleccionar la línea de WhatsApp que se desea procesar.
+3. Pulsar el botón "Configurar".
+4. Escribir una frase de búsqueda por línea.
+5. Pulsar "Guardar y buscar".
+
+Ejemplo de configuración:
+
+👤 Usuario:
+Tu usuario es:
+Usuario creado:
+
+Si un mensaje contiene:
+
+👤 Usuario: cliente_77
+
+AutoStatues detectará:
+
+cliente_77
+
+La frase configurada debe aparecer antes del usuario y ambos deben estar en la
+misma línea del mensaje.
+
+Las frases se guardan para toda la instalación de AutoStatues y se aplican a
+todas las líneas.
+
+
+3. RECOMENDACIONES PARA LAS FRASES
+----------------------------------
+
+- Usar frases completas y específicas.
+- Evitar términos demasiado generales como "usuario".
+- Incluir los signos y emojis habituales cuando ayuden a identificar el campo.
+- Escribir una sola frase por línea.
+- No es necesario respetar mayúsculas y minúsculas.
+- Las frases se interpretan como texto literal, no como expresiones regulares.
+
+Límites:
+
+- Hasta 30 frases.
+- Entre 2 y 100 caracteres por frase.
+- Hasta 3.000 caracteres en total.
+- Las frases repetidas se eliminan automáticamente.
+
+
+4. REQUISITOS DEL USUARIO DETECTADO
+-----------------------------------
+
+El usuario debe aparecer inmediatamente después de la frase configurada.
+
+Puede contener:
+
+- Letras.
+- Números.
+- Punto.
+- Guion.
+- Guion bajo.
+
+Ejemplos válidos:
+
+cliente_77
+jugador.28
+casino-104
+
+Un usuario con espacios no será aceptado.
+
+
+5. QUÉ MENSAJES REVISA AUTOSTATUES
+----------------------------------
+
+Por seguridad, solamente se procesan:
+
+- Mensajes enviados desde la propia línea.
+- Chats individuales.
+- Mensajes recientes entregados normalmente por WhatsApp.
+- Mensajes nuevos recibidos por AutoStatues mientras está abierto.
+
+Se ignoran:
+
+- Mensajes recibidos de los clientes.
+- Grupos.
+- Estados.
+- Canales.
+- Mensajes que no contengan ninguna frase configurada.
+
+
+6. CÓMO AGENDAR LOS CONTACTOS
+-----------------------------
+
+1. Seleccionar una línea en "Agendamiento".
+2. Configurar y guardar las frases de búsqueda.
+3. Cargar las credenciales de Google si todavía no están configuradas.
+4. Conectar una cuenta de Google.
+5. Asignar esa cuenta a la línea seleccionada.
+6. Revisar la lista de "Usuarios encontrados".
+7. Pulsar "Agendar pendientes".
+
+AutoStatues procesa los contactos uno por uno y guarda el avance para poder
+continuar posteriormente.
+
+
+7. NOMBRE QUE RECIBIRÁ EL CONTACTO
+----------------------------------
+
+El formato utilizado es:
+
+L(número de línea) (usuario)
+
+Ejemplo:
+
+L28 cliente_77
+
+Si AutoStatues detecta que el contacto es mutuo, agrega el punto morado:
+
+L28 cliente_77 🟣
+
+Se considera señal de contacto mutuo cuando:
+
+- La persona vio uno de nuestros estados, o
+- Podemos ver un estado publicado por esa persona.
+
+
+8. MEMORIA DE MENSAJES RECIENTES
+--------------------------------
+
+AutoStatues mantiene temporalmente hasta 3.000 mensajes recientes por línea
+para poder volver a analizarlos cuando se cambien las frases.
+
+Esta memoria:
+
+- Solo existe mientras la aplicación está abierta.
+- No se escribe en el disco.
+- Se borra al cerrar AutoStatues.
+- No modifica ni desconecta la sesión de WhatsApp.
+
+Los usuarios que ya fueron detectados sí permanecen guardados.
+
+
+9. SI NO ENCUENTRA UN USUARIO
+-----------------------------
+
+Comprobar lo siguiente:
+
+1. Que el mensaje haya sido enviado desde la propia línea.
+2. Que sea un chat individual y no un grupo.
+3. Que la frase configurada aparezca exactamente antes del usuario.
+4. Que la frase y el usuario estén en la misma línea.
+5. Que el usuario no tenga espacios ni caracteres no permitidos.
+6. Que la línea esté conectada.
+7. Que WhatsApp haya entregado ese chat como reciente o que el mensaje haya
+   llegado mientras AutoStatues estaba abierto.
+8. Pulsar "Actualizar" para refrescar la lista.
+
+Importante:
+
+AutoStatues no puede revisar conversaciones antiguas que WhatsApp no haya
+entregado recientemente. Esto evita solicitar el historial completo, cerrar
+sesiones o volver a vincular líneas mediante QR.
+
+
+10. SEGURIDAD Y PRIVACIDAD
+--------------------------
+
+- No se solicita el historial completo.
+- No se reinicia la línea para buscar usuarios.
+- No se necesita escanear nuevamente el QR.
+- No se guardan contraseñas.
+- No se guarda el contenido completo de los chats.
+- Las frases configuradas y los usuarios encontrados sí se guardan.
+- Google Contacts se procesa de forma secuencial.
+
+
+EJEMPLO RECOMENDADO
+-------------------
+
+Mensaje enviado:
+
+¡Genial! 😍💥
+Cualquier duda que tengas, estoy para ayudarte 😉🔥
+👤 Usuario: cliente_77
+🔐 Clave: 123456
+📡 Enlace: https://greenvip.net/
+
+Frase que debe configurarse:
+
+👤 Usuario:
+
+Contacto resultante:
+
+L28 cliente_77
+
+O, si existe reciprocidad:
+
+L28 cliente_77 🟣
+

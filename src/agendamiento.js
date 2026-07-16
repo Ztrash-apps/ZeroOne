@@ -6,7 +6,7 @@ const http = require('http');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const VERSION_DATOS = 1;
+const VERSION_DATOS = 2;
 const MARCADOR_MUTUO = '🟣';
 const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts';
 const GOOGLE_SCOPES = [GOOGLE_CONTACTS_SCOPE, 'openid', 'email'];
@@ -16,6 +16,10 @@ const CERO_ANCHO = /[\u200B-\u200D\u2060\uFEFF]/gu;
 const CLIENT_DATA_LINEA = 'autostatues_line';
 const CLIENT_DATA_USUARIO = 'autostatues_user';
 const ESPERA_RESULTADO_INCIERTO_MS = 10 * 60 * 1000;
+const PALABRAS_CLAVE_USUARIO_PREDETERMINADAS = ['Usuario:'];
+const MAXIMO_PALABRAS_CLAVE_USUARIO = 30;
+const MAXIMO_CARACTERES_PALABRA_CLAVE = 100;
+const MAXIMO_CARACTERES_PALABRAS_CLAVE = 3000;
 
 class ErrorAgendamiento extends Error {
     constructor(codigo, mensaje, causa, httpStatus) {
@@ -53,6 +57,119 @@ function normalizarUsuario(valor) {
     if (!usuario || usuario.includes('\n') || /\s/u.test(usuario)) return null;
     if (!/^[\p{L}\p{N}_.-]{1,80}$/u.test(usuario)) return null;
     return usuario;
+}
+
+function normalizarPalabraClaveUsuario(valor) {
+    if (typeof valor !== 'string') return '';
+    return valor
+        .replace(CERO_ANCHO, '')
+        .replace(/\r\n?/g, '\n')
+        .normalize('NFC')
+        .replace(/\s+/gu, ' ')
+        .trim();
+}
+
+function normalizarPalabrasClaveUsuario(entrada, { estricto = false } = {}) {
+    const valores = typeof entrada === 'string'
+        ? entrada.split(/\r?\n/u)
+        : Array.isArray(entrada)
+            ? entrada
+            : [];
+    const palabrasClave = [];
+    const vistas = new Set();
+    let caracteresTotales = 0;
+
+    for (const valor of valores) {
+        if (typeof valor !== 'string') {
+            if (estricto) {
+                throw new ErrorAgendamiento(
+                    'PALABRAS_CLAVE_INVALIDAS',
+                    'Cada palabra clave debe ser una frase de texto.'
+                );
+            }
+            continue;
+        }
+
+        const palabra = normalizarPalabraClaveUsuario(valor);
+        if (!palabra) continue;
+        if (
+            palabra.length < 2 ||
+            palabra.length > MAXIMO_CARACTERES_PALABRA_CLAVE
+        ) {
+            if (estricto) {
+                throw new ErrorAgendamiento(
+                    'PALABRA_CLAVE_INVALIDA',
+                    `Cada frase debe tener entre 2 y ${MAXIMO_CARACTERES_PALABRA_CLAVE} caracteres.`
+                );
+            }
+            continue;
+        }
+
+        const clave = palabra.toLocaleLowerCase('es');
+        if (vistas.has(clave)) continue;
+        vistas.add(clave);
+        palabrasClave.push(palabra);
+        caracteresTotales += palabra.length;
+
+        if (
+            palabrasClave.length > MAXIMO_PALABRAS_CLAVE_USUARIO ||
+            caracteresTotales > MAXIMO_CARACTERES_PALABRAS_CLAVE
+        ) {
+            if (estricto) {
+                throw new ErrorAgendamiento(
+                    'DEMASIADAS_PALABRAS_CLAVE',
+                    `Podés guardar hasta ${MAXIMO_PALABRAS_CLAVE_USUARIO} frases y ${MAXIMO_CARACTERES_PALABRAS_CLAVE} caracteres en total.`
+                );
+            }
+            palabrasClave.pop();
+            break;
+        }
+    }
+
+    if (!palabrasClave.length) {
+        if (estricto) {
+            throw new ErrorAgendamiento(
+                'PALABRAS_CLAVE_VACIAS',
+                'Escribí al menos una frase para localizar el usuario.'
+            );
+        }
+        return [...PALABRAS_CLAVE_USUARIO_PREDETERMINADAS];
+    }
+
+    return palabrasClave;
+}
+
+function escaparExpresionRegular(valor) {
+    return String(valor || '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/**
+ * Busca frases literales configuradas por el usuario y toma el primer token
+ * válido que aparece inmediatamente después en la misma línea.
+ */
+function parsearUsuarioPorPalabrasClave(texto, palabrasClave) {
+    const normalizado = normalizarTextoPlantilla(texto);
+    if (!normalizado) return null;
+
+    const frases = normalizarPalabrasClaveUsuario(palabrasClave);
+    const lineas = normalizado.split('\n');
+
+    for (const frase of frases) {
+        const expresion = new RegExp(escaparExpresionRegular(frase), 'iu');
+        for (const linea of lineas) {
+            const coincidencia = expresion.exec(linea);
+            if (!coincidencia) continue;
+
+            const resto = linea
+                .slice(coincidencia.index + coincidencia[0].length)
+                .replace(/^[\s:;=\-–—]+/u, '');
+            const token = resto.match(/^[\p{L}\p{N}_.-]{1,80}(?=$|\s)/u)?.[0];
+            const usuario = normalizarUsuario(token);
+            if (usuario) return { usuario };
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -234,6 +351,10 @@ function estadoInicial() {
         oauth: null,
         cuentas: [],
         asociaciones: {},
+        busqueda: {
+            palabrasClaveUsuario: [...PALABRAS_CLAVE_USUARIO_PREDETERMINADAS],
+            actualizadaEn: null
+        },
         lineas: {}
     };
 }
@@ -295,6 +416,13 @@ function escribirJsonAtomico(ruta, datos) {
 
 function sanitizarEstadoLeido(leido) {
     const limpio = estadoInicial();
+    limpio.busqueda = {
+        palabrasClaveUsuario: normalizarPalabrasClaveUsuario(
+            leido?.busqueda?.palabrasClaveUsuario
+        ),
+        actualizadaEn:
+            textoSeguro(leido?.busqueda?.actualizadaEn, 40) || null
+    };
     if (leido.oauth && typeof leido.oauth === 'object') {
         const oauth = {
             clientId: textoSeguro(leido.oauth.clientId, 500),
@@ -589,7 +717,9 @@ function normalizarTimestampMensaje(valor) {
 
 function normalizarOrigenMensajes(opciones) {
     const valor = textoSeguro(opciones?.origen || opciones?.source, 30).toLowerCase();
-    return ['historial', 'history'].includes(valor) ? 'historial' : 'vivo';
+    return ['historial', 'history', 'reciente', 'recent'].includes(valor)
+        ? 'historial'
+        : 'vivo';
 }
 
 function obtenerFuenteUsuarioMensaje(mensaje, origen, evento, posicion) {
@@ -838,6 +968,36 @@ class ServicioAgendamiento extends EventEmitter {
         return invalidados;
     }
 
+    obtenerConfiguracionBusqueda() {
+        return clonarSeguro({
+            palabrasClave: normalizarPalabrasClaveUsuario(
+                this.estado?.busqueda?.palabrasClaveUsuario
+            ),
+            actualizadaEn: this.estado?.busqueda?.actualizadaEn || null,
+            maximoPalabrasClave: MAXIMO_PALABRAS_CLAVE_USUARIO,
+            maximoCaracteresPorFrase: MAXIMO_CARACTERES_PALABRA_CLAVE
+        });
+    }
+
+    configurarPalabrasClaveUsuario(entrada) {
+        if (this.sincronizacion || this.reservaSincronizacion) {
+            throw new ErrorAgendamiento(
+                'SINCRONIZACION_ACTIVA',
+                'Detené el agendamiento antes de cambiar las palabras clave.'
+            );
+        }
+
+        const palabrasClave = normalizarPalabrasClaveUsuario(entrada, {
+            estricto: true
+        });
+        this.estado.busqueda = {
+            palabrasClaveUsuario: palabrasClave,
+            actualizadaEn: fechaIso(this.ahora)
+        };
+        this.guardar();
+        return this.obtenerConfiguracionBusqueda();
+    }
+
     configurarCredenciales(datos) {
         const nuevas = normalizarCredenciales(datos);
         const clientIdAnterior = this.estado.oauth?.clientId || null;
@@ -1062,7 +1222,10 @@ class ServicioAgendamiento extends EventEmitter {
                 omitidos += 1;
                 continue;
             }
-            const resultado = parsearPlantillaGreenvip(extraerTextoMensaje(mensaje));
+            const resultado = parsearUsuarioPorPalabrasClave(
+                extraerTextoMensaje(mensaje),
+                this.estado?.busqueda?.palabrasClaveUsuario
+            );
             if (!resultado) {
                 omitidos += 1;
                 continue;
@@ -1314,6 +1477,7 @@ class ServicioAgendamiento extends EventEmitter {
             cuentaId: cuentaAsociada,
             credencialesConfiguradas: Boolean(this.estado.oauth),
             cuentas: this.listarCuentas(),
+            busqueda: this.obtenerConfiguracionBusqueda(),
             candidatos,
             pendientesResolucion,
             totales: {
@@ -2072,6 +2236,8 @@ module.exports = {
     ErrorAgendamiento,
     GOOGLE_CONTACTS_SCOPE,
     MARCADOR_MUTUO,
+    MAXIMO_PALABRAS_CLAVE_USUARIO,
+    PALABRAS_CLAVE_USUARIO_PREDETERMINADAS,
     ServicioAgendamiento,
     agregarMarcadorMutuo,
     candidatoEstaSincronizado,
@@ -2084,6 +2250,7 @@ module.exports = {
     indexarConexiones,
     leerJsonSeguro,
     normalizarTelefono,
+    normalizarPalabrasClaveUsuario,
     normalizarTextoPlantilla,
     normalizarTimestampMensaje,
     obtenerFuenteContacto,
@@ -2091,5 +2258,6 @@ module.exports = {
     obtenerNombrePersona,
     obtenerPrefijoLinea,
     parsearPlantillaGreenvip,
+    parsearUsuarioPorPalabrasClave,
     quitarMarcadoresMutuos
 };

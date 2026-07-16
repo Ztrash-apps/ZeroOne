@@ -4,7 +4,8 @@ const {
     Browsers,
     jidNormalizedUser,
     WAMessageStatus,
-    DisconnectReason
+    DisconnectReason,
+    proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
@@ -23,6 +24,7 @@ const {
 const {
     ErrorAgendamiento,
     crearServicioAgendamiento,
+    extraerTextoMensaje,
     obtenerPrefijoLinea
 } = require('./agendamiento');
 
@@ -323,7 +325,38 @@ const MAXIMOS_REGISTROS_ACTIVIDAD_CONTACTOS = 50000;
 const DEMORA_GUARDADO_ACTIVIDAD_CONTACTOS_MS = 3000;
 const TIEMPO_ESPERA_COLA_ACTIVIDAD_CONTACTOS_MS = 10000;
 const MARGEN_TIMESTAMP_FUTURO_MS = 5 * 60 * 1000;
+const TIEMPO_MAXIMO_SINCRONIZACION_HISTORIAL_MS = 15 * 60 * 1000;
+const TIEMPO_INACTIVIDAD_SINCRONIZACION_HISTORIAL_MS = 2 * 60 * 1000;
+const DEMORA_SIGUIENTE_SINCRONIZACION_HISTORIAL_MS = 1000;
+const MAXIMOS_MENSAJES_RECIENTES_AGENDAMIENTO = 3000;
+const MAXIMOS_CARACTERES_MENSAJE_RECIENTE_AGENDAMIENTO = 4000;
 const MODOS_RITMO_PUBLICACION = new Set(['secuencial', 'grupos']);
+const ESTADOS_HISTORIAL_AGENDAMIENTO = new Set([
+    'pendiente',
+    'en_cola',
+    'esperando_qr',
+    'sincronizando',
+    'lista',
+    'parcial',
+    'pausada'
+]);
+const ESTADOS_HISTORIAL_AGENDAMIENTO_EN_CURSO = new Set([
+    'en_cola',
+    'esperando_qr',
+    'sincronizando'
+]);
+const TIPO_HISTORIAL_COMPLETO =
+    proto.HistorySync.HistorySyncType.FULL;
+const TIPO_HISTORIAL_RECIENTE =
+    proto.HistorySync.HistorySyncType.RECENT;
+const TIPO_HISTORIAL_BAJO_DEMANDA =
+    proto.HistorySync.HistorySyncType.ON_DEMAND;
+const CODIGOS_TRANSITORIOS_HISTORIAL = new Set([
+    DisconnectReason.connectionClosed,
+    DisconnectReason.connectionLost,
+    DisconnectReason.timedOut,
+    DisconnectReason.unavailableService
+]);
 const EXPRESION_ID_LINEA = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODIGOS_DESCONEXION_FATAL = new Set([
     DisconnectReason.loggedOut,
@@ -365,6 +398,10 @@ let proteccionMiddlewarePublicacion = crearProteccionMiddlewareVacia();
 const solicitudesIdempotentes = new Map();
 
 let controlSeguridadPublicacion = crearControlSeguridadPublicacion();
+const colaSincronizacionHistorialAgendamiento = [];
+let sincronizacionHistorialAgendamientoActiva = null;
+let secuenciaSincronizacionHistorialAgendamiento = 0;
+let temporizadorGuardadoHistorialAgendamiento = null;
 
 function crearProgresoVacio() {
     return {
@@ -420,6 +457,642 @@ function crearProgresoEliminacionEstadosVacio() {
 
 function esperar(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizarProgresoHistorialAgendamiento(valor, respaldo = null) {
+    if (valor === null || valor === undefined || valor === '') return respaldo;
+    const numero = Number(valor);
+    if (!Number.isFinite(numero)) return respaldo;
+    return Math.min(100, Math.max(0, Math.round(numero)));
+}
+
+function crearEstadoHistorialAgendamiento(datos = {}, restaurar = false) {
+    let estado = ESTADOS_HISTORIAL_AGENDAMIENTO.has(datos?.estado)
+        ? datos.estado
+        : 'pendiente';
+    let motivo = datos?.motivo ? String(datos.motivo) : null;
+
+    if (
+        restaurar &&
+        ESTADOS_HISTORIAL_AGENDAMIENTO_EN_CURSO.has(estado)
+    ) {
+        estado = 'pausada';
+        motivo =
+            'La preparación del historial se interrumpió al cerrar AutoStatues. Podés reanudarla manualmente.';
+    }
+
+    const progreso = normalizarProgresoHistorialAgendamiento(
+        datos?.progreso,
+        null
+    );
+
+    return {
+        estado,
+        progreso,
+        indeterminado: datos?.indeterminado === true || (
+            ESTADOS_HISTORIAL_AGENDAMIENTO_EN_CURSO.has(estado) &&
+            progreso === null
+        ),
+        chunks: Math.max(0, Number(datos?.chunks) || 0),
+        actualizadoEn: datos?.actualizadoEn || null,
+        iniciadoEn: datos?.iniciadoEn || null,
+        completadoEn: datos?.completadoEn || null,
+        motivo,
+        ultimoTipo: datos?.ultimoTipo !== null &&
+            datos?.ultimoTipo !== undefined &&
+            Number.isFinite(Number(datos.ultimoTipo))
+            ? Number(datos.ultimoTipo)
+            : null,
+        requiereRevinculacion: datos?.requiereRevinculacion === true
+    };
+}
+
+function asegurarEstadoHistorialAgendamiento(linea) {
+    if (!linea.historialAgendamiento) {
+        linea.historialAgendamiento = crearEstadoHistorialAgendamiento();
+    }
+    return linea.historialAgendamiento;
+}
+
+function serializarEstadoHistorialAgendamiento(linea) {
+    const historial = asegurarEstadoHistorialAgendamiento(linea);
+    return {
+        estado: historial.estado,
+        progreso: normalizarProgresoHistorialAgendamiento(
+            historial.progreso,
+            null
+        ),
+        indeterminado: historial.indeterminado === true,
+        chunks: Math.max(0, Number(historial.chunks) || 0),
+        actualizadoEn: historial.actualizadoEn || null,
+        iniciadoEn: historial.iniciadoEn || null,
+        completadoEn: historial.completadoEn || null,
+        motivo: historial.motivo || null,
+        ultimoTipo: historial.ultimoTipo ?? null,
+        requiereRevinculacion: historial.requiereRevinculacion === true
+    };
+}
+
+function posicionColaHistorialAgendamiento(lineaId) {
+    const indice = colaSincronizacionHistorialAgendamiento.findIndex(
+        item => item.lineaId === lineaId
+    );
+    return indice >= 0 ? indice + 1 : null;
+}
+
+function obtenerEstadoPublicoHistorialAgendamiento(linea) {
+    const historial = asegurarEstadoHistorialAgendamiento(linea);
+    const activa =
+        sincronizacionHistorialAgendamientoActiva?.lineaId === linea.id;
+    const posicionCola = activa
+        ? 0
+        : posicionColaHistorialAgendamiento(linea.id);
+
+    return {
+        estado: historial.estado,
+        progreso: normalizarProgresoHistorialAgendamiento(
+            historial.progreso,
+            null
+        ),
+        indeterminado: historial.indeterminado === true,
+        listoParaAgendar: historial.estado === 'lista',
+        activo: activa,
+        posicionCola,
+        chunks: Math.max(0, Number(historial.chunks) || 0),
+        actualizadoEn: historial.actualizadoEn || null,
+        iniciadoEn: historial.iniciadoEn || null,
+        completadoEn: historial.completadoEn || null,
+        motivo: historial.motivo || null,
+        requiereRevinculacion: historial.requiereRevinculacion === true
+    };
+}
+
+function historialAgendamientoEnCurso(lineaId) {
+    return sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId ||
+        colaSincronizacionHistorialAgendamiento.some(
+            item => item.lineaId === lineaId
+        );
+}
+
+function actualizarEstadoHistorialAgendamiento(linea, cambios = {}, guardar = true) {
+    const historial = asegurarEstadoHistorialAgendamiento(linea);
+    const ahora = new Date().toISOString();
+
+    if (
+        cambios.estado &&
+        ESTADOS_HISTORIAL_AGENDAMIENTO.has(cambios.estado)
+    ) {
+        historial.estado = cambios.estado;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'progreso')) {
+        historial.progreso = normalizarProgresoHistorialAgendamiento(
+            cambios.progreso,
+            null
+        );
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'indeterminado')) {
+        historial.indeterminado = cambios.indeterminado === true;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'chunks')) {
+        historial.chunks = Math.max(0, Number(cambios.chunks) || 0);
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'iniciadoEn')) {
+        historial.iniciadoEn = cambios.iniciadoEn || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'completadoEn')) {
+        historial.completadoEn = cambios.completadoEn || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'motivo')) {
+        historial.motivo = cambios.motivo ? String(cambios.motivo) : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'ultimoTipo')) {
+        historial.ultimoTipo = cambios.ultimoTipo !== null &&
+            cambios.ultimoTipo !== undefined &&
+            Number.isFinite(Number(cambios.ultimoTipo))
+            ? Number(cambios.ultimoTipo)
+            : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(cambios, 'requiereRevinculacion')) {
+        historial.requiereRevinculacion =
+            cambios.requiereRevinculacion === true;
+    }
+
+    historial.actualizadoEn = cambios.actualizadoEn || ahora;
+    if (guardar) guardarLineas();
+    return historial;
+}
+
+function programarGuardadoHistorialAgendamiento() {
+    if (temporizadorGuardadoHistorialAgendamiento) return;
+    temporizadorGuardadoHistorialAgendamiento = setTimeout(() => {
+        temporizadorGuardadoHistorialAgendamiento = null;
+        guardarLineas();
+    }, 350);
+    temporizadorGuardadoHistorialAgendamiento.unref?.();
+}
+
+function limpiarTemporizadoresSincronizacionHistorial(activa) {
+    if (!activa) return;
+    if (activa.temporizadorMaximo) {
+        clearTimeout(activa.temporizadorMaximo);
+        activa.temporizadorMaximo = null;
+    }
+    if (activa.temporizadorInactividad) {
+        clearTimeout(activa.temporizadorInactividad);
+        activa.temporizadorInactividad = null;
+    }
+}
+
+function programarSiguienteSincronizacionHistorial() {
+    const temporizador = setTimeout(
+        procesarSiguienteSincronizacionHistorialAgendamiento,
+        DEMORA_SIGUIENTE_SINCRONIZACION_HISTORIAL_MS
+    );
+    temporizador.unref?.();
+}
+
+function cerrarVinculacionHistorialPendiente(linea) {
+    if (!linea) return;
+    const socketAnterior = linea.socket;
+    cancelarTemporizadorReconexion(linea);
+    cancelarReintentoAudiencia(linea);
+    invalidarConexionActual(linea);
+    linea.socket = null;
+    linea.jid = null;
+    linea.qr = null;
+    linea.iniciando = false;
+    linea.reconexionManualEnCurso = false;
+    linea.estado = 'desconectado';
+    linea.conexionEnVerificacion = false;
+    if (linea.etiquetaAntesHistorialAgendamiento) {
+        linea.etiqueta = linea.etiquetaAntesHistorialAgendamiento;
+        linea.etiquetaAntesHistorialAgendamiento = null;
+    }
+    cerrarSocketSeguro(
+        socketAnterior,
+        'Preparación de historial cancelada antes de vincular'
+    );
+    guardarLineas();
+}
+
+function cerrarTurnoSincronizacionHistorialAgendamiento(
+    linea,
+    {
+        estado = 'pausada',
+        motivo = null,
+        progreso,
+        reiniciarNormal = false
+    } = {}
+) {
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    if (!activa || activa.lineaId !== linea?.id) return false;
+
+    limpiarTemporizadoresSincronizacionHistorial(activa);
+    sincronizacionHistorialAgendamientoActiva = null;
+    linea.modoHistorialAgendamiento = false;
+
+    const cambios = {
+        estado,
+        indeterminado: false,
+        motivo,
+        completadoEn: estado === 'lista'
+            ? new Date().toISOString()
+            : asegurarEstadoHistorialAgendamiento(linea).completadoEn,
+        requiereRevinculacion: estado === 'lista'
+            ? false
+            : asegurarEstadoHistorialAgendamiento(linea)
+                .requiereRevinculacion
+    };
+    if (progreso !== undefined) cambios.progreso = progreso;
+    actualizarEstadoHistorialAgendamiento(linea, cambios);
+
+    if (
+        estado === 'lista' &&
+        linea.etiquetaAntesHistorialAgendamiento
+    ) {
+        linea.etiqueta = linea.etiquetaAntesHistorialAgendamiento;
+        linea.etiquetaAntesHistorialAgendamiento = null;
+        guardarLineas();
+    }
+
+    if (
+        reiniciarNormal &&
+        linea.socket &&
+        linea.sesionRegistrada === false
+    ) {
+        cerrarVinculacionHistorialPendiente(linea);
+    } else if (
+        linea.socket &&
+        linea.estado === 'conectado' &&
+        !audienciaEstadosLista(linea)
+    ) {
+        programarResincronizacionAudiencia(linea, linea.socket, 1000);
+    }
+
+    programarSiguienteSincronizacionHistorial();
+    return true;
+}
+
+function programarInactividadSincronizacionHistorial(linea) {
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    if (!activa || activa.lineaId !== linea?.id || activa.finalizando) return;
+
+    if (activa.temporizadorInactividad) {
+        clearTimeout(activa.temporizadorInactividad);
+    }
+    activa.temporizadorInactividad = setTimeout(() => {
+        const actual = lineas.get(linea.id);
+        if (
+            !actual ||
+            sincronizacionHistorialAgendamientoActiva?.token !== activa.token
+        ) return;
+
+        const historial = asegurarEstadoHistorialAgendamiento(actual);
+        cerrarTurnoSincronizacionHistorialAgendamiento(actual, {
+            estado: 'parcial',
+            progreso: historial.progreso,
+            motivo:
+                'WhatsApp dejó de enviar bloques de historial. Se conservaron los datos recibidos y la línea seguirá conectada en modo normal.',
+            reiniciarNormal: true
+        });
+    }, TIEMPO_INACTIVIDAD_SINCRONIZACION_HISTORIAL_MS);
+    activa.temporizadorInactividad.unref?.();
+}
+
+async function esperarProcesamientoSincronizacionHistorial(linea, socket) {
+    for (let intento = 0; intento < 8; intento += 1) {
+        const promesaActividad =
+            linea.promesaActividadContactos || Promise.resolve();
+        const promesaAgenda =
+            linea.promesaIngestaAgendamiento || Promise.resolve();
+
+        await Promise.allSettled([promesaActividad, promesaAgenda]);
+
+        if (
+            promesaActividad === linea.promesaActividadContactos &&
+            promesaAgenda === linea.promesaIngestaAgendamiento &&
+            (Number(linea.tareasActividadPendientes) || 0) === 0
+        ) {
+            break;
+        }
+    }
+
+    if (linea.socket === socket && !linea.eliminando) {
+        await resolverPendientesAgendamiento(linea, socket);
+        await Promise.resolve(
+            linea.promesaResolverPendientesAgendamiento
+        ).catch(() => {});
+    }
+
+    if (linea.errorIngestaAgendamiento) {
+        throw new Error(String(linea.errorIngestaAgendamiento));
+    }
+}
+
+async function completarSincronizacionHistorialAgendamiento(
+    linea,
+    socket,
+    token
+) {
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    if (
+        !activa ||
+        activa.token !== token ||
+        activa.lineaId !== linea?.id ||
+        activa.finalizando
+    ) {
+        return;
+    }
+
+    activa.finalizando = true;
+    if (activa.temporizadorInactividad) {
+        clearTimeout(activa.temporizadorInactividad);
+        activa.temporizadorInactividad = null;
+    }
+    actualizarEstadoHistorialAgendamiento(linea, {
+        estado: 'sincronizando',
+        progreso: 100,
+        indeterminado: false,
+        motivo: 'Terminando de analizar los contactos sincronizados.'
+    });
+
+    try {
+        await esperarProcesamientoSincronizacionHistorial(linea, socket);
+        if (
+            sincronizacionHistorialAgendamientoActiva?.token !== token ||
+            lineas.get(linea.id) !== linea
+        ) return;
+
+        cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+            estado: 'lista',
+            progreso: 100,
+            motivo:
+                'El historial entregado por WhatsApp terminó de procesarse. La línea está lista para agendar.'
+        });
+    } catch (error) {
+        if (sincronizacionHistorialAgendamientoActiva?.token !== token) return;
+        cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+            estado: 'parcial',
+            progreso: asegurarEstadoHistorialAgendamiento(linea).progreso,
+            motivo:
+                `El historial se recibió, pero no terminó de procesarse: ${error.message}`,
+            reiniciarNormal: true
+        });
+    }
+}
+
+function registrarProgresoSincronizacionHistorial(linea, socket, historial = {}) {
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    if (
+        !activa ||
+        activa.lineaId !== linea?.id ||
+        linea.socket !== socket ||
+        linea.modoHistorialAgendamiento !== true
+    ) {
+        return;
+    }
+
+    const syncType = Number(historial?.syncType);
+    const esCompleto =
+        syncType === TIPO_HISTORIAL_COMPLETO ||
+        (
+            syncType === TIPO_HISTORIAL_BAJO_DEMANDA &&
+            Boolean(activa.requestId)
+        );
+    const progresoInformado = esCompleto
+        ? normalizarProgresoHistorialAgendamiento(historial?.progress, null)
+        : null;
+    const estadoActual = asegurarEstadoHistorialAgendamiento(linea);
+    const progresoAnterior = normalizarProgresoHistorialAgendamiento(
+        estadoActual.progreso,
+        null
+    );
+    const progreso = progresoInformado === null
+        ? progresoAnterior
+        : Math.max(progresoAnterior ?? 0, progresoInformado);
+
+    activa.recibioHistorial = true;
+    activa.recibioHistorialCompleto =
+        activa.recibioHistorialCompleto || esCompleto;
+
+    actualizarEstadoHistorialAgendamiento(linea, {
+        estado: 'sincronizando',
+        progreso,
+        indeterminado: progreso === null,
+        chunks: (Number(estadoActual.chunks) || 0) + 1,
+        ultimoTipo: Number.isFinite(syncType) ? syncType : null,
+        motivo: esCompleto
+            ? 'WhatsApp está entregando el historial completo.'
+            : 'Preparando datos y mapeos antes del historial completo.'
+    }, false);
+    programarGuardadoHistorialAgendamiento();
+    programarInactividadSincronizacionHistorial(linea);
+
+    if (esCompleto && progresoInformado === 100) {
+        completarSincronizacionHistorialAgendamiento(
+            linea,
+            socket,
+            activa.token
+        );
+    }
+}
+
+function registrarEstadoSincronizacionHistorial(linea, evento = {}) {
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    if (
+        !activa ||
+        activa.lineaId !== linea?.id ||
+        activa.finalizando
+    ) return;
+
+    const syncType = Number(evento?.syncType);
+    if (
+        evento?.status === 'paused' &&
+        syncType === TIPO_HISTORIAL_RECIENTE &&
+        !activa.recibioHistorialCompleto
+    ) {
+        const historial = asegurarEstadoHistorialAgendamiento(linea);
+        cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+            estado: 'parcial',
+            progreso: historial.progreso,
+            motivo:
+                'WhatsApp pausó la entrega antes de enviar el historial completo. Se conservaron los datos disponibles.',
+            reiniciarNormal: true
+        });
+    }
+}
+
+async function solicitarHistorialCompletoBajoDemanda(linea, socket) {
+    void linea;
+    void socket;
+    throw new Error(
+        'El historial completo está desactivado. Usá las palabras clave sobre chats recientes.'
+    );
+}
+
+function encolarSincronizacionHistorialAgendamiento(
+    linea,
+    {
+        reiniciarConexion = true,
+        forzar = false
+    } = {}
+) {
+    if (!linea || linea.eliminando) return false;
+    if (historialAgendamientoEnCurso(linea.id)) return true;
+
+    const historial = asegurarEstadoHistorialAgendamiento(linea);
+    if (historial.estado === 'lista' && !forzar) return true;
+
+    colaSincronizacionHistorialAgendamiento.push({
+        lineaId: linea.id,
+        reiniciarConexion: reiniciarConexion === true,
+        solicitadoEn: new Date().toISOString()
+    });
+    actualizarEstadoHistorialAgendamiento(linea, {
+        estado: 'en_cola',
+        progreso: 0,
+        indeterminado: true,
+        chunks: 0,
+        iniciadoEn: null,
+        completadoEn: null,
+        motivo: 'Esperando su turno. Solo una línea sincroniza historial a la vez.'
+    });
+    setImmediate(procesarSiguienteSincronizacionHistorialAgendamiento);
+    return true;
+}
+
+function procesarSiguienteSincronizacionHistorialAgendamiento() {
+    if (sincronizacionHistorialAgendamientoActiva) return;
+
+    let solicitud = null;
+    let linea = null;
+    while (colaSincronizacionHistorialAgendamiento.length) {
+        solicitud = colaSincronizacionHistorialAgendamiento.shift();
+        linea = lineas.get(solicitud.lineaId);
+        if (linea && !linea.eliminando) break;
+        solicitud = null;
+        linea = null;
+    }
+    if (!solicitud || !linea) return;
+
+    const token = ++secuenciaSincronizacionHistorialAgendamiento;
+    sincronizacionHistorialAgendamientoActiva = {
+        lineaId: linea.id,
+        token,
+        iniciadoEn: Date.now(),
+        recibioHistorial: false,
+        recibioHistorialCompleto: false,
+        vinculacionInicial: linea.sesionRegistrada === false,
+        solicitudEnviada: false,
+        respuestaAceptada: false,
+        requestId: null,
+        stanzaId: null,
+        finalizando: false,
+        temporizadorMaximo: null,
+        temporizadorInactividad: null
+    };
+    const etiquetaAnterior = normalizarEtiqueta(linea.etiqueta);
+    linea.etiquetaAntesHistorialAgendamiento =
+        ['reposo', 'indefinida'].includes(etiquetaAnterior)
+            ? etiquetaAnterior
+            : null;
+    linea.modoHistorialAgendamiento = true;
+    linea.errorIngestaAgendamiento = null;
+    actualizarEstadoHistorialAgendamiento(linea, {
+        estado: 'sincronizando',
+        progreso: 0,
+        indeterminado: true,
+        chunks: 0,
+        iniciadoEn: new Date().toISOString(),
+        completadoEn: null,
+        motivo:
+            'Preparando una conexión exclusiva para recibir el historial de esta línea.'
+    });
+
+    const activa = sincronizacionHistorialAgendamientoActiva;
+    activa.temporizadorMaximo = setTimeout(() => {
+        const actual = lineas.get(linea.id);
+        if (
+            !actual ||
+            sincronizacionHistorialAgendamientoActiva?.token !== token
+        ) return;
+        const historial = asegurarEstadoHistorialAgendamiento(actual);
+        cerrarTurnoSincronizacionHistorialAgendamiento(actual, {
+            estado: 'parcial',
+            progreso: historial.progreso,
+            motivo:
+                'Se alcanzó el tiempo máximo de preparación. Se conservaron los datos recibidos y la cola continuará con la siguiente línea.',
+            reiniciarNormal: true
+        });
+    }, TIEMPO_MAXIMO_SINCRONIZACION_HISTORIAL_MS);
+    activa.temporizadorMaximo.unref?.();
+
+    if (linea.estado === 'conectado' && linea.socket) {
+        const socket = linea.socket;
+        solicitarHistorialCompletoBajoDemanda(linea, socket).catch(error => {
+            if (
+                sincronizacionHistorialAgendamientoActiva?.token !== token
+            ) return;
+            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                progreso:
+                    asegurarEstadoHistorialAgendamiento(linea).progreso,
+                motivo:
+                    `No se pudo solicitar el historial al teléfono: ${error.message}`
+            });
+        });
+        return;
+    }
+
+    if (solicitud.reiniciarConexion) {
+        if (!solicitarReconexionManual(linea, 500)) {
+            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                progreso: 0,
+                motivo:
+                    'La línea forma parte de una publicación activa y no puede reiniciarse para sincronizar historial.'
+            });
+        }
+        return;
+    }
+
+    iniciarWhatsApp(linea.id);
+}
+
+function cancelarSincronizacionHistorialAgendamiento(
+    lineaId,
+    motivo = 'La preparación del historial fue detenida manualmente.'
+) {
+    const indice = colaSincronizacionHistorialAgendamiento.findIndex(
+        item => item.lineaId === lineaId
+    );
+    if (indice >= 0) {
+        colaSincronizacionHistorialAgendamiento.splice(indice, 1);
+        const linea = lineas.get(lineaId);
+        if (linea) {
+            actualizarEstadoHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                indeterminado: false,
+                motivo
+            });
+        }
+        return true;
+    }
+
+    const linea = lineas.get(lineaId);
+    if (
+        linea &&
+        sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId
+    ) {
+        return cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+            estado: 'pausada',
+            progreso: asegurarEstadoHistorialAgendamiento(linea).progreso,
+            motivo,
+            reiniciarNormal: true
+        });
+    }
+
+    return false;
 }
 
 function guardarJSONAtomico(ruta, datos, espacios = 2) {
@@ -1968,6 +2641,8 @@ function encolarActividadContactos(linea, socket, tarea) {
             );
             invalidarResumenPriorizacionAudiencia(linea);
         });
+
+    return linea.promesaActividadContactos;
 }
 
 async function esperarColaActividadContactos(
@@ -2389,11 +3064,82 @@ function programarResolucionPendientesAgendamiento(
     }, Math.max(0, Number(retrasoMs) || 0));
 }
 
+function copiarMensajeRecienteParaAgendamiento(mensaje) {
+    if (mensaje?.key?.fromMe !== true) return null;
+    const remoto = normalizarJidDestinatario(mensaje?.key?.remoteJid);
+    if (
+        !remoto ||
+        remoto === 'status@broadcast' ||
+        remoto.endsWith('@g.us')
+    ) return null;
+
+    const texto = extraerTextoMensaje(mensaje)
+        .slice(0, MAXIMOS_CARACTERES_MENSAJE_RECIENTE_AGENDAMIENTO);
+    if (!texto.trim()) return null;
+
+    const copiarJid = valor => {
+        const jid = normalizarJidDestinatario(valor);
+        return jid || undefined;
+    };
+    const id = String(mensaje?.key?.id || '').trim().slice(0, 240);
+    const clave = id
+        ? `${remoto}\u0000${id}`
+        : `${remoto}\u0000${String(mensaje?.messageTimestamp || '')}\u0000${
+            crypto.createHash('sha256').update(texto).digest('hex').slice(0, 20)
+        }`;
+
+    return {
+        clave,
+        mensaje: {
+            key: {
+                fromMe: true,
+                remoteJid: remoto,
+                remoteJidAlt: copiarJid(mensaje?.key?.remoteJidAlt),
+                participant: copiarJid(mensaje?.key?.participant),
+                participantAlt: copiarJid(mensaje?.key?.participantAlt),
+                id: id || undefined
+            },
+            messageTimestamp: mensaje?.messageTimestamp,
+            message: { conversation: texto }
+        }
+    };
+}
+
+function guardarMensajesRecientesAgendamiento(linea, mensajes) {
+    if (!linea || linea.eliminando) return 0;
+    if (!(linea.mensajesRecientesAgendamiento instanceof Map)) {
+        linea.mensajesRecientesAgendamiento = new Map();
+    }
+
+    let guardados = 0;
+    for (const mensaje of Array.isArray(mensajes) ? mensajes : []) {
+        const copia = copiarMensajeRecienteParaAgendamiento(mensaje);
+        if (!copia) continue;
+
+        linea.mensajesRecientesAgendamiento.delete(copia.clave);
+        linea.mensajesRecientesAgendamiento.set(copia.clave, copia.mensaje);
+        guardados += 1;
+    }
+
+    while (
+        linea.mensajesRecientesAgendamiento.size >
+        MAXIMOS_MENSAJES_RECIENTES_AGENDAMIENTO
+    ) {
+        const primeraClave =
+            linea.mensajesRecientesAgendamiento.keys().next().value;
+        if (primeraClave === undefined) break;
+        linea.mensajesRecientesAgendamiento.delete(primeraClave);
+    }
+
+    return guardados;
+}
+
 function registrarMensajesParaAgendamiento(
     linea,
     socket,
     mensajes,
-    origen = 'vivo'
+    origen = 'vivo',
+    { cachear = true } = {}
 ) {
     const jidsPropios = obtenerJidsPropiosActividad(linea, socket);
     const lista = (Array.isArray(mensajes) ? mensajes : [])
@@ -2404,38 +3150,80 @@ function registrarMensajesParaAgendamiento(
             );
             return !remoto || !jidsPropios.has(remoto);
         });
+    if (cachear) guardarMensajesRecientesAgendamiento(linea, lista);
     if (
         !lista.length ||
         lineas.get(linea.id) !== linea ||
         linea.socket !== socket ||
         linea.eliminando
-    ) return;
+    ) return Promise.resolve(null);
 
     const resolver = (jid, contexto) =>
         resolverJidAgendamiento(linea, socket, jid, contexto);
 
-    Promise.all([
-        servicioAgendamiento.registrarMensajes(
-            describirLineaParaAgendamiento(linea),
-            lista,
-            resolver,
-            { origen }
-        ),
-        servicioAgendamiento.registrarPublicadoresEstado(
-            describirLineaParaAgendamiento(linea),
-            lista,
-            resolver
-        )
-    ]).then(() => {
-        // El mensaje puede haber llegado antes que su mapeo LID -> PN. Este
-        // segundo paso cubre tanto esa carrera como pendientes persistidos.
-        programarResolucionPendientesAgendamiento(linea, socket, 0);
-    }).catch(error => {
+    const anterior =
+        linea.promesaIngestaAgendamiento || Promise.resolve();
+    const actual = Promise.resolve(anterior)
+        .catch(() => {})
+        .then(() => Promise.all([
+            servicioAgendamiento.registrarMensajes(
+                describirLineaParaAgendamiento(linea),
+                lista,
+                resolver,
+                { origen }
+            ),
+            servicioAgendamiento.registrarPublicadoresEstado(
+                describirLineaParaAgendamiento(linea),
+                lista,
+                resolver
+            )
+        ]))
+        .then(() => {
+            // El mensaje puede haber llegado antes que su mapeo LID -> PN.
+            // Serializar los chunks evita escrituras simultáneas con historiales
+            // grandes y permite saber cuándo terminó de procesarse el 100 %.
+            programarResolucionPendientesAgendamiento(linea, socket, 0);
+            return true;
+        });
+
+    linea.promesaIngestaAgendamiento = actual.catch(error => {
+        linea.errorIngestaAgendamiento =
+            error?.codigo || error?.message || 'ERROR_AGENDAMIENTO';
         console.error(
             `No se pudo actualizar el agendamiento de ${linea.nombre}:`,
-            error?.codigo || error?.message || 'ERROR_AGENDAMIENTO'
+            linea.errorIngestaAgendamiento
         );
+        return null;
     });
+    return linea.promesaIngestaAgendamiento;
+}
+
+async function reanalizarMensajesRecientesAgendamiento(linea) {
+    if (
+        !linea ||
+        !linea.socket ||
+        lineas.get(linea.id) !== linea ||
+        linea.eliminando
+    ) {
+        return { disponibles: 0, procesados: false };
+    }
+
+    const mensajes = linea.mensajesRecientesAgendamiento instanceof Map
+        ? [...linea.mensajesRecientesAgendamiento.values()]
+        : [];
+    if (!mensajes.length) {
+        return { disponibles: 0, procesados: true };
+    }
+
+    await registrarMensajesParaAgendamiento(
+        linea,
+        linea.socket,
+        mensajes,
+        'reciente',
+        { cachear: false }
+    );
+    await resolverPendientesAgendamiento(linea, linea.socket);
+    return { disponibles: mensajes.length, procesados: true };
 }
 
 function registrarVistasParaAgendamiento(linea, socket, actualizaciones) {
@@ -2625,9 +3413,35 @@ function cancelarReintentoAudiencia(linea) {
     linea.temporizadorAudiencia = null;
 }
 
+function esFalloDescargaAppState(error) {
+    const mensaje = String(error?.message || '');
+    return (
+        mensaje.includes('Failed to fetch stream from') &&
+        mensaje.includes('mmg.whatsapp.net')
+    );
+}
+
+function mensajeSeguroFalloDescargaAppState(error) {
+    const codigoHttp = Number(
+        error?.output?.statusCode ??
+        error?.statusCode ??
+        error?.response?.status
+    );
+    const detalleCodigo = Number.isFinite(codigoHttp)
+        ? ` (HTTP ${codigoHttp})`
+        : '';
+
+    return (
+        `WhatsApp entregó una referencia de sincronización vencida o no disponible${detalleCodigo}. ` +
+        'Se conservó la audiencia anterior y se esperará una referencia nueva al reconectar.'
+    );
+}
+
 function programarResincronizacionAudiencia(linea, socket, retrasoMs) {
     if (
         linea.eliminando ||
+        linea.modoHistorialAgendamiento === true ||
+        sincronizacionHistorialAgendamientoActiva?.lineaId === linea.id ||
         audienciaEstadosLista(linea) ||
         linea.socket !== socket ||
         linea.temporizadorAudiencia ||
@@ -2762,6 +3576,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
 
     if (
         linea.eliminando ||
+        linea.modoHistorialAgendamiento === true ||
+        sincronizacionHistorialAgendamientoActiva?.lineaId === linea.id ||
         !lineas.has(linea.id) ||
         linea.socket !== socket ||
         audienciaEstadosLista(linea) ||
@@ -2773,36 +3589,25 @@ async function resincronizarAudienciaEstados(linea, socket) {
     linea.resincronizandoAudiencia = true;
     linea.intentosResincronizacionAudiencia =
         (Number(linea.intentosResincronizacionAudiencia) || 0) + 1;
+    const contactosAnteriores = new Set(linea.contactosEstado);
+    const privacidadAnterior = linea.privacidadEstados
+        ? {
+            ...linea.privacidadEstados,
+            usuarios: [...(linea.privacidadEstados.usuarios || [])]
+        }
+        : null;
 
     try {
-        // La instantánea que sigue es autoritativa. Vaciamos primero la
-        // audiencia para no conservar contactos eliminados en una sesión
-        // anterior ni usar una regla de privacidad desactualizada.
+        // No borramos la audiencia ni reiniciamos las versiones de app-state.
+        // Ponerlas en null obliga a WhatsApp a devolver snapshots desde v0;
+        // esas referencias CDN pueden estar vencidas y dejar la línea en cero.
         linea.audienciaResincronizada = false;
-        linea.contactosEstado = new Set();
-        linea.privacidadEstados = null;
-        invalidarResumenPriorizacionAudiencia(linea);
 
-        // Las sesiones creadas con versiones anteriores no guardaban los
-        // contactos ni la audiencia privada recibidos al vincularse. Pedimos
-        // instantáneas nuevas de ambas colecciones de WhatsApp.
-        await socket.authState.keys.transaction(
-            async () => {
-                await socket.authState.keys.set({
-                    'app-state-sync-version': {
-                        critical_unblock_low: null,
-                        regular_high: null
-                    }
-                });
-
-                if (linea.socket !== socket) return;
-
-                await socket.resyncAppState(
-                    ['critical_unblock_low', 'regular_high'],
-                    true
-                );
-            },
-            socket.authState.creds.me?.id || 'resync-app-state'
+        // Baileys usa las versiones actuales y sólo pide un snapshot completo
+        // cuando la sesión realmente no posee una versión local.
+        await socket.resyncAppState(
+            ['critical_unblock_low', 'regular_high'],
+            false
         );
 
         if (linea.socket !== socket) return;
@@ -2848,9 +3653,26 @@ async function resincronizarAudienciaEstados(linea, socket) {
             `${linea.contactosEstado.size} contacto(s).`
         );
     } catch (error) {
+        const falloDescargaAppState = esFalloDescargaAppState(error);
+        const mensajeError = falloDescargaAppState
+            ? mensajeSeguroFalloDescargaAppState(error)
+            : error.message;
+
+        // Una resincronización fallida nunca debe reemplazar una audiencia
+        // válida por una colección vacía o parcialmente procesada.
+        linea.contactosEstado = contactosAnteriores;
+        linea.privacidadEstados = privacidadAnterior;
         linea.audienciaResincronizada = false;
         linea.ultimoError =
-            `No se pudo sincronizar la audiencia de estados: ${error.message}`;
+            `No se pudo sincronizar la audiencia de estados: ${mensajeError}`;
+        invalidarResumenPriorizacionAudiencia(linea);
+
+        // Repetir inmediatamente el mismo blob firmado devuelve la misma
+        // respuesta. El contador se reinicia automáticamente con otro socket.
+        if (falloDescargaAppState) {
+            linea.intentosResincronizacionAudiencia =
+                MAXIMOS_INTENTOS_AUDIENCIA;
+        }
 
         try {
             guardarAudienciaEstados(linea);
@@ -2864,11 +3686,12 @@ async function resincronizarAudienciaEstados(linea, socket) {
 
         console.error(
             `No se pudo resincronizar la audiencia de ${linea.nombre}:`,
-            error.message
+            mensajeError
         );
 
         const intento = Number(linea.intentosResincronizacionAudiencia) || 1;
         if (
+            !falloDescargaAppState &&
             intento < MAXIMOS_INTENTOS_AUDIENCIA &&
             linea.socket === socket &&
             !linea.eliminando
@@ -3337,7 +4160,15 @@ function guardarLineas() {
             Number.isFinite(Number(linea.ultimoCodigoDesconexion))
             ? Number(linea.ultimoCodigoDesconexion)
             : null,
-        proximoIntentoReconexion: linea.proximoIntentoReconexion || null
+        proximoIntentoReconexion: linea.proximoIntentoReconexion || null,
+        etiquetaAntesHistorialAgendamiento:
+            ['reposo', 'indefinida'].includes(
+                linea.etiquetaAntesHistorialAgendamiento
+            )
+                ? linea.etiquetaAntesHistorialAgendamiento
+                : null,
+        historialAgendamiento:
+            serializarEstadoHistorialAgendamiento(linea)
     }));
 
     guardarJSONAtomico(archivoLineas, datos);
@@ -3465,7 +4296,22 @@ function cargarLineasGuardadas() {
                 fechaUltimaInteraccionContactos: 0,
                 ultimaSeleccionAudienciaEstado: null,
                 revisionPriorizacionAudiencia: 0,
-                cacheResumenPriorizacionAudiencia: null
+                cacheResumenPriorizacionAudiencia: null,
+                historialAgendamiento: crearEstadoHistorialAgendamiento(
+                    datosLinea.historialAgendamiento,
+                    true
+                ),
+                modoHistorialAgendamiento: false,
+                sesionRegistrada: null,
+                promesaIngestaAgendamiento: Promise.resolve(),
+                errorIngestaAgendamiento: null,
+                mensajesRecientesAgendamiento: new Map(),
+                etiquetaAntesHistorialAgendamiento:
+                    ['reposo', 'indefinida'].includes(
+                        datosLinea.etiquetaAntesHistorialAgendamiento
+                    )
+                        ? datosLinea.etiquetaAntesHistorialAgendamiento
+                        : null
             });
         }
 
@@ -4480,6 +5326,19 @@ function programarWatchdogConexion(lineaId, linea, generacion, socket) {
         const mensaje =
             `La conexión no respondió en ${TIEMPO_MAXIMO_INTENTO_CONEXION_MS / 1000} segundos.`;
 
+        if (
+            sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
+            linea.modoHistorialAgendamiento === true
+        ) {
+            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                progreso:
+                    asegurarEstadoHistorialAgendamiento(linea).progreso,
+                motivo:
+                    `${mensaje} La preparación se pausó para permitir que continúe la cola.`
+            });
+        }
+
         invalidarConexionActual(linea);
         linea.socket = null;
         linea.jid = null;
@@ -4766,15 +5625,23 @@ async function iniciarWhatsApp(lineaId) {
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
 
         const sesionExistente = state.creds.registered === true;
+        linea.sesionRegistrada = sesionExistente;
+
+        // Agendamiento trabaja únicamente con mensajes nuevos y con los
+        // bloques recientes que WhatsApp entregue de forma normal. Nunca
+        // reinicia ni vuelve a vincular una sesión para pedir historial FULL.
+        linea.modoHistorialAgendamiento = false;
 
         const sock = makeWASocket({
             auth: state,
             logger: pino({ level: 'silent' }),
             browser: Browsers.windows('Desktop'),
-            // El modo Desktop permite que las vinculaciones nuevas entreguen
-            // más historial. Baileys lo emite por chunks y Agendamiento sólo
-            // conserva el usuario extraído de la plantilla acordada.
-            syncFullHistory: true
+            syncFullHistory: false,
+            shouldSyncHistoryMessage: mensajeHistorial =>
+                ![
+                    TIPO_HISTORIAL_COMPLETO,
+                    TIPO_HISTORIAL_BAJO_DEMANDA
+                ].includes(mensajeHistorial?.syncType)
         });
 
         linea.socket = sock;
@@ -4808,7 +5675,7 @@ async function iniciarWhatsApp(lineaId) {
         };
 
         const registrarActividad = datos => {
-            encolarActividadContactos(linea, sock, () =>
+            return encolarActividadContactos(linea, sock, () =>
                 procesarActividadContactos(linea, sock, datos)
             );
         };
@@ -4817,14 +5684,26 @@ async function iniciarWhatsApp(lineaId) {
         // contactos del historial de chats porque también contiene personas
         // no guardadas y podría exponerles un estado por error.
         sock.ev.on('contacts.upsert', contactos => {
-            procesarContactos(contactos, true);
+            if (
+                sincronizacionHistorialAgendamientoActiva?.lineaId !==
+                    lineaId ||
+                linea.modoHistorialAgendamiento !== true
+            ) {
+                procesarContactos(contactos, true);
+            }
             registrarActividad({ contactos });
             Promise.resolve(linea.promesaActividadContactos).finally(() => {
                 programarResolucionPendientesAgendamiento(linea, sock);
             });
         });
         sock.ev.on('contacts.update', contactos => {
-            procesarContactos(contactos, false);
+            if (
+                sincronizacionHistorialAgendamientoActiva?.lineaId !==
+                    lineaId ||
+                linea.modoHistorialAgendamiento !== true
+            ) {
+                procesarContactos(contactos, false);
+            }
             registrarActividad({ contactos });
             Promise.resolve(linea.promesaActividadContactos).finally(() => {
                 programarResolucionPendientesAgendamiento(linea, sock);
@@ -4842,6 +5721,13 @@ async function iniciarWhatsApp(lineaId) {
         });
 
         sock.ev.on('messaging-history.set', historial => {
+            if (
+                [
+                    TIPO_HISTORIAL_COMPLETO,
+                    TIPO_HISTORIAL_BAJO_DEMANDA
+                ].includes(historial?.syncType)
+            ) return;
+
             registrarActividad({
                 mensajes: historial?.messages,
                 chats: historial?.chats,
@@ -4852,11 +5738,18 @@ async function iniciarWhatsApp(lineaId) {
                 linea,
                 sock,
                 historial?.messages,
-                'historial'
+                'reciente'
             );
             Promise.resolve(linea.promesaActividadContactos).finally(() => {
                 programarResolucionPendientesAgendamiento(linea, sock);
             });
+        });
+
+        sock.ev.on('messaging-history.status', estadoHistorial => {
+            registrarEstadoSincronizacionHistorial(
+                linea,
+                estadoHistorial
+            );
         });
 
         sock.ev.on('chats.upsert', chats => {
@@ -4877,7 +5770,12 @@ async function iniciarWhatsApp(lineaId) {
         sock.ev.on('settings.update', actualizacion => {
             if (
                 linea.socket === sock &&
-                actualizacion?.setting === 'statusPrivacy'
+                actualizacion?.setting === 'statusPrivacy' &&
+                !(
+                    sincronizacionHistorialAgendamientoActiva?.lineaId ===
+                        lineaId &&
+                    linea.modoHistorialAgendamiento === true
+                )
             ) {
                 try {
                     actualizarPrivacidadEstados(linea, actualizacion.value);
@@ -4941,6 +5839,18 @@ async function iniciarWhatsApp(lineaId) {
                     cancelarTemporizadorIntentoConexion(linea);
                     linea.qr = qrGenerado;
                     linea.estado = 'esperando_qr';
+                    if (
+                        sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
+                        linea.modoHistorialAgendamiento === true
+                    ) {
+                        actualizarEstadoHistorialAgendamiento(linea, {
+                            estado: 'esperando_qr',
+                            progreso: 0,
+                            indeterminado: true,
+                            motivo:
+                                'Escaneá el QR. Esta línea tiene el turno exclusivo para recibir su historial.'
+                        });
+                    }
                 } catch (error) {
                     if (
                         !conexionSigueVigente(
@@ -4968,7 +5878,15 @@ async function iniciarWhatsApp(lineaId) {
                 linea.socket = sock;
                 linea.qr = null;
                 linea.estado = 'conectado';
-                linea.etiqueta = 'activa';
+                if (linea.etiquetaAntesHistorialAgendamiento) {
+                    linea.etiqueta =
+                        linea.etiquetaAntesHistorialAgendamiento;
+                    if (linea.modoHistorialAgendamiento !== true) {
+                        linea.etiquetaAntesHistorialAgendamiento = null;
+                    }
+                } else {
+                    linea.etiqueta = 'activa';
+                }
                 linea.reconexionManualEnCurso = false;
                 linea.reconexionBloqueada = false;
                 linea.reiniciosRequeridos = 0;
@@ -4978,6 +5896,7 @@ async function iniciarWhatsApp(lineaId) {
                 linea.resincronizandoAudiencia = false;
                 linea.intentosResincronizacionAudiencia = 0;
                 linea.ultimaConexion = new Date().toISOString();
+                linea.sesionRegistrada = true;
                 linea.ultimoError = debeVerificarEstabilidad
                     ? `Conexión restablecida. Verificando estabilidad antes de reiniciar el contador de intentos.`
                     : null;
@@ -5006,6 +5925,46 @@ async function iniciarWhatsApp(lineaId) {
                 // Al reiniciar puede existir un mapeo almacenado sin que
                 // Baileys vuelva a emitir lid-mapping.update.
                 programarResolucionPendientesAgendamiento(linea, sock, 500);
+
+                if (
+                    sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
+                    linea.modoHistorialAgendamiento === true
+                ) {
+                    const activaHistorial =
+                        sincronizacionHistorialAgendamientoActiva;
+                    actualizarEstadoHistorialAgendamiento(linea, {
+                        estado: 'sincronizando',
+                        indeterminado: true,
+                        motivo: activaHistorial.vinculacionInicial
+                            ? 'Línea vinculada. Esperando los bloques iniciales de historial que envíe WhatsApp.'
+                            : 'Línea conectada. Solicitando el historial al teléfono sin reiniciarla.'
+                    });
+                    programarInactividadSincronizacionHistorial(linea);
+
+                    if (!activaHistorial.vinculacionInicial) {
+                        solicitarHistorialCompletoBajoDemanda(
+                            linea,
+                            sock
+                        ).catch(error => {
+                            if (
+                                sincronizacionHistorialAgendamientoActiva
+                                    ?.token !== activaHistorial.token
+                            ) return;
+                            cerrarTurnoSincronizacionHistorialAgendamiento(
+                                linea,
+                                {
+                                    estado: 'pausada',
+                                    progreso:
+                                        asegurarEstadoHistorialAgendamiento(
+                                            linea
+                                        ).progreso,
+                                    motivo:
+                                        `No se pudo solicitar el historial al teléfono: ${error.message}`
+                                }
+                            );
+                        });
+                    }
+                }
             }
 
             if (connection === 'close') {
@@ -5026,6 +5985,56 @@ async function iniciarWhatsApp(lineaId) {
                         : codigoError
                             ? `WhatsApp cerró la conexión (código ${codigoError}).`
                             : 'WhatsApp cerró la conexión.';
+                const cerrabaSincronizacionHistorial =
+                    sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
+                    linea.modoHistorialAgendamiento === true;
+
+                if (cerrabaSincronizacionHistorial) {
+                    if (codigoError === DisconnectReason.restartRequired) {
+                        const activa =
+                            sincronizacionHistorialAgendamientoActiva;
+                        if (activa?.temporizadorInactividad) {
+                            clearTimeout(activa.temporizadorInactividad);
+                            activa.temporizadorInactividad = null;
+                        }
+                        actualizarEstadoHistorialAgendamiento(linea, {
+                            estado: 'sincronizando',
+                            indeterminado: true,
+                            motivo:
+                                'WhatsApp solicitó reiniciar la conexión para continuar con el historial.'
+                        });
+                    } else if (
+                        CODIGOS_TRANSITORIOS_HISTORIAL.has(codigoError)
+                    ) {
+                        const activa =
+                            sincronizacionHistorialAgendamientoActiva;
+                        if (activa?.temporizadorInactividad) {
+                            clearTimeout(activa.temporizadorInactividad);
+                            activa.temporizadorInactividad = null;
+                        }
+                        if (activa) {
+                            activa.solicitudEnviada = false;
+                            activa.respuestaAceptada = false;
+                            activa.requestId = null;
+                            activa.stanzaId = null;
+                        }
+                        actualizarEstadoHistorialAgendamiento(linea, {
+                            estado: 'sincronizando',
+                            indeterminado: true,
+                            motivo:
+                                `${mensajeDesconexion} Se reconectará y continuará dentro del mismo turno.`
+                        });
+                    } else {
+                        cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                            estado: 'pausada',
+                            progreso:
+                                asegurarEstadoHistorialAgendamiento(linea)
+                                    .progreso,
+                            motivo:
+                                `${mensajeDesconexion} La preparación quedó pausada y la cola continuará con la siguiente línea.`
+                        });
+                    }
+                }
 
                 cancelarReintentoAudiencia(linea);
                 cancelarTemporizadorReconexion(linea);
@@ -5148,6 +6157,19 @@ async function iniciarWhatsApp(lineaId) {
         });
     } catch (error) {
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
+
+        if (
+            sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
+            linea.modoHistorialAgendamiento === true
+        ) {
+            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                progreso:
+                    asegurarEstadoHistorialAgendamiento(linea).progreso,
+                motivo:
+                    `No se pudo iniciar la preparación del historial: ${error.message}`
+            });
+        }
 
         invalidarConexionActual(linea);
         linea.iniciando = false;
@@ -6594,7 +7616,7 @@ function resultadoCandidatoEstaSincronizado(candidato) {
     return ['creado', 'actualizado', 'sin_cambios'].includes(resultado.tipo);
 }
 
-function transformarVistaAgendamiento(vista) {
+function transformarVistaAgendamiento(vista, linea = null) {
     const candidatosOriginales = [
         ...(Array.isArray(vista?.candidatos) ? vista.candidatos : []),
         ...(Array.isArray(vista?.pendientesResolucion)
@@ -6640,8 +7662,13 @@ function transformarVistaAgendamiento(vista) {
     return {
         credencialesConfiguradas: vista?.credencialesConfiguradas === true,
         cuentas: Array.isArray(vista?.cuentas) ? vista.cuentas : [],
+        busqueda: vista?.busqueda ||
+            servicioAgendamiento.obtenerConfiguracionBusqueda(),
         lineaId: vista?.linea?.id || null,
         cuentaId: vista?.cuentaId || null,
+        historial: linea
+            ? obtenerEstadoPublicoHistorialAgendamiento(linea)
+            : null,
         resumen: {
             detectados:
                 (Number(vista?.totales?.conUsuario) || 0) +
@@ -6677,6 +7704,7 @@ app.get('/agendamiento', (req, res) => {
         return res.json({
             credencialesConfiguradas: Boolean(servicioAgendamiento.estado?.oauth),
             cuentas: servicioAgendamiento.listarCuentas(),
+            busqueda: servicioAgendamiento.obtenerConfiguracionBusqueda(),
             lineaId: null,
             cuentaId: null,
             resumen: {
@@ -6688,6 +7716,7 @@ app.get('/agendamiento', (req, res) => {
                 mostrados: 0
             },
             proceso: null,
+            historial: null,
             candidatos: []
         });
     }
@@ -6701,10 +7730,49 @@ app.get('/agendamiento', (req, res) => {
         return res.json(transformarVistaAgendamiento(
             servicioAgendamiento.obtenerVista(
                 describirLineaParaAgendamiento(linea)
-            )
+            ),
+            linea
         ));
     } catch (error) {
         return responderErrorAgendamiento(res, error);
+    }
+});
+
+app.put('/agendamiento/palabras-clave', async (req, res) => {
+    if (agendamientoEstaOcupado()) {
+        return res.status(409).json({
+            error:
+                'Detené el agendamiento antes de cambiar las palabras clave.',
+            codigo: 'SINCRONIZACION_ACTIVA'
+        });
+    }
+
+    const lineaId = String(req.body?.lineaId || '').trim();
+    const linea = lineaId ? lineas.get(lineaId) : null;
+    if (lineaId && !linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+
+    try {
+        const busqueda = servicioAgendamiento.configurarPalabrasClaveUsuario(
+            req.body?.palabrasClave
+        );
+        const revision = linea
+            ? await reanalizarMensajesRecientesAgendamiento(linea)
+            : { disponibles: 0, procesados: false };
+        const disponibles = Number(revision?.disponibles) || 0;
+
+        res.json({
+            mensaje: linea
+                ? disponibles > 0
+                    ? `Se guardaron ${busqueda.palabrasClave.length} frase(s) y se revisaron ${disponibles} mensaje(s) recientes de ${linea.nombre}.`
+                    : `Se guardaron ${busqueda.palabrasClave.length} frase(s). Los mensajes recientes de ${linea.nombre} se analizarán a medida que WhatsApp los entregue.`
+                : `Se guardaron ${busqueda.palabrasClave.length} frase(s) para el agendamiento.`,
+            busqueda,
+            mensajesRecientesRevisados: disponibles
+        });
+    } catch (error) {
+        responderErrorAgendamiento(res, error);
     }
 });
 
@@ -6807,6 +7875,14 @@ app.put('/agendamiento/lineas/:id/cuenta', (req, res) => {
     } catch (error) {
         responderErrorAgendamiento(res, error);
     }
+});
+
+app.post('/agendamiento/lineas/:id/historial', (req, res) => {
+    res.status(410).json({
+        codigo: 'HISTORIAL_COMPLETO_DESACTIVADO',
+        error:
+            'La preparación de historial completo fue reemplazada por la búsqueda configurable en chats recientes.'
+    });
 });
 
 app.post('/agendamiento/lineas/:id/iniciar', (req, res) => {
@@ -7023,7 +8099,14 @@ app.post('/lineas', (req, res) => {
         fechaUltimaInteraccionContactos: 0,
         ultimaSeleccionAudienciaEstado: null,
         revisionPriorizacionAudiencia: 0,
-        cacheResumenPriorizacionAudiencia: null
+        cacheResumenPriorizacionAudiencia: null,
+        historialAgendamiento: crearEstadoHistorialAgendamiento(),
+        modoHistorialAgendamiento: false,
+        sesionRegistrada: null,
+        promesaIngestaAgendamiento: Promise.resolve(),
+        errorIngestaAgendamiento: null,
+        mensajesRecientesAgendamiento: new Map(),
+        etiquetaAntesHistorialAgendamiento: null
     });
 
     guardarLineas();
@@ -7101,7 +8184,9 @@ app.get('/estado', (req, res) => {
                 destinatariosEstadoTotales - destinatariosEstadoBase
             ),
             audienciaEstadosLista: audienciaEstadosLista(linea),
-            priorizacionAudiencia
+            priorizacionAudiencia,
+            historialAgendamiento:
+                obtenerEstadoPublicoHistorialAgendamiento(linea)
             };
         });
 
@@ -8080,7 +9165,12 @@ app.post('/lineas/reconectar-todas', (req, res) => {
     let omitidasPorPublicacion = 0;
 
     for (const linea of lineas.values()) {
-        if (linea.estado === 'conectado' || linea.eliminando || linea.reconexionManualEnCurso) {
+        if (
+            linea.estado === 'conectado' ||
+            linea.eliminando ||
+            linea.reconexionManualEnCurso ||
+            historialAgendamientoEnCurso(linea.id)
+        ) {
             continue;
         }
 
@@ -8158,6 +9248,14 @@ app.post('/lineas/:id/reconectar', (req, res) => {
         });
     }
 
+    if (historialAgendamientoEnCurso(linea.id)) {
+        return res.status(409).json({
+            codigo: 'HISTORIAL_EN_CURSO',
+            error:
+                'Esta línea ya está preparando su historial. Podés detener ese proceso desde Agendamiento.'
+        });
+    }
+
     if (lineaParticipaEnPublicacionActiva(linea)) {
         return res.status(409).json({
             codigo: 'PUBLICACION_ACTIVA',
@@ -8188,6 +9286,11 @@ app.delete('/lineas/:id', async (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+
+    cancelarSincronizacionHistorialAgendamiento(
+        id,
+        'La preparación se canceló porque la línea fue eliminada.'
+    );
 
     if (obtenerProcesoAgendamientoActivo()?.lineaId === id) {
         return res.status(409).json({
