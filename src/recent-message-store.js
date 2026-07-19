@@ -225,9 +225,59 @@ class AlmacenMensajesRecientes {
     eliminarLinea(lineaIdEntrada) {
         const lineaId = String(lineaIdEntrada || '').trim().slice(0, 180);
         if (!lineaId) return 0;
-        return Number(this.db.prepare(
-            'DELETE FROM mensajes_recientes WHERE linea_id = ?'
-        ).run(lineaId).changes) || 0;
+
+        let eliminados = 0;
+        this.db.exec('BEGIN IMMEDIATE');
+        try {
+            eliminados = Number(this.db.prepare(
+                'DELETE FROM mensajes_recientes WHERE linea_id = ?'
+            ).run(lineaId).changes) || 0;
+            this.db.exec('COMMIT');
+        } catch (error) {
+            try {
+                this.db.exec('ROLLBACK');
+            } catch {
+                // Se conserva el error original de la eliminación.
+            }
+            throw error;
+        }
+
+        // secure_delete borra el contenido de las celdas en la base principal,
+        // pero una transacción anterior todavía puede permanecer en el WAL.
+        // TRUNCATE fuerza su checkpoint y deja el archivo en cero bytes. Se
+        // comprueba el resultado porque SQLite puede informar un lector activo
+        // sin lanzar una excepción; en ese caso el llamador debe reintentar y no
+        // anunciar que la limpieza estricta terminó.
+        let checkpoint;
+        try {
+            checkpoint = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+        } catch (error) {
+            const fallo = new Error(
+                'Los mensajes se eliminaron, pero no se pudo purgar el registro WAL.'
+            );
+            fallo.code = 'ALMACEN_WAL_NO_PURGADO';
+            fallo.cause = error;
+            throw fallo;
+        }
+
+        const ocupado = Number(checkpoint?.busy);
+        const paginasPendientes = Number(checkpoint?.log);
+        if (
+            !checkpoint ||
+            !Number.isFinite(ocupado) ||
+            ocupado !== 0 ||
+            !Number.isFinite(paginasPendientes) ||
+            paginasPendientes !== 0
+        ) {
+            const error = new Error(
+                'Los mensajes se eliminaron, pero el registro WAL sigue ocupado.'
+            );
+            error.code = 'ALMACEN_WAL_NO_PURGADO';
+            error.checkpoint = checkpoint || null;
+            throw error;
+        }
+
+        return eliminados;
     }
 
     cerrar() {

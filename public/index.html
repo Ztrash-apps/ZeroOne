@@ -67,6 +67,35 @@
         <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></symbol>
     </svg>
 
+    <div
+        id="startup-sync-guard"
+        class="startup-sync-guard"
+        role="status"
+        aria-live="polite"
+        aria-label="Preparando líneas"
+    >
+        <div class="startup-sync-card">
+            <div id="startup-sync-ring" class="startup-sync-ring" aria-hidden="true">
+                <span></span>
+            </div>
+            <div class="startup-sync-copy">
+                <span class="startup-sync-eyebrow">INICIO PROTEGIDO</span>
+                <h2>Preparando las líneas</h2>
+                <p id="startup-sync-message">
+                    Validando conexiones y audiencias antes de habilitar las operaciones.
+                </p>
+                <div class="startup-sync-progress" aria-hidden="true">
+                    <span id="startup-sync-progress-bar"></span>
+                </div>
+                <div class="startup-sync-meta">
+                    <span id="startup-sync-batch">Organizando tandas de 10</span>
+                    <strong id="startup-sync-count">Esperá un momento</strong>
+                </div>
+                <small>Podés observar el avance; las acciones se habilitarán automáticamente al terminar.</small>
+            </div>
+        </div>
+    </div>
+
     <div class="app-shell">
         <aside id="app-sidebar" class="sidebar" aria-label="Navegación principal">
             <div class="sidebar-header">
@@ -154,7 +183,15 @@
 
         <main class="main">
             <header class="topbar">
-                <h1 id="page-title">Mis Estados Programados</h1>
+                <div class="topbar-heading">
+                    <span class="topbar-section-mark" aria-hidden="true">
+                        <span></span>
+                    </span>
+                    <div class="topbar-heading-copy">
+                        <span class="topbar-eyebrow">ZeroOne // Control</span>
+                        <h1 id="page-title">Mis Estados Programados</h1>
+                    </div>
+                </div>
 
                 <div class="topbar-actions" id="view-controls">
                     <button class="view-button active" data-view="grid">
@@ -453,7 +490,26 @@
                     </div>
 
                     <p id="mensaje-linea"></p>
-                    <div class="pending-title title-with-icon"><svg class="icon"><use href="#i-loader"></use></svg><span>Líneas pendientes de vinculación</span></div>
+                    <div class="line-group-heading pending-group-heading">
+                        <div class="pending-title title-with-icon"><svg class="icon"><use href="#i-loader"></use></svg><span>Líneas pendientes de vinculación</span></div>
+                        <div class="line-group-selection" aria-label="Selección de líneas pendientes">
+                            <label class="check-all line-group-select-all">
+                                <input type="checkbox" id="seleccionar-todas-eliminar-pendientes">
+                                <span>Seleccionar pendientes</span>
+                            </label>
+                            <span id="cantidad-eliminar-pendientes" class="line-group-count">0</span>
+                            <button
+                                type="button"
+                                id="btn-eliminar-pendientes-seleccionadas"
+                                class="small-danger line-group-delete-button"
+                                title="Eliminar líneas pendientes seleccionadas"
+                                disabled
+                            >
+                                <svg class="icon"><use href="#i-trash"></use></svg>
+                                <span id="texto-eliminar-pendientes">Eliminar</span>
+                            </button>
+                        </div>
+                    </div>
                     <div id="lista-lineas-pendientes" class="lines-grid"></div>
                 </div>
 
@@ -463,10 +519,29 @@
                             <h2 class="title-with-icon"><svg class="icon"><use href="#i-check-circle"></use></svg><span>Líneas conectadas</span></h2>
                             <p>Acá se muestran únicamente las líneas que ya están listas para publicar.</p>
                         </div>
-                        <button type="button" id="btn-reconectar-todas" class="secondary-button">
-                            <svg class="icon"><use href="#i-refresh"></use></svg>
-                            <span>Reconectar pendientes</span>
-                        </button>
+                        <div class="line-heading-actions">
+                            <div class="line-group-selection" aria-label="Selección de líneas conectadas">
+                                <label class="check-all line-group-select-all">
+                                    <input type="checkbox" id="seleccionar-todas-eliminar-conectadas">
+                                    <span>Seleccionar conectadas</span>
+                                </label>
+                                <span id="cantidad-eliminar-conectadas" class="line-group-count">0</span>
+                                <button
+                                    type="button"
+                                    id="btn-eliminar-conectadas-seleccionadas"
+                                    class="small-danger line-group-delete-button"
+                                    title="Eliminar líneas conectadas seleccionadas"
+                                    disabled
+                                >
+                                    <svg class="icon"><use href="#i-trash"></use></svg>
+                                    <span id="texto-eliminar-conectadas">Eliminar</span>
+                                </button>
+                            </div>
+                            <button type="button" id="btn-reconectar-todas" class="secondary-button">
+                                <svg class="icon"><use href="#i-refresh"></use></svg>
+                                <span>Reconectar pendientes</span>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="line-management-toolbar">
@@ -883,6 +958,16 @@
                                 <label for="config-maximo-destinatarios">Destinatarios por estado</label>
                                 <input id="config-maximo-destinatarios" class="input" type="number" min="1" max="1000" step="1" value="1000">
                                 <span class="help">Se crea una base con los 1.000 contactos más recientes. Este límite toma el inicio de esa base: por ejemplo, 500 usa exactamente sus primeros 500.</span>
+                            </div>
+                            <div class="field settings-control-card">
+                                <label for="config-enfriamiento-campanas">Enfriamiento por línea</label>
+                                <input id="config-enfriamiento-campanas" class="input" type="number" min="0" max="1440" step="1" value="15">
+                                <span class="help">Minutos que debe esperar una línea después de una campaña. Usá 0 para desactivarlo.</span>
+                            </div>
+                            <div class="field settings-control-card">
+                                <label for="config-limite-campanas-diarias">Límite diario por línea</label>
+                                <input id="config-limite-campanas-diarias" class="input" type="number" min="0" max="100" step="1" value="12">
+                                <span class="help">Cantidad máxima de campañas en una ventana móvil de 24 horas. Usá 0 para desactivarlo.</span>
                             </div>
                             <div class="field settings-control-card">
                                 <label for="config-limite-fallos">Corte de seguridad por líneas</label>
@@ -1505,6 +1590,7 @@
 
     <script>
         const lineasSeleccionadas = new Set();
+        const lineasSeleccionadasEliminar = new Set();
         const programacionesCache = new Map();
 
         let idsLineasConectadas = [];
@@ -1528,6 +1614,7 @@
         let cargandoEstadosActivos = false;
         let proteccionMiddlewareActual = null;
         let publicacionActivaActual = false;
+        let eliminandoLineasSeleccionadas = false;
         let altoTotalSolicitado = false;
         let secuenciaActualizacionLineas = 0;
         let resolverConfirmacion = null;
@@ -2158,6 +2245,228 @@
                 `${lineasSeleccionadas.size} línea(s)`;
         }
 
+        function lineasDisponiblesParaEliminar(grupo = null) {
+            const lineas = (Array.isArray(cacheLineasAgendamiento)
+                ? cacheLineasAgendamiento
+                : [])
+                .filter(linea => linea?.id)
+                .map(linea => ({
+                    ...linea,
+                    id: String(linea.id)
+                }));
+
+            if (grupo === 'conectadas') {
+                return lineas.filter(linea => linea.estado === 'conectado');
+            }
+            if (grupo === 'pendientes') {
+                return lineas.filter(linea => linea.estado !== 'conectado');
+            }
+            return lineas;
+        }
+
+        function actualizarControlesEliminacionLineas() {
+            const lineasDisponibles = lineasDisponiblesParaEliminar();
+            const idsDisponibles = new Set(
+                lineasDisponibles.map(linea => linea.id)
+            );
+
+            for (const id of Array.from(lineasSeleccionadasEliminar)) {
+                if (!idsDisponibles.has(id)) {
+                    lineasSeleccionadasEliminar.delete(id);
+                }
+            }
+
+            const grupos = [
+                {
+                    nombre: 'pendientes',
+                    selectorId: 'seleccionar-todas-eliminar-pendientes',
+                    botonId: 'btn-eliminar-pendientes-seleccionadas',
+                    contadorId: 'cantidad-eliminar-pendientes'
+                },
+                {
+                    nombre: 'conectadas',
+                    selectorId: 'seleccionar-todas-eliminar-conectadas',
+                    botonId: 'btn-eliminar-conectadas-seleccionadas',
+                    contadorId: 'cantidad-eliminar-conectadas'
+                }
+            ];
+
+            grupos.forEach(grupo => {
+                const disponiblesGrupo = lineasDisponiblesParaEliminar(
+                    grupo.nombre
+                );
+                const seleccionadas = disponiblesGrupo.filter(linea =>
+                    lineasSeleccionadasEliminar.has(linea.id)
+                ).length;
+                const selectorTodas = document.getElementById(
+                    grupo.selectorId
+                );
+                const botonEliminar = document.getElementById(grupo.botonId);
+                const contador = document.getElementById(grupo.contadorId);
+
+                if (selectorTodas) {
+                    selectorTodas.checked =
+                        disponiblesGrupo.length > 0 &&
+                        seleccionadas === disponiblesGrupo.length;
+                    selectorTodas.indeterminate =
+                        seleccionadas > 0 &&
+                        seleccionadas < disponiblesGrupo.length;
+                    selectorTodas.disabled =
+                        eliminandoLineasSeleccionadas ||
+                        disponiblesGrupo.length === 0;
+                }
+                if (contador) {
+                    contador.textContent = String(seleccionadas);
+                    contador.title = `${seleccionadas} seleccionada${seleccionadas === 1 ? '' : 's'}`;
+                    contador.setAttribute(
+                        'aria-label',
+                        `${seleccionadas} línea${seleccionadas === 1 ? '' : 's'} seleccionada${seleccionadas === 1 ? '' : 's'}`
+                    );
+                }
+                if (botonEliminar) {
+                    botonEliminar.disabled =
+                        eliminandoLineasSeleccionadas || seleccionadas === 0;
+                }
+            });
+
+            document.querySelectorAll('.line-delete-check').forEach(checkbox => {
+                const id = String(checkbox.dataset.id || checkbox.value || '');
+                checkbox.checked = lineasSeleccionadasEliminar.has(id);
+                checkbox.disabled = eliminandoLineasSeleccionadas;
+                checkbox.closest('.connected-line-card, .pending-line-card')
+                    ?.classList.toggle('selected-for-delete', checkbox.checked);
+            });
+        }
+
+        function manejarCambioSeleccionEliminarLinea(evento) {
+            const checkbox = evento.target.closest('.line-delete-check');
+            if (!checkbox) return;
+            const id = String(checkbox.dataset.id || checkbox.value || '');
+            if (!id) return;
+
+            if (checkbox.checked) lineasSeleccionadasEliminar.add(id);
+            else lineasSeleccionadasEliminar.delete(id);
+            actualizarControlesEliminacionLineas();
+        }
+
+        function limpiarLineaEliminadaEnInterfaz(idEntrada) {
+            const id = String(idEntrada || '');
+            if (!id) return;
+            if (lineaQrModalId === id) cerrarQrDeLinea();
+            if (lineaQrObjetivoId === id) lineaQrObjetivoId = null;
+            qrDescartadosPorLinea.delete(id);
+            lineasSeleccionadas.delete(id);
+            lineasSeleccionadasEliminar.delete(id);
+            if (selectorEtiquetaAbiertoId === id) selectorEtiquetaAbiertoId = null;
+            actualizarCheckboxGeneral();
+            actualizarControlesEliminacionLineas();
+        }
+
+        async function eliminarLineaRemota(idEntrada) {
+            const id = String(idEntrada || '');
+            const respuesta = await fetch(
+                `/lineas/${encodeURIComponent(id)}`,
+                { method: 'DELETE' }
+            );
+            const data = await leerRespuesta(respuesta);
+            if (!respuesta.ok) {
+                const error = new Error(
+                    data.error || 'No se pudo eliminar la línea.'
+                );
+                error.codigo = data.codigo || null;
+                throw error;
+            }
+            limpiarLineaEliminadaEnInterfaz(id);
+            return data;
+        }
+
+        async function eliminarSeleccionLineas(grupo) {
+            if (eliminandoLineasSeleccionadas) return;
+            if (grupo !== 'conectadas' && grupo !== 'pendientes') return;
+
+            const disponibles = lineasDisponiblesParaEliminar(grupo);
+            const porId = new Map(disponibles.map(linea => [linea.id, linea]));
+            const ids = Array.from(lineasSeleccionadasEliminar)
+                .filter(id => porId.has(id));
+            if (!ids.length) {
+                actualizarControlesEliminacionLineas();
+                return;
+            }
+
+            const sonConectadas = grupo === 'conectadas';
+            const descripcionGrupo = sonConectadas
+                ? `conectada${ids.length === 1 ? '' : 's'}`
+                : `pendiente${ids.length === 1 ? '' : 's'} o reconectando`;
+            const confirmado = await solicitarConfirmacion({
+                titulo: `Eliminar ${ids.length} línea${ids.length === 1 ? '' : 's'} ${descripcionGrupo}`,
+                mensaje: sonConectadas
+                    ? 'Se eliminarán las sesiones seleccionadas. Para volver a usarlas tendrás que vincularlas nuevamente.'
+                    : 'Se detendrá cualquier vinculación o reconexión en curso. Para volver a usarlas tendrás que vincularlas nuevamente.',
+                textoConfirmar: `Eliminar ${ids.length}`,
+                icono: 'trash'
+            });
+            if (!confirmado) return;
+
+            const prefijoId = sonConectadas ? 'conectadas' : 'pendientes';
+            const boton = document.getElementById(
+                `btn-eliminar-${prefijoId}-seleccionadas`
+            );
+            const textoBoton = document.getElementById(
+                `texto-eliminar-${prefijoId}`
+            );
+            const tituloBotonOriginal = boton?.title || '';
+            const fallidas = [];
+            let eliminadas = 0;
+            eliminandoLineasSeleccionadas = true;
+            actualizarControlesEliminacionLineas();
+            boton?.setAttribute('aria-busy', 'true');
+
+            try {
+                for (let indice = 0; indice < ids.length; indice += 1) {
+                    const id = ids[indice];
+                    if (textoBoton) {
+                        textoBoton.textContent = `${indice + 1} / ${ids.length}`;
+                    }
+                    if (boton) {
+                        boton.title = `Eliminando línea ${indice + 1} de ${ids.length}`;
+                    }
+                    try {
+                        await eliminarLineaRemota(id);
+                        eliminadas += 1;
+                    } catch (error) {
+                        fallidas.push({
+                            id,
+                            nombre: porId.get(id)?.nombre || 'Línea',
+                            mensaje: error.message
+                        });
+                    }
+                }
+
+                if (eliminadas > 0) {
+                    toast(
+                        `${eliminadas} línea${eliminadas === 1 ? '' : 's'} eliminada${eliminadas === 1 ? '' : 's'} correctamente.`,
+                        'success'
+                    );
+                }
+                if (fallidas.length > 0) {
+                    const primera = fallidas[0];
+                    toast(
+                        `${fallidas.length} no se pudieron eliminar. ${primera.nombre}: ${primera.mensaje}`,
+                        'error'
+                    );
+                }
+            } finally {
+                eliminandoLineasSeleccionadas = false;
+                if (textoBoton) textoBoton.textContent = 'Eliminar';
+                if (boton) {
+                    boton.removeAttribute('aria-busy');
+                    boton.title = tituloBotonOriginal;
+                }
+                actualizarControlesEliminacionLineas();
+                actualizarLineas();
+            }
+        }
+
         function mostrarSeccion(nombre, opciones = {}) {
             if (!Object.prototype.hasOwnProperty.call(titulos, nombre)) {
                 nombre = 'dashboard';
@@ -2475,6 +2784,10 @@
                 idsVisibles.add(id);
                 const tarjeta = existentes.get(id) || document.createElement('article');
                 tarjeta.className = 'pending-line-card';
+                tarjeta.classList.toggle(
+                    'selected-for-delete',
+                    lineasSeleccionadasEliminar.has(id)
+                );
                 tarjeta.dataset.lineId = id;
                 tarjeta.dataset.state = String(linea.estado || 'error');
 
@@ -2494,7 +2807,19 @@
                                 <span>Última conexión: ${escaparHTML(formatearFechaCompacta(linea.ultimaConexion))}</span>
                             </span>
                         </div>
-                        <span class="pending-line-order">#${Number(linea.ordenConexion) || 0}</span>
+                        <span class="line-card-header-tools">
+                            <input
+                                type="checkbox"
+                                class="line-check line-delete-check"
+                                data-id="${escaparHTML(id)}"
+                                value="${escaparHTML(id)}"
+                                aria-label="Seleccionar ${escaparHTML(linea.nombre)} para eliminar"
+                                title="Seleccionar para eliminar"
+                                ${lineasSeleccionadasEliminar.has(id) ? 'checked' : ''}
+                                ${eliminandoLineasSeleccionadas ? 'disabled' : ''}
+                            >
+                            <span class="pending-line-order">#${Number(linea.ordenConexion) || 0}</span>
+                        </span>
                     </header>
 
                     <div class="pending-line-status-row">
@@ -2686,19 +3011,7 @@
 
             try {
                 botonEliminar.disabled = true;
-                const respuesta = await fetch(
-                    `/lineas/${encodeURIComponent(id)}`,
-                    { method: 'DELETE' }
-                );
-                const data = await leerRespuesta(respuesta);
-                if (!respuesta.ok) {
-                    throw new Error(data.error || 'No se pudo eliminar la línea.');
-                }
-
-                if (lineaQrModalId === id) cerrarQrDeLinea();
-                if (lineaQrObjetivoId === id) lineaQrObjetivoId = null;
-                qrDescartadosPorLinea.delete(id);
-                lineasSeleccionadas.delete(id);
+                const data = await eliminarLineaRemota(id);
                 toast(data.mensaje || 'Línea eliminada.', 'success');
                 actualizarLineas();
             } catch (error) {
@@ -2872,6 +3185,10 @@
                 const tarjeta = tarjetasExistentes.get(idLinea) ||
                     document.createElement('article');
                 tarjeta.className = 'connected-line-card';
+                tarjeta.classList.toggle(
+                    'selected-for-delete',
+                    lineasSeleccionadasEliminar.has(idLinea)
+                );
                 tarjeta.dataset.lineId = idLinea;
                 const audienciaLista = Boolean(linea.audienciaEstadosLista);
                 const audienciaSeleccionada = Number(linea.destinatariosEstado) || 0;
@@ -2950,7 +3267,19 @@
                                 <span>${linea.numero ? escaparHTML(linea.numero) : 'Número no disponible'}</span>
                             </span>
                         </div>
-                        <span class="connected-line-rank">#${Number(linea.ordenOriginal) || 0}</span>
+                        <span class="line-card-header-tools">
+                            <input
+                                type="checkbox"
+                                class="line-check line-delete-check"
+                                data-id="${escaparHTML(idLinea)}"
+                                value="${escaparHTML(idLinea)}"
+                                aria-label="Seleccionar ${escaparHTML(linea.nombre)} para eliminar"
+                                title="Seleccionar para eliminar"
+                                ${lineasSeleccionadasEliminar.has(idLinea) ? 'checked' : ''}
+                                ${eliminandoLineasSeleccionadas ? 'disabled' : ''}
+                            >
+                            <span class="connected-line-rank">#${Number(linea.ordenOriginal) || 0}</span>
+                        </span>
                     </div>
 
                     <div class="connected-line-state-row">
@@ -3421,15 +3750,7 @@
 
             try {
                 botonEliminar.disabled = true;
-                const respuesta = await fetch(`/lineas/${encodeURIComponent(id)}`, {
-                    method: 'DELETE'
-                });
-                const data = await leerRespuesta(respuesta);
-                if (!respuesta.ok) {
-                    throw new Error(data.error || 'No se pudo eliminar la línea.');
-                }
-
-                lineasSeleccionadas.delete(id);
+                const data = await eliminarLineaRemota(id);
                 toast(data.mensaje || 'Línea eliminada.', 'success');
                 actualizarLineas();
             } catch (error) {
@@ -4916,6 +5237,15 @@
                 cacheLineasAgendamiento = todasLasLineas;
                 renderizarSelectorLineasAgendamiento();
 
+                const idsLineasExistentes = new Set(
+                    todasLasLineas.map(linea => String(linea.id))
+                );
+                for (const id of Array.from(lineasSeleccionadasEliminar)) {
+                    if (!idsLineasExistentes.has(id)) {
+                        lineasSeleccionadasEliminar.delete(id);
+                    }
+                }
+
                 idsLineasConectadas = conectadas
                     .filter(lineaListaParaPublicar)
                     .map(linea => linea.id);
@@ -4988,6 +5318,7 @@
                 renderizarLineasConectadas(cacheLineasSeccion);
 
                 renderizarLineasPendientes(pendientes);
+                actualizarControlesEliminacionLineas();
 
                 document.getElementById('nav-line-count').textContent =
                     conectadas.length;
@@ -5831,6 +6162,20 @@
                         1000,
                         1000
                     );
+                document.getElementById('config-enfriamiento-campanas').value =
+                    numeroConfigurado(
+                        data.enfriamientoCampanasMinutos,
+                        0,
+                        1440,
+                        15
+                    );
+                document.getElementById('config-limite-campanas-diarias').value =
+                    numeroConfigurado(
+                        data.limiteCampanasDiariasPorLinea,
+                        0,
+                        100,
+                        12
+                    );
                 const limiteFallosSeguridad = numeroConfigurado(
                     data.limiteFallosSeguridad,
                     1,
@@ -6091,10 +6436,50 @@
         document
             .getElementById('lista-lineas-conectadas')
             .addEventListener('click', manejarClickLineasConectadas);
+        document
+            .getElementById('lista-lineas-conectadas')
+            .addEventListener('change', manejarCambioSeleccionEliminarLinea);
 
         document
             .getElementById('lista-lineas-pendientes')
             .addEventListener('click', manejarClickLineasPendientes);
+        document
+            .getElementById('lista-lineas-pendientes')
+            .addEventListener('change', manejarCambioSeleccionEliminarLinea);
+
+        [
+            {
+                grupo: 'pendientes',
+                selectorId: 'seleccionar-todas-eliminar-pendientes',
+                botonId: 'btn-eliminar-pendientes-seleccionadas'
+            },
+            {
+                grupo: 'conectadas',
+                selectorId: 'seleccionar-todas-eliminar-conectadas',
+                botonId: 'btn-eliminar-conectadas-seleccionadas'
+            }
+        ].forEach(configuracion => {
+            document
+                .getElementById(configuracion.selectorId)
+                .addEventListener('change', function () {
+                    const ids = lineasDisponiblesParaEliminar(
+                        configuracion.grupo
+                    ).map(linea => linea.id);
+                    if (this.checked) {
+                        ids.forEach(id => lineasSeleccionadasEliminar.add(id));
+                    } else {
+                        ids.forEach(id => lineasSeleccionadasEliminar.delete(id));
+                    }
+                    actualizarControlesEliminacionLineas();
+                });
+
+            document
+                .getElementById(configuracion.botonId)
+                .addEventListener(
+                    'click',
+                    () => eliminarSeleccionLineas(configuracion.grupo)
+                );
+        });
 
         document.querySelectorAll('.view-button').forEach(boton => {
             boton.addEventListener('click', () => {
@@ -6591,6 +6976,12 @@
                 const maximoDestinatariosPorEstado = Number(
                     document.getElementById('config-maximo-destinatarios').value
                 );
+                const enfriamientoCampanasMinutos = Number(
+                    document.getElementById('config-enfriamiento-campanas').value
+                );
+                const limiteCampanasDiariasPorLinea = Number(
+                    document.getElementById('config-limite-campanas-diarias').value
+                );
                 const temaVisual = normalizarTemaVisual(
                     document.querySelector('input[name="config-tema-visual"]:checked')?.value
                 );
@@ -6600,6 +6991,8 @@
                 const grupoValido = Number.isInteger(lineasPorGrupoPredeterminado) && lineasPorGrupoPredeterminado >= 1 && lineasPorGrupoPredeterminado <= 10;
                 const minutosValidos = Number.isFinite(intervaloMinutosPredeterminado) && intervaloMinutosPredeterminado >= 0 && intervaloMinutosPredeterminado <= 1440;
                 const destinatariosValidos = Number.isInteger(maximoDestinatariosPorEstado) && maximoDestinatariosPorEstado >= 1 && maximoDestinatariosPorEstado <= 1000;
+                const enfriamientoValido = Number.isInteger(enfriamientoCampanasMinutos) && enfriamientoCampanasMinutos >= 0 && enfriamientoCampanasMinutos <= 1440;
+                const limiteDiarioValido = Number.isInteger(limiteCampanasDiariasPorLinea) && limiteCampanasDiariasPorLinea >= 0 && limiteCampanasDiariasPorLinea <= 100;
 
                 if (modoRitmoPredeterminado === 'secuencial' && !segundosValidos) {
                     throw new Error('El intervalo secuencial debe estar entre 10 y 3600 segundos.');
@@ -6615,6 +7008,12 @@
                 }
                 if (!destinatariosValidos) {
                     throw new Error('Los destinatarios por estado deben estar entre 1 y 1.000.');
+                }
+                if (!enfriamientoValido) {
+                    throw new Error('El enfriamiento por línea debe estar entre 0 y 1.440 minutos.');
+                }
+                if (!limiteDiarioValido) {
+                    throw new Error('El límite diario por línea debe estar entre 0 y 100 campañas.');
                 }
 
                 if (!segundosValidos) intervaloSegundosPredeterminado = 45;
@@ -6632,6 +7031,8 @@
                         lineasPorGrupoPredeterminado,
                         intervaloMinutosPredeterminado,
                         maximoDestinatariosPorEstado,
+                        enfriamientoCampanasMinutos,
+                        limiteCampanasDiariasPorLinea,
                         temaVisual,
                         limiteFallosSeguridad: Number(
                             document.getElementById('config-limite-fallos').value
@@ -6871,6 +7272,68 @@
             });
             if (confirmado) ejecutarAccionActualizacion('instalar');
         };
+
+        let temporizadorSincronizacionInicial = null;
+
+        async function consultarSincronizacionInicial() {
+            const guardia = document.getElementById('startup-sync-guard');
+            const aplicacion = document.querySelector('.app-shell');
+
+            try {
+                const respuesta = await fetch('/seguridad/sincronizacion-inicial');
+                const estado = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo consultar la preparación inicial.'
+                );
+                const porcentaje = Math.min(
+                    100,
+                    Math.max(0, Number(estado.porcentaje) || 0)
+                );
+                const activa = estado.activa === true;
+
+                guardia.hidden = !activa;
+                guardia.style.setProperty(
+                    '--startup-sync-progress',
+                    `${porcentaje * 3.6}deg`
+                );
+                document.getElementById('startup-sync-progress-bar').style.width =
+                    `${porcentaje}%`;
+                document.getElementById('startup-sync-message').textContent =
+                    estado.mensaje || 'Preparando conexiones y audiencias.';
+                document.getElementById('startup-sync-batch').textContent =
+                    Number(estado.totalLotes) > 0
+                        ? `Tanda ${Number(estado.loteActual) || 1} de ${estado.totalLotes}`
+                        : 'Comprobando líneas guardadas';
+                document.getElementById('startup-sync-count').textContent =
+                    `${Number(estado.procesadas) || 0} de ${Number(estado.total) || 0}`;
+
+                if (aplicacion) {
+                    aplicacion.inert = activa;
+                    aplicacion.setAttribute('aria-busy', String(activa));
+                }
+
+                if (!activa && temporizadorSincronizacionInicial) {
+                    clearInterval(temporizadorSincronizacionInicial);
+                    temporizadorSincronizacionInicial = null;
+                    actualizarLineas();
+                    actualizarResumen();
+                }
+            } catch (error) {
+                guardia.hidden = false;
+                document.getElementById('startup-sync-message').textContent =
+                    'Esperando que el servicio de seguridad responda.';
+                if (aplicacion) {
+                    aplicacion.inert = true;
+                    aplicacion.setAttribute('aria-busy', 'true');
+                }
+            }
+        }
+
+        temporizadorSincronizacionInicial = setInterval(
+            consultarSincronizacionInicial,
+            1000
+        );
+        consultarSincronizacionInicial();
 
         configurarSelectorTodosDias('dias-programados');
         configurarSelectorTodosDias('editar-dias-programados');

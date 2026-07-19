@@ -111,3 +111,39 @@ test('ignora recibidos, grupos y estados', t => {
     assert.deepEqual(almacen.obtener('linea-2'), []);
     almacen.cerrar();
 });
+
+test('elimina solo la linea indicada y trunca estrictamente el WAL', t => {
+    const carpeta = temporal(t);
+    const ruta = path.join(carpeta, 'mensajes.sqlite');
+    const almacen = crearAlmacenMensajesRecientes(opciones(carpeta));
+    const mensaje = (jid, id, usuario) => ({
+        key: {
+            fromMe: true,
+            remoteJid: jid,
+            id
+        },
+        messageTimestamp: Date.now(),
+        message: { conversation: `Usuario: ${usuario}` }
+    });
+
+    almacen.guardar('linea-eliminada', [
+        mensaje('595981111111@s.whatsapp.net', 'ELIMINAR-1', 'rositaflor77')
+    ]);
+    almacen.guardar('linea-conservada', [
+        mensaje('595982222222@s.whatsapp.net', 'CONSERVAR-1', 'margarita88')
+    ]);
+
+    const rutaWal = `${ruta}-wal`;
+    assert.equal(fs.existsSync(rutaWal), true);
+    assert.ok(fs.statSync(rutaWal).size > 0);
+
+    assert.equal(almacen.eliminarLinea('linea-eliminada'), 1);
+    assert.deepEqual(almacen.obtener('linea-eliminada'), []);
+    assert.equal(almacen.obtener('linea-conservada').length, 1);
+    assert.equal(fs.existsSync(rutaWal) ? fs.statSync(rutaWal).size : 0, 0);
+
+    // Una repetición es idempotente y vuelve a verificar el checkpoint. Esto
+    // permite reintentar una eliminación cuyo primer checkpoint estuvo ocupado.
+    assert.equal(almacen.eliminarLinea('linea-eliminada'), 0);
+    almacen.cerrar();
+});

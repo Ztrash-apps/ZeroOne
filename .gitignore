@@ -2,15 +2,20 @@ node_modules/
 dist/
 out/
 sesiones/
+respaldos-sesiones-cifrados/
 uploads/
 programados/
+historial/
 agendamiento/
 ia-local/
+configuracion.json
 *.gguf
 *.part
 *.pfx
 *.p12
 *.cer
+*.pem
+*.key
 certificates/
 proteccion-publicacion.json
 idempotencia-publicacion.json
@@ -22,4 +27,6 @@ Thumbs.db
 Desktop.ini
 .vscode/
 .idea/
+.agents/
+.codex/
 INSTRUCCIONES_AGENDAMIENTO_1.1.1.txt

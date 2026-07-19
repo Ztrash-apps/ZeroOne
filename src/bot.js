@@ -5,7 +5,9 @@ const {
     jidNormalizedUser,
     WAMessageStatus,
     DisconnectReason,
-    proto
+    proto,
+    BufferJSON,
+    initAuthCreds
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const express = require('express');
@@ -33,6 +35,19 @@ const {
 } = require('./ai-username-detector');
 const { crearRuntimeIALocal } = require('./local-ai-runtime');
 const { crearAlmacenMensajesRecientes } = require('./recent-message-store');
+const {
+    crearCoordinadorSincronizacionInicial,
+    crearEstadoPreparacionInicial
+} = require('./startup-sync-coordinator');
+const { createLocalKeyProtector } = require('./session-security');
+const {
+    crearGestorRespaldosSesiones,
+    eliminarRespaldosLineaSeguro
+} = require('./session-backup-manager');
+const {
+    MARKER_FILE: MARCADOR_AUTENTICACION_CIFRADA,
+    crearEstadoAutenticacionCifrado
+} = require('./encrypted-auth-state');
 
 const app = express();
 app.disable('x-powered-by');
@@ -58,6 +73,10 @@ const CARPETA_PUBLIC = path.join(RAIZ_PROYECTO, 'public');
 const CARPETA_FUENTES = path.join(RAIZ_PROYECTO, 'font');
 const CARPETA_UPLOADS = path.join(CARPETA_DATOS, 'uploads');
 const CARPETA_SESIONES = path.join(CARPETA_DATOS, 'sesiones');
+const CARPETA_RESPALDOS_SESIONES = path.join(
+    CARPETA_DATOS,
+    'respaldos-sesiones-cifrados'
+);
 const CARPETA_PROGRAMADOS = path.join(CARPETA_DATOS, 'programados');
 const CARPETA_IMAGENES_PROGRAMADAS = path.join(CARPETA_PROGRAMADOS, 'imagenes');
 const CARPETA_HISTORIAL = path.join(CARPETA_DATOS, 'historial');
@@ -81,6 +100,31 @@ const CARPETA_IA_LOCAL = path.resolve(
     process.env.AUTOSTATUES_AI_DIR ||
     path.join(CARPETA_DATOS, 'ia-local')
 );
+
+let estadoSincronizacionInicial = {
+    ...crearEstadoPreparacionInicial(),
+    activa: true,
+    mensaje: 'Preparando el inicio seguro de las lineas.'
+};
+let coordinadorSincronizacionInicial = null;
+let gestorRespaldosSesiones = null;
+let protectorSesionesLocal = null;
+let colaPreparacionAutenticacionCifrada = Promise.resolve();
+const lineasAutorizadasMigracionCifrada = new Set();
+let sincronizacionInicialEnEjecucion = false;
+const lineasAutorizadasTandaInicial = new Set();
+const reconexionesDiferidasSincronizacionInicial = new Map();
+const reconexionesDiferidasCircuitBreaker = new Map();
+const iniciosConexionEnCurso = new Set();
+let temporizadorReanudacionCircuitBreaker = null;
+let tareaReactivacionCircuitBreaker = null;
+let tareaReactivacionInicio = null;
+let cerrandoBackend = false;
+let promesaCierreBackend = null;
+
+function sincronizacionInicialActiva() {
+    return estadoSincronizacionInicial.activa === true;
+}
 
 function carpetaTieneContenido(ruta) {
     try {
@@ -202,6 +246,36 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Durante el arranque las conexiones se validan por tandas. Se mantiene la
+// interfaz en modo lectura para que ninguna publicación, reconexión o edición
+// compita con la sincronización de credenciales y audiencias.
+app.use((req, res, next) => {
+    if (
+        cerrandoBackend &&
+        !['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    ) {
+        return res.status(503).json({
+            codigo: 'CIERRE_SEGURO_EN_CURSO',
+            error:
+                'ZeroOne está cerrando y ya no acepta operaciones nuevas.'
+        });
+    }
+    if (
+        !sincronizacionInicialActiva() ||
+        ['GET', 'HEAD', 'OPTIONS'].includes(req.method)
+    ) {
+        return next();
+    }
+
+    return res.status(423).json({
+        codigo: 'SINCRONIZACION_INICIAL_EN_CURSO',
+        error:
+            'ZeroOne está preparando las líneas por tandas. ' +
+            'Esperá a que finalice antes de realizar cambios.',
+        sincronizacionInicial: estadoSincronizacionInicial
+    });
+});
 app.use('/fonts', express.static(CARPETA_FUENTES, {
     dotfiles: 'deny',
     fallthrough: false,
@@ -211,6 +285,7 @@ app.use(express.static(CARPETA_PUBLIC));
 
 fs.mkdirSync(CARPETA_UPLOADS, { recursive: true });
 fs.mkdirSync(CARPETA_SESIONES, { recursive: true });
+fs.mkdirSync(CARPETA_RESPALDOS_SESIONES, { recursive: true });
 fs.mkdirSync(CARPETA_PROGRAMADOS, { recursive: true });
 fs.mkdirSync(CARPETA_IMAGENES_PROGRAMADAS, { recursive: true });
 fs.mkdirSync(CARPETA_HISTORIAL, { recursive: true });
@@ -228,6 +303,47 @@ const lineas = new Map();
 const programaciones = new Map();
 const trabajosProgramados = new Map();
 const historialPublicaciones = [];
+
+// Una eliminación puede esperar a que terminen escrituras y cierres. Desde
+// que se crea la tombstone ninguna otra ruta puede iniciar trabajo nuevo con
+// esa línea; DELETE queda habilitado para reintentar una purga incompleta.
+app.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+
+    const segmentos = req.path.split('/').filter(Boolean);
+    let idLinea = null;
+    if (segmentos[0] === 'lineas' && segmentos[1]) {
+        idLinea = segmentos[1];
+    } else if (
+        segmentos[0] === 'agendamiento' &&
+        segmentos[1] === 'lineas' &&
+        segmentos[2]
+    ) {
+        idLinea = segmentos[2];
+    }
+
+    if (
+        req.method === 'DELETE' &&
+        segmentos[0] === 'lineas' &&
+        segmentos.length === 2
+    ) {
+        return next();
+    }
+
+    try {
+        idLinea = idLinea ? decodeURIComponent(idLinea) : null;
+    } catch {
+        idLinea = null;
+    }
+    const linea = idLinea ? lineas.get(idLinea) : null;
+    if (!linea?.eliminando) return next();
+
+    return res.status(409).json({
+        codigo: 'LINEA_EN_ELIMINACION',
+        error:
+            'La línea se está eliminando. Esperá a que termine o reintentá la eliminación.'
+    });
+});
 
 function describirLineaParaAgendamiento(linea) {
     const nombre = String(linea?.nombre || '').trim();
@@ -394,6 +510,7 @@ const trabajosPendientesPublicacion = new Set();
 let progresoPublicacion = crearProgresoVacio();
 const estadosActivos = new Map();
 let progresoEliminacionEstados = crearProgresoEliminacionEstadosVacio();
+const tareasEliminacionEstadosEnCurso = new Set();
 
 const ETIQUETAS_LINEA = new Set(['activa', 'indefinida', 'caida', 'reposo']);
 const DIAS_SEMANA_VALIDOS = new Set([0, 1, 2, 3, 4, 5, 6]);
@@ -401,6 +518,11 @@ const MAXIMO_HISTORIAL = 500;
 const DURACION_ESTADO_MS = 24 * 60 * 60 * 1000;
 const MINIMO_DESTINATARIOS_ESTADO = 1;
 const MAXIMO_DESTINATARIOS_ESTADO = 1000;
+const VENTANA_PUBLICACIONES_LINEA_MS = 24 * 60 * 60 * 1000;
+const ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS_PREDETERMINADO = 15;
+const LIMITE_PUBLICACIONES_LINEA_24H_PREDETERMINADO = 12;
+const MAXIMO_ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS = 24 * 60;
+const MAXIMO_PUBLICACIONES_LINEA_24H = 100;
 const LINEAS_POR_LOTE_ELIMINACION = 3;
 const MAXIMOS_INTENTOS_AUDIENCIA = 3;
 const MAXIMOS_INTENTOS_RECONEXION = 5;
@@ -408,6 +530,7 @@ const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
 const RETRASOS_RECONEXION_MS = [3000, 8000, 15000, 30000, 60000];
 const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
+const TIEMPO_MAXIMO_CIERRE_SOCKET_CREDENCIALES_MS = 5000;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
 const TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS =
     RETRASOS_RECONEXION_MS.reduce((total, retraso) => total + retraso, 0) +
@@ -422,6 +545,11 @@ const ENFRIAMIENTO_LIMITE_TEMPORAL_MS = 30 * 60 * 1000;
 const ENFRIAMIENTO_ENVIO_INCIERTO_MS = 10 * 60 * 1000;
 const ENFRIAMIENTO_LIMITE_MINIMO_MS = 60 * 1000;
 const ENFRIAMIENTO_LIMITE_MAXIMO_MS = 24 * 60 * 60 * 1000;
+const UMBRAL_CIRCUIT_BREAKER_DESCONEXIONES = 3;
+const VENTANA_CIRCUIT_BREAKER_DESCONEXIONES_MS = 60 * 1000;
+const ENFRIAMIENTO_CIRCUIT_BREAKER_MS = 30 * 60 * 1000;
+const DEMORA_ENTRE_LOTES_RECONEXION_CIRCUIT_BREAKER_MS = 45 * 1000;
+const LINEAS_POR_LOTE_RECONEXION_CIRCUIT_BREAKER = 10;
 const DURACION_IDEMPOTENCIA_MS = 24 * 60 * 60 * 1000;
 const MAXIMAS_CLAVES_IDEMPOTENCIA = 1000;
 const MAXIMOS_REGISTROS_ACTIVIDAD_CONTACTOS = 50000;
@@ -508,13 +636,20 @@ let configuracion = {
     variacionSegundosPredeterminada: 5,
     lineasPorGrupoPredeterminado: 10,
     intervaloMinutosPredeterminado: 5,
-    maximoDestinatariosPorEstado: MAXIMO_DESTINATARIOS_ESTADO
+    maximoDestinatariosPorEstado: MAXIMO_DESTINATARIOS_ESTADO,
+    enfriamientoCampanasMinutos:
+        ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS_PREDETERMINADO,
+    limiteCampanasDiariasPorLinea:
+        LIMITE_PUBLICACIONES_LINEA_24H_PREDETERMINADO
 };
 
 let proteccionMiddlewarePublicacion = crearProteccionMiddlewareVacia();
 const solicitudesIdempotentes = new Map();
 
 let controlSeguridadPublicacion = crearControlSeguridadPublicacion();
+let bloqueoCampanaPublicacion = null;
+const bloqueosLineasPublicacion = new Map();
+let eventosDesconexionCircuitBreaker = [];
 const colaSincronizacionHistorialAgendamiento = [];
 let sincronizacionHistorialAgendamientoActiva = null;
 let secuenciaSincronizacionHistorialAgendamiento = 0;
@@ -1163,11 +1298,14 @@ function procesarSiguienteSincronizacionHistorialAgendamiento() {
 
     if (solicitud.reiniciarConexion) {
         if (!solicitarReconexionManual(linea, 500)) {
+            const circuitBreaker =
+                obtenerCircuitBreakerReconexionesActivo();
             cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
                 estado: 'pausada',
                 progreso: 0,
-                motivo:
-                    'La línea forma parte de una publicación activa y no puede reiniciarse para sincronizar historial.'
+                motivo: circuitBreaker
+                    ? 'Las reconexiones están pausadas por el corte global de seguridad.'
+                    : 'La línea forma parte de una publicación activa y no puede reiniciarse para sincronizar historial.'
             });
         }
         return;
@@ -1330,6 +1468,20 @@ function cargarConfiguracion() {
             ),
             maximoDestinatariosPorEstado: normalizarLimiteDestinatariosEstado(
                 datos.maximoDestinatariosPorEstado
+            ),
+            enfriamientoCampanasMinutos: limitarNumero(
+                datos.enfriamientoCampanasMinutos,
+                ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS_PREDETERMINADO,
+                0,
+                MAXIMO_ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS,
+                true
+            ),
+            limiteCampanasDiariasPorLinea: limitarNumero(
+                datos.limiteCampanasDiariasPorLinea,
+                LIMITE_PUBLICACIONES_LINEA_24H_PREDETERMINADO,
+                0,
+                MAXIMO_PUBLICACIONES_LINEA_24H,
+                true
             )
         };
         configuracion.variacionSegundosPredeterminada = Math.min(
@@ -1446,6 +1598,329 @@ function obtenerVistaProteccionMiddleware() {
     };
 }
 
+function obtenerCircuitBreakerReconexionesActivo() {
+    const proteccion = obtenerVistaProteccionMiddleware();
+    return proteccion.activa === true &&
+        String(proteccion.tipo || '').startsWith('circuit_breaker_')
+        ? proteccion
+        : null;
+}
+
+function cancelarReanudacionCircuitBreaker() {
+    if (temporizadorReanudacionCircuitBreaker) {
+        clearTimeout(temporizadorReanudacionCircuitBreaker);
+        temporizadorReanudacionCircuitBreaker = null;
+    }
+}
+
+function programarReanudacionCircuitBreaker(proteccionEntrada = null) {
+    if (cerrandoBackend) return false;
+    const proteccion = proteccionEntrada ||
+        obtenerCircuitBreakerReconexionesActivo();
+    const bloqueadaHastaMs = Date.parse(proteccion?.bloqueadaHasta || '');
+    if (!proteccion || !Number.isFinite(bloqueadaHastaMs)) return false;
+
+    cancelarReanudacionCircuitBreaker();
+    const demora = Math.max(0, bloqueadaHastaMs - Date.now());
+    temporizadorReanudacionCircuitBreaker = setTimeout(() => {
+        temporizadorReanudacionCircuitBreaker = null;
+        reanudarReconexionesDiferidasCircuitBreaker();
+    }, demora);
+    temporizadorReanudacionCircuitBreaker.unref?.();
+    return true;
+}
+
+function diferirReconexionPorCircuitBreaker(
+    linea,
+    mensaje,
+    codigo = null,
+    proteccionEntrada = null
+) {
+    if (
+        cerrandoBackend ||
+        !linea ||
+        linea.eliminando ||
+        linea.reconexionBloqueada
+    ) {
+        return false;
+    }
+
+    const proteccion = proteccionEntrada ||
+        obtenerCircuitBreakerReconexionesActivo();
+    if (!proteccion) return false;
+
+    cancelarTemporizadorReconexion(linea);
+    reconexionesDiferidasCircuitBreaker.set(linea.id, {
+        lineaId: linea.id,
+        mensaje: String(mensaje || linea.ultimoError ||
+            'La reconexión quedó pausada por seguridad.'),
+        codigo,
+        ordenConexion: Number(linea.ordenConexion) || 0
+    });
+    linea.estado = 'reconectando';
+    linea.etiqueta = 'caida';
+    linea.conexionEnVerificacion = false;
+    linea.proximoIntentoReconexion = proteccion.bloqueadaHasta;
+    linea.ultimoError =
+        `${mensaje || 'La línea se desconectó.'} ` +
+        'La reconexión quedó pausada por el corte global de seguridad.';
+    guardarLineas();
+    programarReanudacionCircuitBreaker(proteccion);
+    return true;
+}
+
+function pausarReconexionesPorCircuitBreaker(proteccion) {
+    if (!proteccion?.activa) return 0;
+    let pausadas = 0;
+
+    for (const linea of lineas.values()) {
+        if (!linea?.temporizadorReconexion) continue;
+        const mensaje = linea.ultimoError ||
+            'La reconexión quedó pausada por seguridad.';
+        const codigo = linea.ultimoCodigoDesconexion;
+        if (
+            diferirReconexionPorCircuitBreaker(
+                linea,
+                mensaje,
+                codigo,
+                proteccion
+            )
+        ) {
+            pausadas += 1;
+        }
+    }
+
+    programarReanudacionCircuitBreaker(proteccion);
+    return pausadas;
+}
+
+function reactivacionLineaTerminada(linea) {
+    if (
+        !linea ||
+        linea.eliminando ||
+        linea.reconexionBloqueada ||
+        linea.qr ||
+        ESTADOS_TERMINALES_PREPARACION_INICIAL.has(linea.estado)
+    ) {
+        return true;
+    }
+    if (
+        linea.estado === 'conectado' &&
+        linea.socket &&
+        (
+            audienciaEstadosLista(linea) ||
+            (
+                !linea.resincronizandoAudiencia &&
+                !linea.temporizadorAudiencia &&
+                (Number(linea.intentosResincronizacionAudiencia) || 0) >=
+                    MAXIMOS_INTENTOS_AUDIENCIA
+            )
+        )
+    ) {
+        return true;
+    }
+    return false;
+}
+
+async function esperarReactivacionLinea(lineaId) {
+    const limite = Date.now() + TIEMPO_MAXIMO_PREPARACION_INICIAL_LINEA_MS;
+    while (!cerrandoBackend && Date.now() < limite) {
+        const linea = lineas.get(lineaId);
+        if (reactivacionLineaTerminada(linea)) return 'terminada';
+        const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+        if (circuitBreaker && linea) {
+            const socket = linea.socket;
+            cancelarTemporizadorReconexion(linea);
+            cancelarTemporizadorIntentoConexion(linea);
+            cancelarTemporizadorEstabilidadConexion(linea);
+            cancelarReintentoAudiencia(linea);
+            invalidarConexionActual(linea);
+            linea.socket = null;
+            linea.jid = null;
+            linea.qr = null;
+            linea.iniciando = false;
+            cerrarSocketSeguro(
+                socket,
+                'Circuit breaker durante la reactivación'
+            );
+            diferirReconexionPorCircuitBreaker(
+                linea,
+                'La reactivación se pausó por un nuevo corte global.',
+                circuitBreaker.codigo,
+                circuitBreaker
+            );
+            return 'diferida';
+        }
+        await esperar(250);
+    }
+
+    const linea = lineas.get(lineaId);
+    if (!linea || reactivacionLineaTerminada(linea)) return 'terminada';
+
+    // Una operación que excede el tiempo de preparación no queda viva al
+    // iniciar la tanda siguiente. Se cierra y vuelve al final de la cola,
+    // conservando el máximo normal de cinco intentos.
+    const socket = linea.socket;
+    cancelarTemporizadorReconexion(linea);
+    cancelarTemporizadorIntentoConexion(linea);
+    cancelarTemporizadorEstabilidadConexion(linea);
+    cancelarReintentoAudiencia(linea);
+    invalidarConexionActual(linea);
+    linea.socket = null;
+    linea.jid = null;
+    linea.qr = null;
+    linea.iniciando = false;
+    linea.conexionEnVerificacion = false;
+    linea.estado = 'desconectado';
+    linea.etiqueta = 'caida';
+    linea.ultimoError =
+        'La preparación superó 90 segundos y volvió al final de la cola segura.';
+    cerrarSocketSeguro(socket, 'Tiempo agotado en la tanda de reconexión');
+    guardarLineas();
+    return (Number(linea.intentosReconexion) || 0) <
+        MAXIMOS_INTENTOS_RECONEXION
+        ? 'reintentar'
+        : 'terminada';
+}
+
+async function reactivarReconexionesControladas(pendientesOriginales) {
+    const cola = Array.isArray(pendientesOriginales)
+        ? [...pendientesOriginales]
+        : [];
+
+    while (cola.length && !cerrandoBackend) {
+        const lote = cola.splice(
+            0,
+            LINEAS_POR_LOTE_RECONEXION_CIRCUIT_BREAKER
+        );
+        const resultados = await Promise.all(lote.map(async pendiente => {
+            let espera = Math.max(
+                0,
+                Number(pendiente.ejecutarEn) - Date.now() || 0
+            );
+            while (espera > 0 && !cerrandoBackend) {
+                await esperar(Math.min(250, espera));
+                espera = Math.max(
+                    0,
+                    Number(pendiente.ejecutarEn) - Date.now() || 0
+                );
+            }
+            if (cerrandoBackend) return null;
+
+            const linea = lineas.get(pendiente.lineaId);
+            if (
+                !linea ||
+                linea.eliminando ||
+                linea.reconexionBloqueada ||
+                (linea.estado === 'conectado' &&
+                    linea.socket &&
+                    audienciaEstadosLista(linea))
+            ) {
+                return null;
+            }
+
+            linea.proximoIntentoReconexion = null;
+            const iniciada = programarReconexionAutomatica(
+                pendiente.lineaId,
+                pendiente.mensaje,
+                pendiente.codigo,
+                0
+            );
+            if (!iniciada) return null;
+            const resultado = await esperarReactivacionLinea(
+                pendiente.lineaId
+            );
+            return resultado === 'reintentar'
+                ? {
+                    ...pendiente,
+                    ejecutarEn: Date.now() + 3000
+                }
+                : null;
+        }));
+
+        cola.push(...resultados.filter(Boolean));
+        if (!cola.length || cerrandoBackend) continue;
+
+        // Aunque una tanda termine enseguida por QR, error o intervención,
+        // nunca abrimos la siguiente en ráfaga. El intervalo reduce la carga
+        // simultánea sobre WhatsApp y sobre el almacén local de credenciales.
+        await esperar(DEMORA_ENTRE_LOTES_RECONEXION_CIRCUIT_BREAKER_MS);
+
+        const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+        if (circuitBreaker) {
+            for (const pendiente of cola) {
+                reconexionesDiferidasCircuitBreaker.set(
+                    pendiente.lineaId,
+                    pendiente
+                );
+            }
+            programarReanudacionCircuitBreaker(circuitBreaker);
+            return;
+        }
+    }
+}
+
+function reanudarReconexionesDiferidasCircuitBreaker() {
+    if (cerrandoBackend) return false;
+    const proteccion = obtenerCircuitBreakerReconexionesActivo();
+    if (proteccion) {
+        programarReanudacionCircuitBreaker(proteccion);
+        return false;
+    }
+
+    if (sincronizacionInicialEnEjecucion) {
+        cancelarReanudacionCircuitBreaker();
+        temporizadorReanudacionCircuitBreaker = setTimeout(() => {
+            temporizadorReanudacionCircuitBreaker = null;
+            reanudarReconexionesDiferidasCircuitBreaker();
+        }, 1000);
+        temporizadorReanudacionCircuitBreaker.unref?.();
+        return false;
+    }
+    if (tareaReactivacionCircuitBreaker) return false;
+
+    const pendientes = [...reconexionesDiferidasCircuitBreaker.values()]
+        .sort((a, b) =>
+            a.ordenConexion - b.ordenConexion ||
+            String(a.lineaId).localeCompare(String(b.lineaId))
+        );
+    reconexionesDiferidasCircuitBreaker.clear();
+
+    if (!tareaReactivacionCircuitBreaker && pendientes.length) {
+        tareaReactivacionCircuitBreaker =
+            reactivarReconexionesControladas(pendientes)
+                .catch(error => {
+                    console.error(
+                        'Falló la reactivación controlada del circuit breaker:',
+                        error?.message || error
+                    );
+                })
+                .finally(() => {
+                    tareaReactivacionCircuitBreaker = null;
+                    if (reconexionesDiferidasCircuitBreaker.size > 0) {
+                        setImmediate(
+                            reanudarReconexionesDiferidasCircuitBreaker
+                        );
+                    }
+                });
+    }
+    return true;
+}
+
+function responderCircuitBreakerReconexiones(res) {
+    const proteccion = obtenerCircuitBreakerReconexionesActivo();
+    if (!proteccion) return false;
+    res.set('Retry-After', String(proteccion.segundosRestantes || 1));
+    res.status(429).json({
+        codigo: 'RECONEXIONES_PAUSADAS_SEGURIDAD',
+        error:
+            `Las reconexiones están pausadas por seguridad. ` +
+            `Se reanudarán en ${proteccion.segundosRestantes || 1} segundos.`,
+        proteccionMiddleware: proteccion
+    });
+    return true;
+}
+
 function activarProteccionMiddleware({
     tipo,
     motivo,
@@ -1462,11 +1937,37 @@ function activarProteccionMiddleware({
         proteccionMiddlewarePublicacion.activa === true &&
         Number.isFinite(hastaActual) &&
         hastaActual > ahora;
+    const tipoActual = String(
+        proteccionMiddlewarePublicacion.tipo || ''
+    );
+    const tipoPropuesto = String(tipo || 'seguridad');
+    const actualEsCircuitBreaker = tipoActual.startsWith('circuit_breaker_');
+    const propuestoEsCircuitBreaker = tipoPropuesto.startsWith('circuit_breaker_');
+
+    // Un error derivado de la misma campaña puede intentar registrar después
+    // una protección genérica unos milisegundos más larga. Nunca degradamos un
+    // circuit breaker: conservamos su causa y solo extendemos su vencimiento.
+    if (
+        proteccionActualVigente &&
+        actualEsCircuitBreaker &&
+        !propuestoEsCircuitBreaker
+    ) {
+        if (hastaPropuesto > hastaActual) {
+            proteccionMiddlewarePublicacion.bloqueadaHasta =
+                new Date(hastaPropuesto).toISOString();
+            guardarProteccionMiddleware();
+        }
+        return obtenerVistaProteccionMiddleware();
+    }
 
     // Si ya existe un enfriamiento más largo, conservamos también su causa.
     // Antes se mantenía el tiempo anterior pero se mostraba el código del
     // último evento corto, produciendo combinaciones contradictorias.
-    if (proteccionActualVigente && hastaActual >= hastaPropuesto) {
+    if (
+        proteccionActualVigente &&
+        hastaActual >= hastaPropuesto &&
+        !(propuestoEsCircuitBreaker && !actualEsCircuitBreaker)
+    ) {
         return obtenerVistaProteccionMiddleware();
     }
 
@@ -1476,7 +1977,7 @@ function activarProteccionMiddleware({
 
     proteccionMiddlewarePublicacion = {
         activa: true,
-        tipo: String(tipo || 'seguridad'),
+        tipo: tipoPropuesto,
         motivo: String(
             motivo || 'La publicación fue pausada temporalmente por seguridad.'
         ),
@@ -1539,6 +2040,13 @@ function crearErrorMiddleware(codigo, mensaje, statusCode, datos = {}) {
 }
 
 function verificarMiddlewarePublicacion({ comprobarOcupacion = true } = {}) {
+    if (cerrandoBackend) {
+        throw crearErrorMiddleware(
+            'CIERRE_SEGURO_EN_CURSO',
+            'ZeroOne está cerrando y no acepta publicaciones nuevas.',
+            503
+        );
+    }
     const proteccion = obtenerVistaProteccionMiddleware();
 
     if (proteccion.activa) {
@@ -1553,7 +2061,7 @@ function verificarMiddlewarePublicacion({ comprobarOcupacion = true } = {}) {
 
     if (
         comprobarOcupacion &&
-        (progresoPublicacion.activo || publicacionesPendientes > 0)
+        publicacionOcupada()
     ) {
         throw crearErrorMiddleware(
             'PUBLICACION_OCUPADA',
@@ -1816,6 +2324,102 @@ function normalizarIdsLineas(valores) {
     )];
 }
 
+function normalizarPublicacionesRecientesLinea(
+    valores,
+    ultimaPublicacion = null,
+    ahora = Date.now()
+) {
+    const corte = ahora - VENTANA_PUBLICACIONES_LINEA_MS;
+    const maximoFuturo = ahora + MARGEN_TIMESTAMP_FUTURO_MS;
+    const candidatos = Array.isArray(valores) ? [...valores] : [];
+
+    if (ultimaPublicacion) candidatos.push(ultimaPublicacion);
+
+    const timestamps = [...new Set(candidatos
+        .map(valor => obtenerMilisegundosFecha(valor, NaN))
+        .filter(timestamp =>
+            Number.isFinite(timestamp) &&
+            timestamp > corte &&
+            timestamp <= maximoFuturo
+        ))]
+        .sort((a, b) => a - b);
+
+    return timestamps.map(timestamp => new Date(timestamp).toISOString());
+}
+
+function obtenerEstadoLimitesPublicacionLinea(linea, ahora = Date.now()) {
+    const recientes = normalizarPublicacionesRecientesLinea(
+        linea?.publicacionesRecientes,
+        linea?.ultimaPublicacion,
+        ahora
+    );
+    if (linea) linea.publicacionesRecientes = recientes;
+
+    const enfriamientoMinutos = limitarNumero(
+        configuracion.enfriamientoCampanasMinutos,
+        ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS_PREDETERMINADO,
+        0,
+        MAXIMO_ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS,
+        true
+    );
+    const limite24h = limitarNumero(
+        configuracion.limiteCampanasDiariasPorLinea,
+        LIMITE_PUBLICACIONES_LINEA_24H_PREDETERMINADO,
+        0,
+        MAXIMO_PUBLICACIONES_LINEA_24H,
+        true
+    );
+    const timestamps = recientes.map(valor => Date.parse(valor));
+    const ultima = timestamps.length ? timestamps[timestamps.length - 1] : NaN;
+    const finEnfriamiento = enfriamientoMinutos > 0 && Number.isFinite(ultima)
+        ? ultima + enfriamientoMinutos * 60 * 1000
+        : NaN;
+    const limiteAlcanzado = limite24h > 0 && timestamps.length >= limite24h;
+    const indiceLiberacion = limiteAlcanzado
+        ? Math.max(0, timestamps.length - limite24h)
+        : -1;
+    const finLimite24h = indiceLiberacion >= 0
+        ? timestamps[indiceLiberacion] + VENTANA_PUBLICACIONES_LINEA_MS
+        : NaN;
+    const bloqueadaHastaMs = Math.max(
+        Number.isFinite(finEnfriamiento) && finEnfriamiento > ahora
+            ? finEnfriamiento
+            : 0,
+        Number.isFinite(finLimite24h) && finLimite24h > ahora
+            ? finLimite24h
+            : 0
+    );
+
+    return {
+        publicacionesUltimas24h: timestamps.length,
+        limiteCampanasDiariasPorLinea: limite24h,
+        enfriamientoCampanasMinutos: enfriamientoMinutos,
+        enEnfriamiento:
+            Number.isFinite(finEnfriamiento) && finEnfriamiento > ahora,
+        limiteDiarioAlcanzado: limiteAlcanzado,
+        proximaPublicacionPermitida: bloqueadaHastaMs > ahora
+            ? new Date(bloqueadaHastaMs).toISOString()
+            : null,
+        segundosRestantes: bloqueadaHastaMs > ahora
+            ? Math.max(1, Math.ceil((bloqueadaHastaMs - ahora) / 1000))
+            : 0
+    };
+}
+
+function registrarPublicacionExitosaLinea(linea, fecha = Date.now()) {
+    if (!linea) return null;
+
+    const timestamp = obtenerMilisegundosFecha(fecha, Date.now());
+    const iso = new Date(timestamp).toISOString();
+    linea.ultimaPublicacion = iso;
+    linea.publicacionesRecientes = normalizarPublicacionesRecientesLinea(
+        [...(linea.publicacionesRecientes || []), iso],
+        iso,
+        timestamp
+    );
+    return iso;
+}
+
 function resolverCarpetaSesionSegura(lineaId) {
     if (!esIdLineaValido(lineaId)) return null;
 
@@ -1828,6 +2432,119 @@ function resolverCarpetaSesionSegura(lineaId) {
     }
 
     return carpetaSesion;
+}
+
+function publicacionOcupada() {
+    return Boolean(
+        bloqueoCampanaPublicacion ||
+        progresoPublicacion.activo ||
+        progresoEliminacionEstados.activo ||
+        publicacionesPendientes > 0
+    );
+}
+
+function obtenerVistaBloqueoCampanaPublicacion() {
+    if (!bloqueoCampanaPublicacion) return null;
+
+    return {
+        fase: bloqueoCampanaPublicacion.fase,
+        origen: bloqueoCampanaPublicacion.origen,
+        reservadaEn: bloqueoCampanaPublicacion.reservadaEn,
+        lineas: bloqueoCampanaPublicacion.idsLineas.size
+    };
+}
+
+function reservarCampanaPublicacion(idsLineas = [], origen = null) {
+    const ids = normalizarIdsLineas(idsLineas);
+    const idNoDisponible = ids.find(id => {
+        const linea = lineas.get(id);
+        return !linea || linea.eliminando || linea.eliminacionPendiente;
+    });
+    if (idNoDisponible) {
+        const linea = lineas.get(idNoDisponible);
+        throw crearErrorPublicacion(
+            linea ? 'LINEA_EN_ELIMINACION' : 'LINEA_NO_EXISTE',
+            'concurrencia',
+            linea
+                ? `${linea.nombre} se está eliminando y no puede recibir trabajo nuevo.`
+                : 'Una línea seleccionada ya no existe.',
+            {
+                lineaId: idNoDisponible,
+                reintentable: false,
+                statusCode: linea ? 409 : 404
+            }
+        );
+    }
+
+    if (
+        bloqueoCampanaPublicacion ||
+        progresoPublicacion.activo ||
+        publicacionesPendientes > 0
+    ) {
+        throw crearErrorPublicacion(
+            'PUBLICACION_OCUPADA',
+            'concurrencia',
+            'Ya existe una campaña de publicación reservada o en curso.',
+            { reintentable: true, statusCode: 409 }
+        );
+    }
+
+    const lineaOcupada = ids.find(id => bloqueosLineasPublicacion.has(id));
+    if (lineaOcupada) {
+        const linea = lineas.get(lineaOcupada);
+        throw crearErrorPublicacion(
+            'LINEA_PUBLICACION_OCUPADA',
+            'concurrencia',
+            `${linea?.nombre || 'Una línea seleccionada'} ya está protegida por otra publicación.`,
+            { lineaId: lineaOcupada, reintentable: true, statusCode: 409 }
+        );
+    }
+
+    const token = crypto.randomUUID();
+    bloqueoCampanaPublicacion = {
+        token,
+        idsLineas: new Set(ids),
+        origen: String(origen || 'publicación'),
+        fase: 'en_cola',
+        reservadaEn: new Date().toISOString()
+    };
+
+    for (const id of ids) bloqueosLineasPublicacion.set(id, token);
+    return token;
+}
+
+function actualizarFaseBloqueoCampanaPublicacion(token, fase) {
+    if (!token || bloqueoCampanaPublicacion?.token !== token) return false;
+    bloqueoCampanaPublicacion.fase = String(fase || 'publicando');
+    return true;
+}
+
+function liberarCampanaPublicacion(token) {
+    if (!token || bloqueoCampanaPublicacion?.token !== token) return false;
+
+    for (const [lineaId, tokenLinea] of bloqueosLineasPublicacion) {
+        if (tokenLinea === token) bloqueosLineasPublicacion.delete(lineaId);
+    }
+    bloqueoCampanaPublicacion = null;
+    return true;
+}
+
+function lineaBloqueadaPorPublicacion(lineaOId) {
+    const lineaId = typeof lineaOId === 'object' ? lineaOId?.id : lineaOId;
+    return Boolean(lineaId && bloqueosLineasPublicacion.has(lineaId));
+}
+
+function responderLineaBloqueadaPorPublicacion(res, linea, accion) {
+    if (!lineaBloqueadaPorPublicacion(linea)) return false;
+
+    res.status(409).json({
+        codigo: 'LINEA_BLOQUEADA_PUBLICACION',
+        error:
+            `${linea.nombre} está protegida durante la preparación, envío o ` +
+            `finalización de una campaña. Usá Alto total o esperá a que termine ` +
+            `antes de ${accion}.`
+    });
+    return true;
 }
 
 function esperarDecisionSeguridad() {
@@ -1879,8 +2596,13 @@ function lineaParticipaEnPublicacionActiva(lineaOId) {
 
     return Boolean(
         lineaId &&
-        progresoPublicacion.activo === true &&
-        controlSeguridadPublicacion.idsLineas?.has(lineaId)
+        (
+            lineaBloqueadaPorPublicacion(lineaId) ||
+            (
+                progresoPublicacion.activo === true &&
+                controlSeguridadPublicacion.idsLineas?.has(lineaId)
+            )
+        )
     );
 }
 
@@ -2108,26 +2830,37 @@ function formatearCodigoCorte(codigo, respaldo = 'LINEA_DESCONECTADA') {
     return Number.isFinite(Number(codigo)) ? `WA_${Number(codigo)}` : String(codigo);
 }
 
-function registrarCorteDesconexion(linea, mensaje, codigo = null) {
+function registrarCortePublicacion({
+    linea,
+    mensaje,
+    codigo = null,
+    tipoError = null,
+    forzar = false,
+    duracionEnfriamientoMs = null
+}) {
     if (
         !progresoPublicacion.activo ||
-        !controlSeguridadPublicacion.idsLineas?.has(linea?.id) ||
+        !linea ||
+        (!forzar && !controlSeguridadPublicacion.idsLineas?.has(linea.id)) ||
         controlSeguridadPublicacion.corteDesconexion
     ) {
-        return;
+        return false;
     }
+
+    const esLimiteTemporal = tipoError === 'limite_temporal' ||
+        Number(codigo) === 429;
+    const tipoCorte = esLimiteTemporal ? 'limite_temporal' : 'desconexion';
 
     controlSeguridadPublicacion.corteDesconexion = {
         lineaId: linea.id,
         nombre: linea.nombre,
         codigo,
+        tipoError: tipoCorte,
+        duracionEnfriamientoMs,
         mensaje: mensaje || 'La línea se desconectó durante la publicación.'
     };
 
-    const esLimiteTemporal = Number(codigo) === 429;
-    progresoPublicacion.tipoErrorCorte = esLimiteTemporal
-        ? 'limite_temporal'
-        : 'desconexion';
+    progresoPublicacion.tipoErrorCorte = tipoCorte;
     progresoPublicacion.codigoErrorCorte = formatearCodigoCorte(codigo);
     progresoPublicacion.lineaCorte = {
         id: linea.id,
@@ -2139,7 +2872,7 @@ function registrarCorteDesconexion(linea, mensaje, codigo = null) {
     if (progresoPublicacion.envioEnCurso) {
         progresoPublicacion.estado = 'esperando_resultado_envio';
         progresoPublicacion.mensaje =
-            `La conexión de ${linea.nombre} cambió durante el envío. ` +
+            `${controlSeguridadPublicacion.corteDesconexion.mensaje} ` +
             'Esperando el resultado para conservar el ID y evitar duplicados.';
     }
 
@@ -2155,6 +2888,136 @@ function registrarCorteDesconexion(linea, mensaje, codigo = null) {
         controlSeguridadPublicacion.resolver = null;
         resolver('desconexion');
     }
+
+    return true;
+}
+
+function registrarCorteDesconexion(linea, mensaje, codigo = null) {
+    return registrarCortePublicacion({ linea, mensaje, codigo });
+}
+
+function activarCircuitBreakerPublicacion({
+    tipo,
+    codigo,
+    linea,
+    motivo,
+    duracionMs = ENFRIAMIENTO_CIRCUIT_BREAKER_MS
+}) {
+    const tipoError = tipo === 'limite_temporal'
+        ? 'limite_temporal'
+        : 'desconexion';
+    const mensaje = String(
+        motivo || 'El circuit breaker detuvo temporalmente las publicaciones.'
+    );
+    const proteccion = activarProteccionMiddleware({
+        tipo: tipoError === 'limite_temporal'
+            ? 'circuit_breaker_limite_temporal'
+            : 'circuit_breaker_desconexiones',
+        motivo: mensaje,
+        codigo,
+        linea,
+        duracionMs
+    });
+    pausarReconexionesPorCircuitBreaker(proteccion);
+
+    if (progresoPublicacion.activo && linea) {
+        registrarCortePublicacion({
+            linea,
+            mensaje,
+            codigo,
+            tipoError,
+            forzar: true,
+            duracionEnfriamientoMs: duracionMs
+        });
+    }
+
+    notificarEscritorio('Protección de publicaciones activada', mensaje);
+    return proteccion;
+}
+
+function registrarDesconexionCircuitBreaker(
+    linea,
+    codigo,
+    mensaje,
+    errorOriginal = null
+) {
+    if (Number(codigo) === 429) {
+        activarCircuitBreakerLimiteTemporal(
+            linea,
+            errorOriginal || { statusCode: 429 }
+        );
+        return true;
+    }
+    if (
+        !linea?.id ||
+        Number(codigo) === Number(DisconnectReason.restartRequired) ||
+        Number(codigo) === Number(DisconnectReason.connectionReplaced)
+    ) {
+        return false;
+    }
+
+    const ultimaConexionMs = Date.parse(linea.ultimaConexion || '');
+    if (
+        Number(codigo) === Number(DisconnectReason.connectionClosed) &&
+        Number.isFinite(ultimaConexionMs) &&
+        Date.now() - ultimaConexionMs < VENTANA_ESTABILIDAD_CONEXION_MS
+    ) {
+        // Un cierre 428 inmediatamente después de abrir el socket suele ser
+        // parte de la negociación/reinicio de WhatsApp, no una caída real.
+        return false;
+    }
+
+    const ahora = Date.now();
+    const corte = ahora - VENTANA_CIRCUIT_BREAKER_DESCONEXIONES_MS;
+    eventosDesconexionCircuitBreaker = eventosDesconexionCircuitBreaker
+        .filter(evento => evento.timestamp >= corte);
+    eventosDesconexionCircuitBreaker.push({
+        lineaId: linea.id,
+        nombre: linea.nombre,
+        codigo,
+        timestamp: ahora
+    });
+
+    const lineasAfectadas = new Set(
+        eventosDesconexionCircuitBreaker.map(evento => evento.lineaId)
+    );
+    if (lineasAfectadas.size < UMBRAL_CIRCUIT_BREAKER_DESCONEXIONES) {
+        return false;
+    }
+
+    eventosDesconexionCircuitBreaker = [];
+    activarCircuitBreakerPublicacion({
+        tipo: 'desconexion',
+        codigo: 'CIRCUIT_BREAKER_DESCONEXIONES',
+        linea,
+        motivo:
+            `${lineasAfectadas.size} líneas se desconectaron dentro de ` +
+            `${VENTANA_CIRCUIT_BREAKER_DESCONEXIONES_MS / 1000} segundos. ` +
+            'Las publicaciones quedaron bloqueadas para evitar una caída en cadena.'
+    });
+    return true;
+}
+
+function activarCircuitBreakerLimiteTemporal(linea, error) {
+    const duracionMs = obtenerDuracionEnfriamientoLimite(error);
+    return activarCircuitBreakerPublicacion({
+        tipo: 'limite_temporal',
+        codigo: 429,
+        linea,
+        duracionMs,
+        motivo:
+            `WhatsApp aplicó un límite temporal en ${linea?.nombre || 'una línea'}. ` +
+            'Todas las campañas quedaron bloqueadas durante el enfriamiento indicado.'
+    });
+}
+
+function errorEsLimiteTemporal(error) {
+    if (obtenerCodigoError(error) === 429) return true;
+    const mensaje = `${String(error?.message || '')} ${String(
+        error?.cause?.message || ''
+    )}`;
+    return /\brate[\s_-]*limit(?:ed|ing)?\b|too many requests|retry[\s_-]*after/iu
+        .test(mensaje);
 }
 
 function verificarCorteDesconexion() {
@@ -2162,7 +3025,8 @@ function verificarCorteDesconexion() {
     // Alto total: puede dejar un envío incierto y necesita cuarentena.
     const corte = controlSeguridadPublicacion.corteDesconexion;
     if (corte) {
-        const esLimiteTemporal = Number(corte.codigo) === 429;
+        const esLimiteTemporal = corte.tipoError === 'limite_temporal' ||
+            Number(corte.codigo) === 429;
 
         throw crearErrorPublicacion(
             esLimiteTemporal
@@ -2178,7 +3042,8 @@ function verificarCorteDesconexion() {
                 codigoErrorCorte: formatearCodigoCorte(corte.codigo),
                 mensajeCorte: corte.mensaje,
                 duracionEnfriamientoMs: esLimiteTemporal
-                    ? ENFRIAMIENTO_LIMITE_TEMPORAL_MS
+                    ? Number(corte.duracionEnfriamientoMs) ||
+                        ENFRIAMIENTO_LIMITE_TEMPORAL_MS
                     : undefined,
                 reintentable: false,
                 envioIncierto:
@@ -4411,6 +5276,12 @@ async function resincronizarAudienciaEstados(linea, socket) {
             `${linea.contactosEstado.size} contacto(s).`
         );
     } catch (error) {
+        const limiteTemporal = errorEsLimiteTemporal(error);
+        if (limiteTemporal) {
+            activarCircuitBreakerLimiteTemporal(linea, error);
+            linea.intentosResincronizacionAudiencia =
+                MAXIMOS_INTENTOS_AUDIENCIA;
+        }
         const falloDescargaAppState = esFalloDescargaAppState(error);
         const mensajeError = falloDescargaAppState
             ? mensajeSeguroFalloDescargaAppState(error)
@@ -4449,6 +5320,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
 
         const intento = Number(linea.intentosResincronizacionAudiencia) || 1;
         if (
+            !limiteTemporal &&
             !falloDescargaAppState &&
             intento < MAXIMOS_INTENTOS_AUDIENCIA &&
             linea.socket === socket &&
@@ -4910,6 +5782,10 @@ function guardarLineas() {
         etiqueta: normalizarEtiqueta(linea.etiqueta),
         ultimaConexion: linea.ultimaConexion || null,
         ultimaPublicacion: linea.ultimaPublicacion || null,
+        publicacionesRecientes: normalizarPublicacionesRecientesLinea(
+            linea.publicacionesRecientes,
+            linea.ultimaPublicacion
+        ),
         ultimoError: linea.ultimoError || null,
         fallosRecientes: Number(linea.fallosRecientes) || 0,
         intentosReconexion: Math.min(
@@ -4918,6 +5794,10 @@ function guardarLineas() {
         ),
         conexionEnVerificacion: linea.conexionEnVerificacion === true,
         reconexionBloqueada: linea.reconexionBloqueada === true,
+        vinculacionPendiente: linea.vinculacionPendiente === true,
+        eliminacionPendiente:
+            linea.eliminando === true ||
+            linea.eliminacionPendiente === true,
         requiereRevisionEnvio: linea.requiereRevisionEnvio === true,
         motivoRevisionEnvio: linea.motivoRevisionEnvio || null,
         revisionEnvioDesde: linea.revisionEnvioDesde || null,
@@ -4995,7 +5875,10 @@ function cargarLineasGuardadas() {
             );
             const conexionEnVerificacion =
                 datosLinea.conexionEnVerificacion === true;
+            const eliminacionPendiente =
+                datosLinea.eliminacionPendiente === true;
             const reconexionBloqueada =
+                eliminacionPendiente ||
                 datosLinea.reconexionBloqueada === true ||
                 (
                     intentosReconexion >= MAXIMOS_INTENTOS_RECONEXION &&
@@ -5030,7 +5913,9 @@ function cargarLineasGuardadas() {
                 qr: null,
                 estado: reconexionBloqueada ? 'requiere_intervencion' : 'iniciando',
                 iniciando: false,
-                eliminando: false,
+                eliminando: eliminacionPendiente,
+                eliminacionPendiente,
+                eliminacionDatosEnCurso: false,
                 temporizadorReconexion: null,
                 temporizadorIntentoConexion: null,
                 temporizadorEstabilidadConexion: null,
@@ -5042,11 +5927,22 @@ function cargarLineasGuardadas() {
                 intentosResincronizacionAudiencia: 0,
                 ultimaConexion: datosLinea.ultimaConexion || null,
                 ultimaPublicacion: datosLinea.ultimaPublicacion || null,
+                publicacionesRecientes: normalizarPublicacionesRecientesLinea(
+                    datosLinea.publicacionesRecientes,
+                    datosLinea.ultimaPublicacion
+                ),
                 ultimoError: datosLinea.ultimoError || null,
                 fallosRecientes: Number(datosLinea.fallosRecientes) || 0,
                 intentosReconexion,
                 conexionEnVerificacion,
                 reconexionBloqueada,
+                vinculacionPendiente:
+                    datosLinea.vinculacionPendiente === true ||
+                    (
+                        datosLinea.vinculacionPendiente !== false &&
+                        !datosLinea.ultimaConexion &&
+                        normalizarEtiqueta(datosLinea.etiqueta) === 'indefinida'
+                    ),
                 requiereRevisionEnvio: datosLinea.requiereRevisionEnvio === true,
                 motivoRevisionEnvio: datosLinea.motivoRevisionEnvio || null,
                 revisionEnvioDesde: datosLinea.revisionEnvioDesde || null,
@@ -5079,6 +5975,14 @@ function cargarLineasGuardadas() {
                 ),
                 modoHistorialAgendamiento: false,
                 sesionRegistrada: null,
+                cerrarAlmacenAutenticacion: null,
+                pausarAlmacenAutenticacion: null,
+                guardarCredencialesActuales: null,
+                contextoAutenticacion: null,
+                promesaGuardadoCredenciales: Promise.resolve(),
+                promesaCierreAlmacenAutenticacion: Promise.resolve(),
+                cierreAlmacenEnCurso: null,
+                falloPersistenciaCredenciales: null,
                 promesaIngestaAgendamiento: Promise.resolve(),
                 errorIngestaAgendamiento: null,
                 mensajesRecientesAgendamiento: new Map(),
@@ -5502,6 +6406,137 @@ function guardarHistorial() {
     guardarJSONAtomico(archivoHistorial, historialPublicaciones);
 }
 
+function contarEstadosVigentesPendientesLinea(lineaId) {
+    const ahora = Date.now();
+    let total = 0;
+    for (const grupo of estadosActivos.values()) {
+        for (const registro of grupo.lineas || []) {
+            if (
+                registro?.lineaId === lineaId &&
+                obtenerMilisegundosFecha(registro.expiraEn, 0) > ahora &&
+                registro.estado !== 'solicitud_enviada'
+            ) {
+                total += 1;
+            }
+        }
+    }
+    return total;
+}
+
+function anonimizarReferenciaHistorialLinea(registro, lineaId) {
+    if (!registro || registro.id !== lineaId) return registro;
+    const copia = { ...registro, nombre: 'Línea eliminada' };
+    delete copia.id;
+    delete copia.numero;
+    delete copia.jid;
+    delete copia.telefono;
+    if (copia.error) {
+        copia.error = 'El detalle de la línea fue eliminado.';
+    }
+    return copia;
+}
+
+function sanearReferenciasPersistidasLineaEliminada(lineaId) {
+    for (const [grupoId, grupo] of estadosActivos) {
+        const anteriores = Array.isArray(grupo.lineas) ? grupo.lineas : [];
+        const restantes = anteriores.filter(
+            registro => registro?.lineaId !== lineaId
+        );
+        if (restantes.length === anteriores.length) continue;
+        if (!restantes.length) {
+            estadosActivos.delete(grupoId);
+            continue;
+        }
+        grupo.lineas = restantes;
+        grupo.expiraEn = new Date(Math.max(
+            ...restantes.map(registro =>
+                obtenerMilisegundosFecha(registro.expiraEn, Date.now())
+            )
+        )).toISOString();
+    }
+    // Se escriben siempre: si un intento anterior modificó memoria pero el
+    // disco falló, el siguiente reintento debe poder confirmar el saneamiento.
+    guardarEstadosActivos();
+
+    for (const programacion of programaciones.values()) {
+        const idsAnteriores = Array.isArray(programacion.idsLineas)
+            ? programacion.idsLineas
+            : [];
+        const idsRestantes = idsAnteriores.filter(id => id !== lineaId);
+        if (idsRestantes.length === idsAnteriores.length) continue;
+        programacion.idsLineas = idsRestantes;
+        programacion.actualizadoEn = new Date().toISOString();
+        if (!idsRestantes.length) {
+            programacion.activa = false;
+            programacion.estado = 'pausado';
+            programacion.mensaje =
+                'Pausada porque su última línea fue eliminada.';
+            cancelarTrabajoProgramado(programacion.id);
+        }
+    }
+    guardarProgramaciones();
+
+    for (const registro of historialPublicaciones) {
+        const idsAnteriores = Array.isArray(registro.idsLineas)
+            ? registro.idsLineas
+            : [];
+        const referenciaEnResultados = [
+            ...(Array.isArray(registro.lineasCorrectas)
+                ? registro.lineasCorrectas
+                : []),
+            ...(Array.isArray(registro.lineasFallidas)
+                ? registro.lineasFallidas
+                : [])
+        ].some(item => item?.id === lineaId);
+        const registroAfectado =
+            idsAnteriores.includes(lineaId) ||
+            referenciaEnResultados ||
+            registro.lineaCorte?.id === lineaId;
+        const idsRestantes = idsAnteriores.filter(id => id !== lineaId);
+        if (idsRestantes.length !== idsAnteriores.length) {
+            registro.idsLineas = idsRestantes;
+        }
+
+        for (const propiedad of ['lineasCorrectas', 'lineasFallidas']) {
+            if (!Array.isArray(registro[propiedad])) continue;
+            const contieneLinea = registro[propiedad].some(
+                item => item?.id === lineaId
+            );
+            if (!contieneLinea) continue;
+            registro[propiedad] = registro[propiedad].map(item =>
+                anonimizarReferenciaHistorialLinea(item, lineaId)
+            );
+        }
+
+        if (registro.lineaCorte?.id === lineaId) {
+            registro.lineaCorte = {
+                nombre: 'Línea eliminada'
+            };
+        }
+        if (registroAfectado && registro.error) {
+            registro.error =
+                'El detalle asociado a una línea eliminada fue anonimizado.';
+        }
+        if (registroAfectado && registro.mensajeErrorCorte) {
+            registro.mensajeErrorCorte =
+                'El detalle asociado a una línea eliminada fue anonimizado.';
+        }
+    }
+    guardarHistorial();
+
+    if (proteccionMiddlewarePublicacion.linea?.id === lineaId) {
+        proteccionMiddlewarePublicacion.linea = null;
+        proteccionMiddlewarePublicacion.motivo =
+            'La protección fue activada por una línea que luego se eliminó.';
+    }
+    guardarJSONAtomico(
+        ARCHIVO_PROTECCION_PUBLICACION,
+        proteccionMiddlewarePublicacion
+    );
+    eventosDesconexionCircuitBreaker = eventosDesconexionCircuitBreaker
+        .filter(evento => evento?.lineaId !== lineaId);
+}
+
 function cargarHistorial() {
     if (!fs.existsSync(archivoHistorial)) return;
 
@@ -5804,6 +6839,10 @@ async function solicitarEliminacionEstado(grupo, registroLinea) {
         guardarEstadosActivos();
         return true;
     } catch (error) {
+        const limiteTemporal = errorEsLimiteTemporal(error);
+        if (limiteTemporal && linea) {
+            activarCircuitBreakerLimiteTemporal(linea, error);
+        }
         registroLinea.estado = 'error';
         registroLinea.error = error.message || 'No se pudo solicitar la eliminación.';
         registroLinea.eliminadoEn = null;
@@ -5823,6 +6862,7 @@ async function solicitarEliminacionEstado(grupo, registroLinea) {
             `No se pudo solicitar la eliminación en ${registroLinea.nombre}:`,
             registroLinea.error
         );
+        if (limiteTemporal) throw error;
         return false;
     }
 }
@@ -5865,18 +6905,28 @@ async function ejecutarEliminacionEstados(publicacionId) {
         progresoEliminacionEstados.mensaje =
             `Procesando lote ${progresoEliminacionEstados.grupoActual} de ${totalGrupos}.`;
 
-        const resultados = await Promise.all(
+        const resultados = await Promise.allSettled(
             lote.map(registroLinea =>
                 solicitarEliminacionEstado(grupo, registroLinea)
             )
         );
 
         progresoEliminacionEstados.procesadas += lote.length;
-        const correctasLote = resultados.filter(Boolean).length;
+        const correctasLote = resultados.filter(resultado =>
+            resultado.status === 'fulfilled' && resultado.value === true
+        ).length;
         progresoEliminacionEstados.correctas += correctasLote;
         progresoEliminacionEstados.eliminadas += correctasLote;
-        progresoEliminacionEstados.fallidas +=
-            resultados.filter(resultado => !resultado).length;
+        progresoEliminacionEstados.fallidas += lote.length - correctasLote;
+
+        // Promise.allSettled conserva la reserva hasta que todos los envíos ya
+        // iniciados del lote terminaron. Después un 429 corta las tandas
+        // siguientes sin liberar sockets que todavía estén en vuelo.
+        const limiteTemporal = resultados.find(resultado =>
+            resultado.status === 'rejected' &&
+            errorEsLimiteTemporal(resultado.reason)
+        );
+        if (limiteTemporal) throw limiteTemporal.reason;
     }
 
     progresoEliminacionEstados.activo = false;
@@ -5979,11 +7029,37 @@ function evaluarLineaParaPublicar(linea, socketEsperado = null) {
         };
     }
 
+    const limitesPublicacion = obtenerEstadoLimitesPublicacionLinea(linea);
+    if (limitesPublicacion.limiteDiarioAlcanzado) {
+        return {
+            lista: false,
+            tipoError: 'seguridad_linea',
+            codigoError: 'LIMITE_PUBLICACIONES_24H',
+            error:
+                `La línea ${linea.nombre} alcanzó su límite de ` +
+                `${limitesPublicacion.limiteCampanasDiariasPorLinea} publicación(es) en 24 horas.`,
+            limitesPublicacion
+        };
+    }
+
+    if (limitesPublicacion.enEnfriamiento) {
+        return {
+            lista: false,
+            tipoError: 'seguridad_linea',
+            codigoError: 'ENFRIAMIENTO_PUBLICACION_LINEA',
+            error:
+                `La línea ${linea.nombre} está en enfriamiento. ` +
+                `Podrá volver a publicar en ${limitesPublicacion.segundosRestantes} segundos.`,
+            limitesPublicacion
+        };
+    }
+
     return {
         lista: true,
         tipoError: null,
         codigoError: null,
-        error: null
+        error: null,
+        limitesPublicacion
     };
 }
 
@@ -6038,11 +7114,154 @@ function cancelarTemporizadorEstabilidadConexion(linea) {
     }
 }
 
+function cerrarAlmacenAutenticacionLinea(linea) {
+    if (!linea) return Promise.resolve();
+    if (linea.cierreAlmacenEnCurso) {
+        return linea.cierreAlmacenEnCurso;
+    }
+    const cerrar = linea.cerrarAlmacenAutenticacion;
+    const pausar = linea.pausarAlmacenAutenticacion;
+    const guardarCredencialesActuales =
+        linea.guardarCredencialesActuales;
+    const contextoAutenticacion = linea.contextoAutenticacion;
+    linea.cerrarAlmacenAutenticacion = null;
+    linea.pausarAlmacenAutenticacion = null;
+    if (linea.contextoAutenticacion === contextoAutenticacion) {
+        linea.contextoAutenticacion = null;
+    }
+
+    const cierreAnterior = Promise.resolve(
+        linea.promesaCierreAlmacenAutenticacion
+    ).catch(() => {});
+    const cierreActual = (async () => {
+        await cierreAnterior;
+
+        // La clave permanece disponible hasta que el propio socket confirma
+        // su cierre; así se conserva cualquier rotación final de Baileys.
+        if (contextoAutenticacion?.socketCreado) {
+            if (!contextoAutenticacion.socketCerrado) {
+                contextoAutenticacion.intentosCierreSocket =
+                    (Number(contextoAutenticacion.intentosCierreSocket) || 0) + 1;
+                cerrarSocketSeguro(
+                    contextoAutenticacion.socket,
+                    'Cierre del almacén de autenticación'
+                );
+                let temporizadorCierreSocket = null;
+                const cierreSocketConfirmado = await Promise.race([
+                    contextoAutenticacion.promesaCierreSocket.then(() => true),
+                    new Promise(resolve => {
+                        temporizadorCierreSocket = setTimeout(
+                            () => resolve(false),
+                            TIEMPO_MAXIMO_CIERRE_SOCKET_CREDENCIALES_MS
+                        );
+                        temporizadorCierreSocket.unref?.();
+                    })
+                ]);
+                if (temporizadorCierreSocket) {
+                    clearTimeout(temporizadorCierreSocket);
+                }
+                if (!cierreSocketConfirmado) {
+                    const error = new Error(
+                        contextoAutenticacion.intentosCierreSocket > 1
+                            ? 'El socket no confirmó su cierre tras varios intentos. Cerrá ZeroOne de forma segura antes de volver a intentar.'
+                            : 'El socket no confirmó su cierre; las credenciales se mantienen abiertas.'
+                    );
+                    error.code = 'AUTH_SOCKET_CLOSE_TIMEOUT';
+                    throw error;
+                }
+            }
+            // También se aplica si connection=close llegó antes que esta
+            // función: los callbacks posteriores ya pueden estar encolados.
+            await esperar(50);
+        }
+        if (contextoAutenticacion) {
+            contextoAutenticacion.aceptandoCredenciales = false;
+        }
+        await Promise.resolve(linea.promesaGuardadoCredenciales);
+
+        if (typeof guardarCredencialesActuales === 'function') {
+            await guardarCredencialesActuales();
+            linea.falloPersistenciaCredenciales = null;
+        } else if (linea.falloPersistenciaCredenciales) {
+            throw linea.falloPersistenciaCredenciales;
+        }
+
+        if (typeof cerrar === 'function') await cerrar();
+        if (
+            linea.guardarCredencialesActuales ===
+            guardarCredencialesActuales
+        ) {
+            linea.guardarCredencialesActuales = null;
+        }
+    })().catch(error => {
+        const fallo = error?.code?.startsWith?.('AUTH_')
+            ? error
+            : Object.assign(
+                new Error(
+                    'No se pudo cerrar y confirmar el almacén de autenticación.'
+                ),
+                { code: 'AUTH_STORE_CLOSE_FAILED', cause: error }
+            );
+        linea.falloPersistenciaCredenciales = fallo;
+        if (
+            typeof cerrar === 'function' &&
+            !linea.cerrarAlmacenAutenticacion
+        ) {
+            linea.cerrarAlmacenAutenticacion = cerrar;
+        }
+        if (
+            typeof pausar === 'function' &&
+            !linea.pausarAlmacenAutenticacion
+        ) {
+            linea.pausarAlmacenAutenticacion = pausar;
+        }
+        if (
+            typeof guardarCredencialesActuales === 'function' &&
+            !linea.guardarCredencialesActuales
+        ) {
+            linea.guardarCredencialesActuales =
+                guardarCredencialesActuales;
+        }
+        if (contextoAutenticacion) {
+            const socketSinCerrar =
+                fallo.code === 'AUTH_SOCKET_CLOSE_TIMEOUT';
+            contextoAutenticacion.aceptandoCredenciales = socketSinCerrar;
+            if (socketSinCerrar && !linea.contextoAutenticacion) {
+                linea.contextoAutenticacion = contextoAutenticacion;
+            }
+        }
+        console.error(
+            `No se pudo cerrar el almacén de autenticación de ${linea.nombre}:`,
+            error?.message || error
+        );
+        throw fallo;
+    });
+    // Evita una rejection sin observador cuando el cierre se inicia desde un
+    // evento síncrono; los consumidores siguen recibiendo la promesa original.
+    cierreActual.catch(() => {});
+    linea.cierreAlmacenEnCurso = cierreActual;
+    cierreActual.then(
+        () => {
+            if (linea.cierreAlmacenEnCurso === cierreActual) {
+                linea.cierreAlmacenEnCurso = null;
+            }
+        },
+        () => {
+            if (linea.cierreAlmacenEnCurso === cierreActual) {
+                linea.cierreAlmacenEnCurso = null;
+            }
+        }
+    );
+    linea.promesaCierreAlmacenAutenticacion = cierreActual;
+    return cierreActual;
+}
+
 function invalidarConexionActual(linea) {
     cancelarTemporizadorIntentoConexion(linea);
     cancelarTemporizadorEstabilidadConexion(linea);
     cancelarGuardadoActividadContactos(linea, true);
     linea.promesaActividadContactos = Promise.resolve();
+    cerrarAlmacenAutenticacionLinea(linea);
     linea.generacionConexion = (Number(linea.generacionConexion) || 0) + 1;
     return linea.generacionConexion;
 }
@@ -6168,12 +7387,46 @@ function programarReconexionAutomatica(
 ) {
     const linea = lineas.get(lineaId);
     if (
+        cerrandoBackend ||
         !linea ||
         linea.eliminando ||
         linea.reconexionBloqueada ||
         linea.temporizadorReconexion
     ) {
         return false;
+    }
+
+    if (
+        sincronizacionInicialEnEjecucion &&
+        !lineasAutorizadasTandaInicial.has(lineaId)
+    ) {
+        const intentos = Math.max(
+            0,
+            Number(linea.intentosReconexion) || 0
+        );
+        const demora = retrasoForzadoMs !== null &&
+            retrasoForzadoMs !== undefined &&
+            Number.isFinite(Number(retrasoForzadoMs))
+            ? Math.max(0, Number(retrasoForzadoMs))
+            : RETRASOS_RECONEXION_MS[intentos] ||
+                RETRASOS_RECONEXION_MS[RETRASOS_RECONEXION_MS.length - 1];
+        diferirReconexionHastaFinalizarInicio(
+            linea,
+            demora,
+            mensaje,
+            codigo
+        );
+        return true;
+    }
+
+    const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+    if (circuitBreaker) {
+        return diferirReconexionPorCircuitBreaker(
+            linea,
+            mensaje,
+            codigo,
+            circuitBreaker
+        );
     }
 
     const intentosRealizados = Math.max(0, Number(linea.intentosReconexion) || 0);
@@ -6212,7 +7465,12 @@ function programarReconexionAutomatica(
 
     linea.temporizadorReconexion = setTimeout(() => {
         const actual = lineas.get(lineaId);
-        if (!actual || actual.eliminando || actual.reconexionBloqueada) return;
+        if (
+            cerrandoBackend ||
+            !actual ||
+            actual.eliminando ||
+            actual.reconexionBloqueada
+        ) return;
 
         actual.temporizadorReconexion = null;
         actual.proximoIntentoReconexion = null;
@@ -6229,12 +7487,36 @@ function programarReconexionAutomatica(
 function programarReinicioSolicitado(lineaId, mensaje) {
     const linea = lineas.get(lineaId);
     if (
+        cerrandoBackend ||
         !linea ||
         linea.eliminando ||
         linea.reconexionBloqueada ||
         linea.temporizadorReconexion
     ) {
         return false;
+    }
+
+    if (
+        sincronizacionInicialEnEjecucion &&
+        !lineasAutorizadasTandaInicial.has(lineaId)
+    ) {
+        diferirReconexionHastaFinalizarInicio(
+            linea,
+            350,
+            mensaje,
+            DisconnectReason.restartRequired
+        );
+        return true;
+    }
+
+    const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+    if (circuitBreaker) {
+        return diferirReconexionPorCircuitBreaker(
+            linea,
+            mensaje,
+            DisconnectReason.restartRequired,
+            circuitBreaker
+        );
     }
 
     linea.reiniciosRequeridos =
@@ -6259,7 +7541,12 @@ function programarReinicioSolicitado(lineaId, mensaje) {
 
     linea.temporizadorReconexion = setTimeout(() => {
         const actual = lineas.get(lineaId);
-        if (!actual || actual.eliminando || actual.reconexionBloqueada) return;
+        if (
+            cerrandoBackend ||
+            !actual ||
+            actual.eliminando ||
+            actual.reconexionBloqueada
+        ) return;
 
         actual.temporizadorReconexion = null;
         actual.proximoIntentoReconexion = null;
@@ -6277,6 +7564,19 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
     // con una caída real y detenía las líneas restantes. En ese caso se debe
     // terminar primero la publicación o usar Alto total.
     if (lineaParticipaEnPublicacionActiva(linea)) {
+        return false;
+    }
+
+    const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+    if (circuitBreaker) {
+        if (!(linea.estado === 'conectado' && linea.socket)) {
+            diferirReconexionPorCircuitBreaker(
+                linea,
+                linea.ultimoError || 'Reconexión manual solicitada.',
+                linea.ultimoCodigoDesconexion,
+                circuitBreaker
+            );
+        }
         return false;
     }
 
@@ -6356,11 +7656,24 @@ function ponerLineaEnCuarentenaPorEnvio(linea, socket, mensaje) {
     );
 }
 
-async function iniciarWhatsApp(lineaId) {
+function iniciarWhatsApp(lineaId) {
+    let operacion;
+    operacion = Promise.resolve()
+        .then(() => iniciarWhatsAppInterno(lineaId))
+        .finally(() => {
+            iniciosConexionEnCurso.delete(operacion);
+        });
+    iniciosConexionEnCurso.add(operacion);
+    return operacion;
+}
+
+async function iniciarWhatsAppInterno(lineaId) {
     const linea = lineas.get(lineaId);
 
     if (
+        cerrandoBackend ||
         !linea ||
+        linea.eliminando ||
         linea.iniciando ||
         (linea.reconexionBloqueada && !linea.reconexionManualEnCurso)
     ) {
@@ -6397,10 +7710,50 @@ async function iniciarWhatsApp(lineaId) {
     }
 
     try {
-        const { state, saveCreds } = await useMultiFileAuthState(carpetaSesion);
-        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
+        if (linea.vinculacionPendiente === true) {
+            gestorRespaldosSesiones?.habilitarLinea?.(lineaId);
+        }
+        const autenticacion = await obtenerEstadoAutenticacionLinea(
+            linea,
+            carpetaSesion
+        );
+        const { state, saveCreds } = autenticacion;
+        if (
+            cerrandoBackend ||
+            !conexionSigueVigente(lineaId, linea, generacionConexion)
+        ) {
+            await autenticacion.cerrar?.();
+            return;
+        }
+        linea.cerrarAlmacenAutenticacion = autenticacion.cerrar || null;
+        linea.pausarAlmacenAutenticacion =
+            autenticacion.pausarParaRespaldo || null;
+        linea.autenticacionCifrada = autenticacion.encrypted === true;
+        let resolverCierreSocket = null;
+        const contextoAutenticacion = {
+            generacionConexion,
+            aceptandoCredenciales: true,
+            socketCreado: false,
+            socketCerrado: false,
+            socket: null,
+            intentosCierreSocket: 0,
+            promesaCierreSocket: new Promise(resolve => {
+                resolverCierreSocket = resolve;
+            }),
+            confirmarCierreSocket() {
+                if (this.socketCerrado) return;
+                this.socketCerrado = true;
+                resolverCierreSocket?.();
+                resolverCierreSocket = null;
+            }
+        };
+        linea.contextoAutenticacion = contextoAutenticacion;
+        linea.guardarCredencialesActuales = () => saveCreds();
 
-        const sesionExistente = state.creds.registered === true;
+        // Baileys 7 decide entre vinculación e inicio de sesión mediante la
+        // identidad `creds.me`; la bandera `registered` puede permanecer en
+        // false aun cuando la sesión vinculada sea completamente válida.
+        const sesionExistente = Boolean(state.creds?.me?.id);
         linea.sesionRegistrada = sesionExistente;
 
         // Agendamiento trabaja únicamente con mensajes nuevos y con los
@@ -6420,6 +7773,8 @@ async function iniciarWhatsApp(lineaId) {
                 ].includes(mensajeHistorial?.syncType)
         });
 
+        contextoAutenticacion.socketCreado = true;
+        contextoAutenticacion.socket = sock;
         linea.socket = sock;
         linea.iniciando = false;
         programarWatchdogConexion(
@@ -6590,6 +7945,10 @@ async function iniciarWhatsApp(lineaId) {
         sock.ev.on('connection.update', async update => {
             const { connection, qr, lastDisconnect } = update;
 
+            if (connection === 'close') {
+                contextoAutenticacion.confirmarCierreSocket();
+            }
+
             if (!lineas.has(lineaId)) return;
 
             // Si este evento pertenece a un socket viejo, lo ignoramos.
@@ -6643,6 +8002,38 @@ async function iniciarWhatsApp(lineaId) {
             }
 
             if (connection === 'open') {
+                try {
+                    if (
+                        linea.vinculacionPendiente === true &&
+                        typeof autenticacion.confirmarIdentidad === 'function'
+                    ) {
+                        await autenticacion.confirmarIdentidad();
+                    }
+                } catch (error) {
+                    linea.falloPersistenciaCredenciales = error;
+                    const mensaje =
+                        'No se pudo confirmar de forma cifrada la identidad vinculada. ' +
+                        'La conexión se detuvo para conservar la sesión sin exponerla.';
+                    console.error(
+                        `No se pudo confirmar la identidad de ${linea.nombre}:`,
+                        error?.message || error
+                    );
+                    bloquearReconexionAutomatica(
+                        linea,
+                        mensaje,
+                        null,
+                        'requiere_intervencion'
+                    );
+                    cerrarSocketSeguro(sock, mensaje);
+                    return;
+                }
+                if (!conexionSigueVigente(
+                    lineaId,
+                    linea,
+                    generacionConexion,
+                    sock
+                )) return;
+
                 const debeVerificarEstabilidad =
                     linea.conexionEnVerificacion === true ||
                     linea.reconexionManualEnCurso ||
@@ -6673,6 +8064,7 @@ async function iniciarWhatsApp(lineaId) {
                 linea.intentosResincronizacionAudiencia = 0;
                 linea.ultimaConexion = new Date().toISOString();
                 linea.sesionRegistrada = true;
+                linea.vinculacionPendiente = false;
                 linea.ultimoError = debeVerificarEstabilidad
                     ? `Conexión restablecida. Verificando estabilidad antes de reiniciar el contador de intentos.`
                     : null;
@@ -6746,6 +8138,18 @@ async function iniciarWhatsApp(lineaId) {
             }
 
             if (connection === 'close') {
+                if (cerrandoBackend) {
+                    cancelarReintentoAudiencia(linea);
+                    cancelarTemporizadorReconexion(linea);
+                    cancelarTemporizadorIntentoConexion(linea);
+                    cancelarTemporizadorEstabilidadConexion(linea);
+                    linea.socket = null;
+                    linea.jid = null;
+                    linea.qr = null;
+                    linea.iniciando = false;
+                    cerrarAlmacenAutenticacionLinea(linea);
+                    return;
+                }
                 if (linea.eliminando) {
                     cancelarReintentoAudiencia(linea);
                     cancelarTemporizadorReconexion(linea);
@@ -6763,6 +8167,12 @@ async function iniciarWhatsApp(lineaId) {
                         : codigoError
                             ? `WhatsApp cerró la conexión (código ${codigoError}).`
                             : 'WhatsApp cerró la conexión.';
+                registrarDesconexionCircuitBreaker(
+                    linea,
+                    codigoError,
+                    mensajeDesconexion,
+                    lastDisconnect?.error
+                );
                 const cerrabaSincronizacionHistorial =
                     sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
                     linea.modoHistorialAgendamiento === true;
@@ -6855,6 +8265,7 @@ async function iniciarWhatsApp(lineaId) {
                         codigoError
                     );
                     linea.estado = 'sesion_cerrada';
+                    linea.vinculacionPendiente = true;
                     linea.ultimoError = 'La sesión de WhatsApp fue cerrada.';
                     linea.contactosEstado = new Set();
                     linea.privacidadEstados = null;
@@ -6862,6 +8273,17 @@ async function iniciarWhatsApp(lineaId) {
                     linea.promesaContactosEstado = Promise.resolve();
                     linea.audienciaEstadosCargada = true;
                     limpiarActividadContactos(linea);
+                    await Promise.resolve(
+                        linea.promesaCierreAlmacenAutenticacion
+                    ).catch(() => {});
+                    try {
+                        await eliminarRespaldosCifradosLinea(linea.id);
+                    } catch (error) {
+                        console.error(
+                            `No se pudieron eliminar los respaldos de la sesión cerrada de ${linea.nombre}:`,
+                            error?.message || error
+                        );
+                    }
                     try {
                         fs.rmSync(carpetaSesion, { recursive: true, force: true });
                     } catch (error) {
@@ -6919,22 +8341,72 @@ async function iniciarWhatsApp(lineaId) {
         });
 
         sock.ev.on('creds.update', actualizacion => {
-            if (!conexionSigueVigente(
-                lineaId,
-                linea,
-                generacionConexion,
-                sock
-            )) return;
+            if (!contextoAutenticacion.aceptandoCredenciales) return;
 
-            Promise.resolve().then(() => saveCreds(actualizacion)).catch(error => {
+            let guardado;
+            try {
+                // Se admite inmediatamente en la cola del almacén. El cierre
+                // espera esta promesa, por lo que una rotación emitida justo
+                // antes de una reconexión no se pierde.
+                guardado = Promise.resolve(saveCreds(actualizacion));
+            } catch (error) {
+                guardado = Promise.reject(error);
+            }
+
+            const gestionGuardado = guardado.catch(error => {
+                linea.falloPersistenciaCredenciales =
+                    error || new Error('No se guardaron las credenciales.');
                 console.error(
                     `No se pudieron guardar las credenciales de ${linea.nombre}:`,
                     error.message
                 );
+                if (conexionSigueVigente(
+                    lineaId,
+                    linea,
+                    generacionConexion,
+                    sock
+                )) {
+                    const mensaje =
+                        'El almacén de autenticación no pudo guardar una actualización de ' +
+                        'credenciales. La conexión se detuvo para evitar perder la sesión.';
+                    bloquearReconexionAutomatica(
+                        linea,
+                        mensaje,
+                        null,
+                        'requiere_intervencion'
+                    );
+                    cerrarSocketSeguro(sock, mensaje);
+                }
             });
+
+            const guardadosAnteriores = Promise.resolve(
+                linea.promesaGuardadoCredenciales
+            ).catch(() => {});
+            linea.promesaGuardadoCredenciales = Promise.allSettled([
+                guardadosAnteriores,
+                gestionGuardado
+            ]).then(() => undefined);
         });
     } catch (error) {
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
+
+        if (esFalloSeguridadAutenticacion(error)) {
+            const mensaje =
+                'ZeroOne no pudo abrir de forma segura las credenciales cifradas. ' +
+                'La sesión se conservó y no se generó ningún QR nuevo. ' +
+                'Revisá el respaldo o el cifrado de Windows antes de reconectar.';
+            bloquearReconexionAutomatica(
+                linea,
+                mensaje,
+                null,
+                'requiere_intervencion'
+            );
+            console.error(
+                `Seguridad de sesión bloqueó ${linea.nombre}:`,
+                error?.message || error
+            );
+            return;
+        }
 
         if (
             sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
@@ -7115,13 +8587,34 @@ async function ejecutarPublicacion({
     intervaloMinutos,
     maximoDestinatariosPorEstado,
     origen,
-    historialOrigenId = null
+    historialOrigenId = null,
+    bloqueoPublicacionToken = null
 }) {
     if (!fs.existsSync(rutaImagen)) {
         throw new Error('No se encontró la imagen que se debía publicar.');
     }
 
     idsLineas = normalizarIdsLineas(idsLineas);
+
+    const lineaNoDisponible = idsLineas.find(id => {
+        const linea = lineas.get(id);
+        return !linea || linea.eliminando || linea.eliminacionPendiente;
+    });
+    if (lineaNoDisponible) {
+        const linea = lineas.get(lineaNoDisponible);
+        throw crearErrorPublicacion(
+            linea ? 'LINEA_EN_ELIMINACION' : 'LINEA_NO_EXISTE',
+            'seguridad_linea',
+            linea
+                ? `La línea ${linea.nombre} se está eliminando y no puede recibir publicaciones.`
+                : 'La campaña contiene una línea que ya no existe.',
+            {
+                lineaId: lineaNoDisponible,
+                lineaNombre: linea?.nombre || 'Línea no encontrada',
+                reintentable: false
+            }
+        );
+    }
     if (!idsLineas.length) {
         throw new Error('La publicación no contiene líneas válidas.');
     }
@@ -7138,6 +8631,18 @@ async function ejecutarPublicacion({
         maximoDestinatariosPorEstado
     );
     const tamanoGrupo = modoRitmo === 'secuencial' ? 1 : lineasPorGrupo;
+    const tokenBloqueo = bloqueoPublicacionToken ||
+        reservarCampanaPublicacion(idsLineas, origen);
+
+    if (bloqueoCampanaPublicacion?.token !== tokenBloqueo) {
+        throw crearErrorPublicacion(
+            'RESERVA_PUBLICACION_PERDIDA',
+            'concurrencia',
+            'La reserva de seguridad de la campaña ya no está vigente.',
+            { reintentable: true }
+        );
+    }
+    actualizarFaseBloqueoCampanaPublicacion(tokenBloqueo, 'preparando');
 
     controlSeguridadPublicacion = crearControlSeguridadPublicacion(idsLineas);
     const total = idsLineas.length;
@@ -7250,6 +8755,8 @@ async function ejecutarPublicacion({
                 }
             );
         }
+
+        actualizarFaseBloqueoCampanaPublicacion(tokenBloqueo, 'publicando');
 
         const limitesSincronizacionAudiencia =
             prepararSincronizacionAudienciasPublicacion(lineasDisponibles);
@@ -7416,6 +8923,16 @@ async function ejecutarPublicacion({
                             }
                         )
                     ).then(mensajeEstado => {
+                        registrarPublicacionExitosaLinea(linea);
+                        try {
+                            guardarLineas();
+                        } catch (errorGuardadoLinea) {
+                            console.error(
+                                `No se pudo persistir el límite de publicación de ${linea.nombre}:`,
+                                errorGuardadoLinea.message
+                            );
+                        }
+
                         try {
                             registrarEstadoActivo(
                                 registroHistorial,
@@ -7495,7 +9012,6 @@ async function ejecutarPublicacion({
                             linea.ultimaSeleccionAudienciaEstado
                                 ?.priorizacionAudiencia || null
                     });
-                    linea.ultimaPublicacion = new Date().toISOString();
                     linea.ultimoError = null;
                     linea.fallosRecientes = 0;
                 } catch (error) {
@@ -7615,6 +9131,7 @@ async function ejecutarPublicacion({
                                 fallo.error
                             );
                         }
+                        activarCircuitBreakerLimiteTemporal(linea, error);
                         progresoPublicacion.tipoErrorCorte = 'limite_temporal';
                         progresoPublicacion.codigoErrorCorte = fallo.codigoError;
                         progresoPublicacion.lineaCorte = {
@@ -7770,6 +9287,7 @@ async function ejecutarPublicacion({
             }
         }
 
+        actualizarFaseBloqueoCampanaPublicacion(tokenBloqueo, 'finalizando');
         progresoPublicacion.activo = false;
         progresoPublicacion.estado = progresoPublicacion.fallidas > 0
             ? 'completado_con_errores'
@@ -7793,6 +9311,7 @@ async function ejecutarPublicacion({
             fallidas: progresoPublicacion.fallidas
         };
     } catch (error) {
+        actualizarFaseBloqueoCampanaPublicacion(tokenBloqueo, 'finalizando');
         progresoPublicacion.activo = false;
         progresoPublicacion.seguridadActiva = false;
         progresoPublicacion.proximoGrupoSegundos = 0;
@@ -7891,6 +9410,7 @@ async function ejecutarPublicacion({
         throw error;
     } finally {
         controlSeguridadPublicacion = crearControlSeguridadPublicacion();
+        liberarCampanaPublicacion(tokenBloqueo);
     }
 }
 
@@ -7901,8 +9421,19 @@ function encolarPublicacion(datosPublicacion) {
         return Promise.reject(error);
     }
 
+    let tokenBloqueo;
+    try {
+        tokenBloqueo = reservarCampanaPublicacion(
+            datosPublicacion?.idsLineas,
+            datosPublicacion?.origen
+        );
+    } catch (error) {
+        return Promise.reject(error);
+    }
+
     const datosEncolados = {
         ...datosPublicacion,
+        bloqueoPublicacionToken: tokenBloqueo,
         maximoDestinatariosPorEstado: normalizarLimiteDestinatariosEstado(
             datosPublicacion?.maximoDestinatariosPorEstado,
             normalizarLimiteDestinatariosEstado(
@@ -7922,6 +9453,7 @@ function encolarPublicacion(datosPublicacion) {
         cancelar: () => {
             if (cancelacionEmitida) return;
             cancelacionEmitida = true;
+            liberarCampanaPublicacion(tokenBloqueo);
             rechazarCancelacion?.(
                 crearErrorPublicacion(
                     'CANCELADA_ALTO_TOTAL_EN_COLA',
@@ -7948,6 +9480,7 @@ function encolarPublicacion(datosPublicacion) {
             trabajoEncolado.cancelado ||
             generacionEncolada !== generacionColaPublicaciones
         ) {
+            liberarCampanaPublicacion(tokenBloqueo);
             throw crearErrorPublicacion(
                 'CANCELADA_ALTO_TOTAL_EN_COLA',
                 'cancelacion_manual',
@@ -7961,7 +9494,14 @@ function encolarPublicacion(datosPublicacion) {
             );
         }
 
-        return ejecutarPublicacion(datosEncolados);
+        try {
+            return await ejecutarPublicacion(datosEncolados);
+        } catch (error) {
+            // También cubre fallos previos al try/finally interno, por
+            // ejemplo una imagen programada que desapareció del disco.
+            liberarCampanaPublicacion(tokenBloqueo);
+            throw error;
+        }
     });
 
     colaPublicaciones = tareaSerial.catch(() => {});
@@ -8309,6 +9849,22 @@ function validarConfiguracionComun(req, rutaTemporalFoto, imagenObligatoria = tr
 
     idsLineas = normalizarIdsLineas(idsLineas);
 
+    const lineaNoDisponible = idsLineas.find(id => {
+        const linea = lineas.get(id);
+        return !linea || linea.eliminando || linea.eliminacionPendiente;
+    });
+    if (lineaNoDisponible) {
+        eliminarArchivoSeguro(rutaTemporalFoto);
+        const linea = lineas.get(lineaNoDisponible);
+        return {
+            statusCode: linea ? 409 : 404,
+            codigo: linea ? 'LINEA_EN_ELIMINACION' : 'LINEA_NO_EXISTE',
+            error: linea
+                ? `La línea ${linea.nombre} se está eliminando y no puede recibir publicaciones.`
+                : 'La selección contiene una línea que ya no existe.'
+        };
+    }
+
     if (
         !Number.isInteger(lineasPorGrupo) ||
         lineasPorGrupo < 1 ||
@@ -8548,6 +10104,13 @@ app.get('/agendamiento', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (linea.eliminando || linea.eliminacionPendiente) {
+        return res.status(409).json({
+            codigo: 'LINEA_EN_ELIMINACION',
+            error:
+                'La línea se está eliminando y sus datos de agendamiento ya no pueden abrirse.'
+        });
+    }
 
     try {
         return res.json(transformarVistaAgendamiento(
@@ -8712,6 +10275,12 @@ app.put('/agendamiento/palabras-clave', async (req, res) => {
     if (lineaId && !linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (linea?.eliminando) {
+        return res.status(409).json({
+            codigo: 'LINEA_EN_ELIMINACION',
+            error: 'La línea se está eliminando y no puede reanalizar mensajes.'
+        });
+    }
 
     try {
         const busqueda = servicioAgendamiento.configurarPalabrasClaveUsuario(
@@ -8849,6 +10418,9 @@ app.post('/agendamiento/lineas/:id/iniciar', (req, res) => {
     const linea = lineas.get(req.params.id);
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
+    }
+    if (responderLineaBloqueadaPorPublicacion(res, linea, 'iniciar el agendamiento')) {
+        return;
     }
     if (agendamientoEstaOcupado()) {
         return res.status(409).json({
@@ -9025,6 +10597,8 @@ app.post('/lineas', (req, res) => {
         estado: 'iniciando',
         iniciando: false,
         eliminando: false,
+        eliminacionPendiente: false,
+        eliminacionDatosEnCurso: false,
         temporizadorReconexion: null,
         temporizadorIntentoConexion: null,
         temporizadorEstabilidadConexion: null,
@@ -9036,11 +10610,13 @@ app.post('/lineas', (req, res) => {
         intentosResincronizacionAudiencia: 0,
         ultimaConexion: null,
         ultimaPublicacion: null,
+        publicacionesRecientes: [],
         ultimoError: null,
         fallosRecientes: 0,
         intentosReconexion: 0,
         conexionEnVerificacion: false,
         reconexionBloqueada: false,
+        vinculacionPendiente: true,
         requiereRevisionEnvio: false,
         motivoRevisionEnvio: null,
         revisionEnvioDesde: null,
@@ -9066,6 +10642,14 @@ app.post('/lineas', (req, res) => {
         historialAgendamiento: crearEstadoHistorialAgendamiento(),
         modoHistorialAgendamiento: false,
         sesionRegistrada: null,
+        cerrarAlmacenAutenticacion: null,
+        pausarAlmacenAutenticacion: null,
+        guardarCredencialesActuales: null,
+        contextoAutenticacion: null,
+        promesaGuardadoCredenciales: Promise.resolve(),
+        promesaCierreAlmacenAutenticacion: Promise.resolve(),
+        cierreAlmacenEnCurso: null,
+        falloPersistenciaCredenciales: null,
         promesaIngestaAgendamiento: Promise.resolve(),
         errorIngestaAgendamiento: null,
         mensajesRecientesAgendamiento: new Map(),
@@ -9083,6 +10667,15 @@ app.post('/lineas', (req, res) => {
     });
 });
 
+app.get('/seguridad/sincronizacion-inicial', (_req, res) => {
+    res.json({
+        ...estadoSincronizacionInicial,
+        bloqueandoCambios: sincronizacionInicialActiva(),
+        respaldosCifrados:
+            gestorRespaldosSesiones?.obtenerEstado?.() || null
+    });
+});
+
 app.get('/estado', (req, res) => {
     const resultado = Array.from(lineas.values())
         .sort((a, b) =>
@@ -9090,6 +10683,8 @@ app.get('/estado', (req, res) => {
         )
         .map(linea => {
             const evaluacionPublicacion = evaluarLineaParaPublicar(linea);
+            const limitesPublicacion = evaluacionPublicacion.limitesPublicacion ||
+                obtenerEstadoLimitesPublicacionLinea(linea);
             const priorizacionAudiencia =
                 obtenerResumenPriorizacionAudiencia(linea);
             const destinatariosEstadoTotales =
@@ -9121,6 +10716,15 @@ app.get('/estado', (req, res) => {
             listaParaPublicar: evaluacionPublicacion.lista,
             codigoBloqueoPublicacion: evaluacionPublicacion.codigoError,
             motivoBloqueoPublicacion: evaluacionPublicacion.error,
+            bloqueadaPorPublicacion: lineaBloqueadaPorPublicacion(linea),
+            publicacionesUltimas24h:
+                limitesPublicacion.publicacionesUltimas24h,
+            limiteCampanasDiariasPorLinea:
+                limitesPublicacion.limiteCampanasDiariasPorLinea,
+            enfriamientoCampanasMinutos:
+                limitesPublicacion.enfriamientoCampanasMinutos,
+            proximaPublicacionPermitida:
+                limitesPublicacion.proximaPublicacionPermitida,
             requiereRevisionEnvio: linea.requiereRevisionEnvio === true,
             motivoRevisionEnvio: linea.motivoRevisionEnvio || null,
             revisionEnvioDesde: linea.revisionEnvioDesde || null,
@@ -9161,6 +10765,7 @@ app.patch('/lineas/:id', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderLineaBloqueadaPorPublicacion(res, linea, 'editarla')) return;
 
     const nombre = String(req.body.nombre || '')
         .replace(/\s+/g, ' ')
@@ -9246,6 +10851,7 @@ app.post('/lineas/:id/habilitar-publicaciones', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderLineaBloqueadaPorPublicacion(res, linea, 'habilitarla')) return;
 
     if (req.body?.confirmar !== true) {
         return res.status(400).json({
@@ -9272,9 +10878,8 @@ app.get('/progreso', (req, res) => {
     res.json({
         ...progresoPublicacion,
         publicacionesPendientes,
-        ocupada:
-            progresoPublicacion.activo === true ||
-            publicacionesPendientes > 0,
+        ocupada: publicacionOcupada(),
+        bloqueoCampana: obtenerVistaBloqueoCampanaPublicacion(),
         proteccionMiddleware: obtenerVistaProteccionMiddleware()
     });
 });
@@ -9418,10 +11023,13 @@ app.post(
     const validacion = validarConfiguracionComun(req, rutaTemporalFoto, true);
 
     if (validacion.error) {
-        return res.status(400).json({ error: validacion.error });
+        return res.status(validacion.statusCode || 400).json({
+            error: validacion.error,
+            codigo: validacion.codigo
+        });
     }
 
-    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+    if (publicacionOcupada()) {
         eliminarArchivoSeguro(rutaTemporalFoto);
         return res.status(409).json({
             error: 'Ya existe una publicación en curso o en espera.'
@@ -9471,7 +11079,10 @@ app.post(
     const validacion = validarConfiguracionComun(req, rutaTemporalFoto, true);
 
     if (validacion.error) {
-        return res.status(400).json({ error: validacion.error });
+        return res.status(validacion.statusCode || 400).json({
+            error: validacion.error,
+            codigo: validacion.codigo
+        });
     }
 
     const hora = String(req.body.hora || '').trim();
@@ -9737,6 +11348,14 @@ app.patch('/programaciones/:id/estado', (req, res) => {
 
 app.post(
     '/programaciones/:id/ejecutar',
+    (req, res, next) => {
+        if (!programaciones.has(req.params.id)) {
+            return res.status(404).json({
+                error: 'La programación no existe.'
+            });
+        }
+        next();
+    },
     middlewareIdempotencia('ejecutar-programacion'),
     middlewareSeguridadPublicacion,
     (req, res) => {
@@ -9746,7 +11365,7 @@ app.post(
         return res.status(404).json({ error: 'La programación no existe.' });
     }
 
-    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+    if (publicacionOcupada()) {
         return res.status(409).json({
             error: 'Ya existe una publicación en curso o en espera.'
         });
@@ -9927,6 +11546,13 @@ app.delete('/estados-activos/:id', (req, res) => {
             progreso: progresoEliminacionEstados
         });
     }
+    if (publicacionOcupada()) {
+        return res.status(409).json({
+            codigo: 'PUBLICACION_OCUPADA',
+            error:
+                'Esperá a que termine la campaña de estados antes de eliminarlos.'
+        });
+    }
 
     const grupo = estadosActivos.get(req.params.id);
     if (!grupo) {
@@ -9946,7 +11572,25 @@ app.delete('/estados-activos/:id', (req, res) => {
         });
     }
 
+    let tokenEliminacion;
+    try {
+        tokenEliminacion = reservarCampanaPublicacion(
+            pendientes.map(registro => registro.lineaId),
+            'eliminación de estados'
+        );
+        actualizarFaseBloqueoCampanaPublicacion(
+            tokenEliminacion,
+            'eliminando_estados'
+        );
+    } catch (error) {
+        return res.status(409).json({
+            codigo: error?.codigo || 'PUBLICACION_OCUPADA',
+            error: error?.message || 'Los sockets seleccionados están ocupados.'
+        });
+    }
+
     const tarea = ejecutarEliminacionEstados(grupo.id);
+    tareasEliminacionEstadosEnCurso.add(tarea);
 
     res.status(202).json({
         mensaje: `Se inició la solicitud de eliminación para ${pendientes.length} estado(s).`,
@@ -9959,6 +11603,9 @@ app.delete('/estados-activos/:id', (req, res) => {
         progresoEliminacionEstados.mensaje =
             error.message || 'La eliminación se interrumpió.';
         console.error('Falló la eliminación de estados activos:', error);
+    }).finally(() => {
+        tareasEliminacionEstadosEnCurso.delete(tarea);
+        liberarCampanaPublicacion(tokenEliminacion);
     });
 });
 
@@ -9994,7 +11641,7 @@ app.post(
         return res.status(409).json({ error: 'La imagen del historial ya no existe.' });
     }
 
-    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+    if (publicacionOcupada()) {
         return res.status(409).json({
             error: 'Ya existe una publicación en curso o en espera.'
         });
@@ -10045,6 +11692,14 @@ app.put('/configuracion', (req, res) => {
     const lineasPorGrupo = Number(req.body.lineasPorGrupoPredeterminado);
     const intervalo = Number(req.body.intervaloMinutosPredeterminado);
     const maximoDestinatarios = Number(req.body.maximoDestinatariosPorEstado);
+    const enfriamientoCampanas = Number(
+        req.body.enfriamientoCampanasMinutos ??
+        configuracion.enfriamientoCampanasMinutos
+    );
+    const limiteCampanasDiarias = Number(
+        req.body.limiteCampanasDiariasPorLinea ??
+        configuracion.limiteCampanasDiariasPorLinea
+    );
     const temaVisualSolicitado = req.body.temaVisual ?? configuracion.temaVisual;
     const temaVisual = String(temaVisualSolicitado || '').trim().toLowerCase();
 
@@ -10115,6 +11770,30 @@ app.put('/configuracion', (req, res) => {
         });
     }
 
+    if (
+        !Number.isInteger(enfriamientoCampanas) ||
+        enfriamientoCampanas < 0 ||
+        enfriamientoCampanas > MAXIMO_ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS
+    ) {
+        return res.status(400).json({
+            error:
+                `El enfriamiento entre campañas debe estar entre 0 y ` +
+                `${MAXIMO_ENFRIAMIENTO_PUBLICACION_LINEA_MINUTOS} minutos.`
+        });
+    }
+
+    if (
+        !Number.isInteger(limiteCampanasDiarias) ||
+        limiteCampanasDiarias < 0 ||
+        limiteCampanasDiarias > MAXIMO_PUBLICACIONES_LINEA_24H
+    ) {
+        return res.status(400).json({
+            error:
+                `El límite diario por línea debe estar entre 0 y ` +
+                `${MAXIMO_PUBLICACIONES_LINEA_24H}.`
+        });
+    }
+
     configuracion = {
         ...configuracion,
         limiteFallosSeguridad: limiteFallos,
@@ -10125,7 +11804,9 @@ app.put('/configuracion', (req, res) => {
         variacionSegundosPredeterminada: variacionSegundos,
         lineasPorGrupoPredeterminado: lineasPorGrupo,
         intervaloMinutosPredeterminado: intervalo,
-        maximoDestinatariosPorEstado: maximoDestinatarios
+        maximoDestinatariosPorEstado: maximoDestinatarios,
+        enfriamientoCampanasMinutos: enfriamientoCampanas,
+        limiteCampanasDiariasPorLinea: limiteCampanasDiarias
     };
     guardarConfiguracion();
 
@@ -10133,6 +11814,7 @@ app.put('/configuracion', (req, res) => {
 });
 
 app.post('/lineas/reconectar-todas', (req, res) => {
+    if (responderCircuitBreakerReconexiones(res)) return;
     let cantidad = 0;
     let omitidasPorPublicacion = 0;
 
@@ -10182,6 +11864,9 @@ app.patch('/lineas/:id/etiqueta', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderLineaBloqueadaPorPublicacion(res, linea, 'cambiar su etiqueta')) {
+        return;
+    }
 
     const etiqueta = normalizarEtiqueta(req.body.etiqueta);
 
@@ -10207,6 +11892,8 @@ app.post('/lineas/:id/reconectar', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+
+    if (responderCircuitBreakerReconexiones(res)) return;
 
     if (linea.eliminando) {
         return res.status(409).json({
@@ -10251,6 +11938,17 @@ app.post('/lineas/:id/reconectar', (req, res) => {
     });
 });
 
+async function eliminarRespaldosCifradosLinea(id) {
+    if (gestorRespaldosSesiones?.eliminarLinea) {
+        await gestorRespaldosSesiones.eliminarLinea(id);
+        return;
+    }
+    eliminarRespaldosLineaSeguro({
+        carpetaRespaldos: CARPETA_RESPALDOS_SESIONES,
+        id
+    });
+}
+
 app.delete('/lineas/:id', async (req, res) => {
     const id = req.params.id;
     const linea = lineas.get(id);
@@ -10258,11 +11956,13 @@ app.delete('/lineas/:id', async (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
-
-    cancelarSincronizacionHistorialAgendamiento(
-        id,
-        'La preparación se canceló porque la línea fue eliminada.'
-    );
+    if (linea.eliminacionDatosEnCurso) {
+        return res.status(409).json({
+            codigo: 'ELIMINACION_EN_CURSO',
+            error: 'Los datos seguros de esta línea ya se están eliminando.'
+        });
+    }
+    if (responderLineaBloqueadaPorPublicacion(res, linea, 'eliminarla')) return;
 
     if (
         obtenerProcesoAgendamientoActivo()?.lineaId === id ||
@@ -10271,6 +11971,17 @@ app.delete('/lineas/:id', async (req, res) => {
         return res.status(409).json({
             error: 'Detené el agendamiento o análisis IA de esta línea antes de eliminarla.',
             codigo: 'AGENDAMIENTO_ACTIVO'
+        });
+    }
+
+    const estadosVigentesPendientes =
+        contarEstadosVigentesPendientesLinea(id);
+    if (estadosVigentesPendientes > 0) {
+        return res.status(409).json({
+            codigo: 'ESTADOS_ACTIVOS_PENDIENTES',
+            error:
+                `La línea conserva ${estadosVigentesPendientes} estado(s) activo(s). ` +
+                'Eliminalos desde Estados activos o esperá a que expiren antes de borrar la línea.'
         });
     }
 
@@ -10286,68 +11997,256 @@ app.delete('/lineas/:id', async (req, res) => {
         `La línea ${linea.nombre} fue eliminada durante la publicación.`,
         'LINEA_ELIMINADA'
     );
+    const estadoAnterior = {
+        eliminacionDatosEnCurso: linea.eliminacionDatosEnCurso,
+        eliminando: linea.eliminando,
+        eliminacionPendiente: linea.eliminacionPendiente,
+        reconexionBloqueada: linea.reconexionBloqueada,
+        estado: linea.estado,
+        etiqueta: linea.etiqueta
+    };
+    const socketAEliminar = linea.socket;
+    linea.eliminacionDatosEnCurso = true;
     linea.eliminando = true;
-    invalidarConexionActual(linea);
+    linea.eliminacionPendiente = true;
+    linea.reconexionBloqueada = true;
+    linea.estado = 'requiere_intervencion';
+    linea.etiqueta = 'caida';
+    try {
+        // La tombstone se confirma en disco antes de cerrar o borrar nada.
+        // Si este guardado falla, la línea sigue completamente operativa.
+        guardarLineas();
+    } catch (error) {
+        Object.assign(linea, estadoAnterior);
+        console.error(
+            `No se pudo iniciar la eliminación segura de ${linea.nombre}:`,
+            error?.message || error
+        );
+        return res.status(500).json({
+            codigo: 'ELIMINACION_NO_PERSISTIDA',
+            error:
+                'No se pudo guardar el bloqueo previo de la línea. No se eliminó ningún dato.'
+        });
+    }
+    cancelarSincronizacionHistorialAgendamiento(
+        id,
+        'La preparación se canceló porque la línea fue eliminada.'
+    );
+    cancelarTemporizadorReconexion(linea);
+    cancelarTemporizadorIntentoConexion(linea);
+    cancelarTemporizadorEstabilidadConexion(linea);
+    cancelarReintentoAudiencia(linea);
+    cancelarGuardadoActividadContactos(linea, true);
+    linea.generacionConexion = (Number(linea.generacionConexion) || 0) + 1;
+    linea.socket = null;
+    linea.jid = null;
+    linea.qr = null;
+    linea.iniciando = false;
+    linea.reconexionManualEnCurso = false;
+    reconexionesDiferidasCircuitBreaker.delete(id);
+    reconexionesDiferidasSincronizacionInicial.delete(id);
     limpiarActividadContactos(linea);
+    linea.mensajesRecientesAgendamiento?.clear?.();
+    linea.marcaAnalisisIA = null;
+    linea.cuarentenaAnalisisIA = [];
     if (linea.temporizadorResolverPendientesAgendamiento) {
         clearTimeout(linea.temporizadorResolverPendientesAgendamiento);
         linea.temporizadorResolverPendientesAgendamiento = null;
     }
+    let desvinculacionRemotaConfirmada = null;
+    if (socketAEliminar) {
+        let temporizadorLogout = null;
+        try {
+            desvinculacionRemotaConfirmada = await Promise.race([
+                Promise.resolve(socketAEliminar.logout()).then(() => true),
+                new Promise(resolve => {
+                    temporizadorLogout = setTimeout(
+                        () => resolve(false),
+                        5000
+                    );
+                    temporizadorLogout.unref?.();
+                })
+            ]);
+        } catch (error) {
+            console.warn(
+                `WhatsApp no confirmó el desvinculado remoto de ${linea.nombre}:`,
+                error?.message || error
+            );
+            desvinculacionRemotaConfirmada = false;
+        } finally {
+            if (temporizadorLogout) clearTimeout(temporizadorLogout);
+            cerrarSocketSeguro(
+                socketAEliminar,
+                'Eliminación segura de la línea'
+            );
+        }
+    }
+
+    const promesaCierreAutenticacion =
+        cerrarAlmacenAutenticacionLinea(linea);
     let temporizadorDrenaje = null;
-    await Promise.race([
+    const drenada = await Promise.race([
         Promise.allSettled([
             Promise.resolve(linea.promesaIngestaAgendamiento),
-            Promise.resolve(linea.promesaResolverPendientesAgendamiento)
-        ]),
+            Promise.resolve(linea.promesaResolverPendientesAgendamiento),
+            Promise.resolve(promesaCierreAutenticacion)
+        ]).then(resultados => ({
+            terminada: true,
+            cierreAutenticacionSeguro:
+                resultados[2]?.status === 'fulfilled'
+        })),
         new Promise(resolve => {
-            temporizadorDrenaje = setTimeout(resolve, 5000);
+            temporizadorDrenaje = setTimeout(() => resolve(null), 7000);
             temporizadorDrenaje.unref?.();
         })
     ]);
     if (temporizadorDrenaje) clearTimeout(temporizadorDrenaje);
+
+    if (!drenada?.cierreAutenticacionSeguro) {
+        cerrarSocketSeguro(
+            socketAEliminar,
+            'Eliminación pendiente por cierre de credenciales'
+        );
+        linea.eliminacionDatosEnCurso = false;
+        linea.ultimoError =
+            'La eliminación quedó pendiente porque el almacén de credenciales todavía se está cerrando.';
+        try {
+            guardarLineas();
+        } catch (errorGuardado) {
+            console.error(
+                `No se pudo persistir la eliminación pendiente de ${linea.nombre}:`,
+                errorGuardado?.message || errorGuardado
+            );
+        }
+        const requiereCierreSeguro =
+            (Number(
+                linea.contextoAutenticacion?.intentosCierreSocket
+            ) || 0) > 1;
+        return res.status(503).json({
+            codigo: requiereCierreSeguro
+                ? 'ELIMINACION_REQUIERE_CIERRE_SEGURO'
+                : 'ELIMINACION_EN_CURSO',
+            error: requiereCierreSeguro
+                ? 'El socket no confirmó su cierre tras varios intentos. Elegí Salir desde la bandeja, abrí ZeroOne nuevamente y reintentá la eliminación.'
+                : 'Las credenciales no confirmaron todavía su cierre seguro. Volvé a intentar la eliminación en unos segundos.'
+        });
+    }
 
     if (linea.temporizadorReconexion) {
         clearTimeout(linea.temporizadorReconexion);
         linea.temporizadorReconexion = null;
     }
 
-    cancelarReintentoAudiencia(linea);
-
     try {
-        if (linea.socket) await linea.socket.logout();
-    } catch (error) {
-        console.log(`No se pudo cerrar la sesión de ${linea.nombre}:`, error.message);
-    }
-
-    linea.socket = null;
-    lineas.delete(id);
-    try {
-        obtenerAlmacenMensajesRecientes()?.eliminarLinea(id);
-    } catch (error) {
-        console.warn('No se pudo limpiar el contexto local de la línea:', error?.message);
-    }
-    try {
-        servicioAgendamiento.eliminarLinea(
-            { id, nombre: linea.nombre },
-            { bloquearRecreacion: true }
-        );
-    } catch (error) {
-        console.warn('No se pudieron limpiar los datos de agendamiento de la línea:', error?.message);
-    }
-    guardarLineas();
-
-    try {
+        await eliminarRespaldosCifradosLinea(id);
         fs.rmSync(carpetaSesion, {
             recursive: true,
             force: true,
             maxRetries: 3,
             retryDelay: 300
         });
+        if (fs.existsSync(carpetaSesion)) {
+            throw new Error(
+                'La carpeta activa de la sesión no pudo eliminarse por completo.'
+            );
+        }
     } catch (error) {
-        console.error('No se pudo borrar la carpeta:', error);
+        linea.eliminacionDatosEnCurso = false;
+        linea.ultimoError =
+            'La eliminación segura de credenciales quedó incompleta. Volvé a intentarla.';
+        try {
+            guardarLineas();
+        } catch (errorGuardado) {
+            console.error(
+                `No se pudo persistir la eliminación pendiente de ${linea.nombre}:`,
+                errorGuardado?.message || errorGuardado
+            );
+        }
+        console.error(
+            `No se pudieron eliminar todos los datos seguros de ${linea.nombre}:`,
+            error?.message || error
+        );
+        return res.status(500).json({
+            codigo: 'ELIMINACION_DATOS_INCOMPLETA',
+            error:
+                'No se eliminaron todos los datos de sesión y respaldo. ' +
+                'La línea quedó bloqueada; volvé a intentar.'
+        });
     }
 
-    res.json({ mensaje: `La línea ${linea.nombre} fue eliminada.` });
+    try {
+        servicioAgendamiento.eliminarLinea(
+            { id, nombre: linea.nombre },
+            { forzar: true, bloquearRecreacion: true }
+        );
+        // guardar() rota el archivo anterior a .bak. Una segunda escritura
+        // hace que tanto el principal como su respaldo ya estén saneados.
+        servicioAgendamiento.guardar();
+        const rutaMensajes = path.join(
+            CARPETA_DATOS,
+            'agendamiento',
+            'mensajes-recientes.sqlite'
+        );
+        const hayBaseMensajes = [
+            rutaMensajes,
+            `${rutaMensajes}-wal`,
+            `${rutaMensajes}-shm`
+        ].some(ruta => fs.existsSync(ruta));
+        const almacenMensajes = obtenerAlmacenMensajesRecientes();
+        if (!almacenMensajes && hayBaseMensajes) {
+            throw new Error(
+                'El almacén de mensajes recientes no está disponible.'
+            );
+        }
+        almacenMensajes?.eliminarLinea(id);
+        sanearReferenciasPersistidasLineaEliminada(id);
+    } catch (error) {
+        linea.eliminacionDatosEnCurso = false;
+        linea.ultimoError =
+            'La sesión fue eliminada, pero la purga de datos auxiliares quedó incompleta.';
+        try {
+            guardarLineas();
+        } catch (errorGuardado) {
+            console.error(
+                `No se pudo persistir la eliminación pendiente de ${linea.nombre}:`,
+                errorGuardado?.message || errorGuardado
+            );
+        }
+        console.error(
+            `No se pudieron purgar todos los datos auxiliares de ${linea.nombre}:`,
+            error?.message || error
+        );
+        return res.status(500).json({
+            codigo: 'ELIMINACION_AUXILIAR_INCOMPLETA',
+            error:
+                'La línea permanece bloqueada porque faltó eliminar datos locales. ' +
+                'Volvé a intentar la eliminación.'
+        });
+    }
+
+    lineas.delete(id);
+    try {
+        guardarLineas();
+    } catch (error) {
+        lineas.set(id, linea);
+        linea.eliminacionDatosEnCurso = false;
+        linea.ultimoError =
+            'Los datos fueron purgados, pero no se pudo confirmar la eliminación en el registro de líneas.';
+        console.error(
+            `No se pudo finalizar la eliminación de ${linea.nombre}:`,
+            error?.message || error
+        );
+        return res.status(500).json({
+            codigo: 'ELIMINACION_REGISTRO_PENDIENTE',
+            error:
+                'Los datos sensibles ya se purgaron, pero falta actualizar el registro local. Reintentá la eliminación.'
+        });
+    }
+
+    res.json({
+        mensaje: `La línea ${linea.nombre} fue eliminada.`,
+        desvinculacionRemotaConfirmada
+    });
 });
 
 app.use((error, req, res, next) => {
@@ -10368,8 +12267,159 @@ app.use((error, req, res, next) => {
     });
 });
 
+function prepararCierreBackend() {
+    if (cerrandoBackend) return;
+    cerrandoBackend = true;
+
+    gestorRespaldosSesiones?.cerrar?.();
+    solicitarAltoTotalPublicacion();
+    cancelarReanudacionCircuitBreaker();
+    reconexionesDiferidasCircuitBreaker.clear();
+
+    for (const trabajo of trabajosProgramados.values()) {
+        try { trabajo.cancel?.(); } catch {}
+    }
+    trabajosProgramados.clear();
+
+    try { servicioAgendamiento.detenerSincronizacion?.(); } catch {}
+    try { tareaAnalisisIA?.controlador?.abort?.(); } catch {}
+
+    const lineaHistorial =
+        sincronizacionHistorialAgendamientoActiva?.lineaId;
+    if (lineaHistorial) {
+        cancelarSincronizacionHistorialAgendamiento(
+            lineaHistorial,
+            'La aplicación se está cerrando.'
+        );
+    }
+
+    if (temporizadorGuardadoHistorialAgendamiento) {
+        clearTimeout(temporizadorGuardadoHistorialAgendamiento);
+        temporizadorGuardadoHistorialAgendamiento = null;
+    }
+
+    for (const linea of lineas.values()) {
+        cancelarTemporizadorReconexion(linea);
+        cancelarTemporizadorIntentoConexion(linea);
+        cancelarTemporizadorEstabilidadConexion(linea);
+        cancelarReintentoAudiencia(linea);
+        cancelarGuardadoActividadContactos(linea, true);
+        if (linea.temporizadorResolverPendientesAgendamiento) {
+            clearTimeout(linea.temporizadorResolverPendientesAgendamiento);
+            linea.temporizadorResolverPendientesAgendamiento = null;
+        }
+    }
+}
+
+function detenerSocketsParaCierreBackend() {
+    for (const linea of lineas.values()) {
+        cerrarSocketSeguro(
+            linea.socket,
+            'Cierre seguro de ZeroOne'
+        );
+    }
+}
+
+function cerrarBackendSeguro(timeoutMs = 12000) {
+    prepararCierreBackend();
+
+    if (!promesaCierreBackend) {
+        const operacion = (async () => {
+            // Alto total impide aceptar más trabajo. La cola ya aceptada debe
+            // terminar de verdad para conservar IDs y no duplicar estados en
+            // el siguiente inicio.
+            await Promise.resolve(colaPublicaciones).catch(() => {});
+
+            // Las revocaciones de estados se ejecutan fuera de la cola de
+            // publicaciones. Se esperan por separado para persistir tanto la
+            // clave enviada como cualquier error antes de cerrar los sockets.
+            while (tareasEliminacionEstadosEnCurso.size > 0) {
+                await Promise.allSettled([
+                    ...tareasEliminacionEstadosEnCurso
+                ]);
+            }
+
+            // Una apertura que comenzó justo antes del cierre puede estar
+            // esperando DPAPI/disco sin haber publicado aún su store en la
+            // línea. Se drena antes de enumerar almacenes y sockets.
+            while (iniciosConexionEnCurso.size > 0) {
+                await Promise.allSettled([...iniciosConexionEnCurso]);
+            }
+
+            // Solo después se detienen los emisores de creds.update. Cada
+            // almacén espera la confirmación de cierre de su propio socket.
+            detenerSocketsParaCierreBackend();
+
+            const lineasACerrar = Array.from(lineas.values());
+            const resultados = await Promise.allSettled(
+                lineasACerrar.map(linea =>
+                    cerrarAlmacenAutenticacionLinea(linea)
+                )
+            );
+            const seguro = resultados.every((resultado, indice) =>
+                resultado.status === 'fulfilled' &&
+                !lineasACerrar[indice]?.falloPersistenciaCredenciales
+            );
+            if (!seguro) return false;
+
+            try {
+                servicioAgendamiento.cerrar();
+            } catch (error) {
+                console.error(
+                    'No se pudo cerrar el servicio de agendamiento:',
+                    error?.message || error
+                );
+                return false;
+            }
+            return true;
+        })();
+
+        promesaCierreBackend = operacion;
+        operacion.then(
+            resultado => {
+                if (resultado !== true && promesaCierreBackend === operacion) {
+                    promesaCierreBackend = null;
+                }
+            },
+            () => {
+                if (promesaCierreBackend === operacion) {
+                    promesaCierreBackend = null;
+                }
+            }
+        );
+    }
+
+    const limite = Math.max(1000, Number(timeoutMs) || 12000);
+    const operacionEnCurso = promesaCierreBackend;
+    let temporizadorLimite = null;
+    return Promise.race([
+        operacionEnCurso,
+        new Promise(resolve => {
+            temporizadorLimite = setTimeout(() => resolve(false), limite);
+            temporizadorLimite.unref?.();
+        })
+    ]).finally(() => {
+        if (temporizadorLimite) clearTimeout(temporizadorLimite);
+    });
+}
+
+function cerrarBackendInmediato() {
+    prepararCierreBackend();
+    detenerSocketsParaCierreBackend();
+    for (const linea of lineas.values()) {
+        cerrarAlmacenAutenticacionLinea(linea);
+    }
+}
+
+global.zerooneBackend = {
+    cerrarYEsperar: cerrarBackendSeguro,
+    cerrarInmediato: cerrarBackendInmediato
+};
+
 process.once('exit', () => {
     runtimeIALocal.detener();
+    gestorRespaldosSesiones?.cerrar?.();
+    gestorRespaldosSesiones = null;
     almacenMensajesRecientes?.cerrar();
     almacenMensajesRecientes = null;
     try {
@@ -10382,6 +12432,7 @@ process.once('exit', () => {
     }
 
     for (const linea of lineas.values()) {
+        cerrarAlmacenAutenticacionLinea(linea);
         if (
             !linea.actividadContactosCargada ||
             !linea.actividadContactosSucia
@@ -10392,6 +12443,568 @@ process.once('exit', () => {
         cancelarGuardadoActividadContactos(linea, true);
     }
 });
+
+const TIEMPO_MAXIMO_PREPARACION_INICIAL_LINEA_MS = 90 * 1000;
+const ESTADOS_TERMINALES_PREPARACION_INICIAL = new Set([
+    'error',
+    'sesion_cerrada',
+    'requiere_intervencion'
+]);
+
+function obtenerProtectorLocalSesiones() {
+    if (protectorSesionesLocal) return protectorSesionesLocal;
+    const safeStorage = require('electron')?.safeStorage;
+    protectorSesionesLocal = createLocalKeyProtector({ safeStorage });
+    return protectorSesionesLocal;
+}
+
+function ejecutarPreparacionAutenticacionCifrada(operacion) {
+    const actual = colaPreparacionAutenticacionCifrada
+        .catch(() => {})
+        .then(operacion);
+    colaPreparacionAutenticacionCifrada = actual.catch(() => {});
+    return actual;
+}
+
+function credencialesInicialesBaileysValidas(credenciales) {
+    return Boolean(
+        credenciales &&
+        typeof credenciales === 'object' &&
+        credenciales.noiseKey &&
+        credenciales.signedIdentityKey &&
+        credenciales.signedPreKey &&
+        Number.isInteger(Number(credenciales.registrationId))
+    );
+}
+
+function listarMaterialAutenticacionPlano(carpetaSesion) {
+    if (!fs.existsSync(carpetaSesion)) return [];
+    const excluidos = new Set([
+        'audiencia-estados.json',
+        'actividad-contactos.json',
+        MARCADOR_AUTENTICACION_CIFRADA,
+        'zeroone-auth-key.json'
+    ]);
+    return fs.readdirSync(carpetaSesion, { withFileTypes: true })
+        .filter(entrada =>
+            entrada.isFile() &&
+            entrada.name.endsWith('.json') &&
+            !excluidos.has(entrada.name)
+        )
+        .map(entrada => entrada.name);
+}
+
+async function crearEstadoAutenticacionPlano(linea, carpetaSesion) {
+    const rutaCredenciales = path.join(carpetaSesion, 'creds.json');
+    const existeCredenciales = fs.existsSync(rutaCredenciales);
+    let credenciales = null;
+
+    if (existeCredenciales) {
+        try {
+            credenciales = JSON.parse(
+                fs.readFileSync(rutaCredenciales, 'utf8'),
+                BufferJSON.reviver
+            );
+        } catch (error) {
+            const fallo = new Error(
+                'Las credenciales existentes no contienen JSON válido; ' +
+                'no se generará una sesión nueva.'
+            );
+            fallo.code = 'AUTH_PLAINTEXT_CREDS_INVALID';
+            fallo.cause = error;
+            throw fallo;
+        }
+    }
+
+    const identidadPresente = Boolean(credenciales?.me?.id);
+    const vinculacionPermitida = linea?.vinculacionPendiente === true;
+    const materialExistente = listarMaterialAutenticacionPlano(carpetaSesion);
+
+    if (!identidadPresente) {
+        if (!vinculacionPermitida) {
+            const fallo = new Error(
+                'Falta la identidad de una línea previamente registrada; ' +
+                'no se generará un QR automático.'
+            );
+            fallo.code = 'AUTH_PLAINTEXT_IDENTITY_MISSING';
+            throw fallo;
+        }
+        if (
+            existeCredenciales &&
+            !credencialesInicialesBaileysValidas(credenciales)
+        ) {
+            const fallo = new Error(
+                'El archivo de vinculación inicial está incompleto.'
+            );
+            fallo.code = 'AUTH_PLAINTEXT_CREDS_INVALID';
+            throw fallo;
+        }
+        if (!existeCredenciales && materialExistente.length > 0) {
+            const fallo = new Error(
+                'Falta creds.json pero existen claves de una sesión anterior.'
+            );
+            fallo.code = 'AUTH_PLAINTEXT_CREDS_MISSING';
+            throw fallo;
+        }
+    }
+
+    const autenticacion = await useMultiFileAuthState(carpetaSesion);
+    if (
+        identidadPresente &&
+        autenticacion.state?.creds?.me?.id !== credenciales.me.id
+    ) {
+        const fallo = new Error(
+            'Baileys no pudo conservar la identidad guardada de la sesión.'
+        );
+        fallo.code = 'AUTH_PLAINTEXT_IDENTITY_CHANGED';
+        throw fallo;
+    }
+    return {
+        state: autenticacion.state,
+        saveCreds: autenticacion.saveCreds,
+        confirmarIdentidad: null,
+        cerrar: null,
+        pausarParaRespaldo: null,
+        encrypted: false
+    };
+}
+
+async function obtenerEstadoAutenticacionLinea(linea, carpetaSesion) {
+    try {
+        await Promise.resolve(linea?.promesaCierreAlmacenAutenticacion);
+    } catch (error) {
+        const fallo = new Error(
+            'El almacén anterior no confirmó su cierre; la sesión no se reabrirá.'
+        );
+        fallo.code = 'AUTH_PREVIOUS_STORE_CLOSE_FAILED';
+        fallo.cause = error;
+        throw fallo;
+    }
+
+    if (linea?.falloPersistenciaCredenciales) {
+        const fallo = new Error(
+            'Una actualización anterior de credenciales no pudo guardarse; ' +
+            'la sesión no se reabrirá automáticamente.'
+        );
+        fallo.code = 'AUTH_CREDENTIALS_SAVE_FAILED';
+        throw fallo;
+    }
+
+    const rutaMarcador = path.join(
+        carpetaSesion,
+        MARCADOR_AUTENTICACION_CIFRADA
+    );
+    const yaCifrada = fs.existsSync(rutaMarcador);
+    const migracionAutorizada =
+        lineasAutorizadasMigracionCifrada.has(linea.id);
+    const vinculacionCifradaAutorizada =
+        linea?.vinculacionPendiente === true;
+
+    // Una sesión antigua solo se migra después de haber creado y abierto
+    // correctamente una copia cifrada. Si la copia falló, Baileys conserva
+    // exactamente el formato anterior y la línea puede seguir funcionando.
+    if (
+        !yaCifrada &&
+        !migracionAutorizada &&
+        !vinculacionCifradaAutorizada
+    ) {
+        return crearEstadoAutenticacionPlano(linea, carpetaSesion);
+    }
+
+    let protector;
+    try {
+        protector = obtenerProtectorLocalSesiones();
+    } catch (error) {
+        if (yaCifrada || vinculacionCifradaAutorizada) throw error;
+        console.warn(
+            `No se cifró la sesión de ${linea.nombre}; ` +
+            'se conservó intacta porque Windows no ofreció un protector seguro.'
+        );
+        return crearEstadoAutenticacionPlano(linea, carpetaSesion);
+    }
+
+    const abrirCifrada = migrarLegado =>
+        crearEstadoAutenticacionCifrado({
+            folder: carpetaSesion,
+            protector,
+            BufferJSON,
+            initAuthCreds,
+            proto,
+            migrarLegado,
+            permitirVinculacionInicial: vinculacionCifradaAutorizada
+        });
+
+    try {
+        if (!yaCifrada) {
+            // La autorización pertenece exclusivamente a la ventana de
+            // arranque, antes de abrir el primer socket de esta línea. No se
+            // reutiliza durante una reconexión posterior.
+            lineasAutorizadasMigracionCifrada.delete(linea.id);
+        }
+        const autenticacion = await ejecutarPreparacionAutenticacionCifrada(
+            () => abrirCifrada(!yaCifrada && migracionAutorizada)
+        );
+        return {
+            state: autenticacion.state,
+            saveCreds: autenticacion.saveCreds,
+            confirmarIdentidad: autenticacion.confirmarIdentidad,
+            cerrar: autenticacion.close,
+            pausarParaRespaldo: autenticacion.pausarParaRespaldo,
+            encrypted: autenticacion.encrypted === true
+        };
+    } catch (error) {
+        const marcadorCreado = fs.existsSync(rutaMarcador);
+
+        // Si la migración alcanzó a confirmar el marcador, hacemos una
+        // sola reapertura limpia. Nunca retrocedemos al texto plano desde una
+        // sesión que ya fue declarada cifrada.
+        if (!yaCifrada && marcadorCreado) {
+            const autenticacion = await ejecutarPreparacionAutenticacionCifrada(
+                () => abrirCifrada(false)
+            );
+            return {
+                state: autenticacion.state,
+                saveCreds: autenticacion.saveCreds,
+                confirmarIdentidad: autenticacion.confirmarIdentidad,
+                cerrar: autenticacion.close,
+                pausarParaRespaldo: autenticacion.pausarParaRespaldo,
+                encrypted: true
+            };
+        }
+        if (
+            yaCifrada ||
+            marcadorCreado ||
+            vinculacionCifradaAutorizada
+        ) throw error;
+
+        console.error(
+            `No se pudo migrar la sesión de ${linea.nombre} al almacén cifrado. ` +
+            'La copia verificada y los archivos originales se conservaron:',
+            error?.message || error
+        );
+        return crearEstadoAutenticacionPlano(linea, carpetaSesion);
+    }
+}
+
+function esFalloSeguridadAutenticacion(error) {
+    const codigo = String(error?.code || '');
+    return codigo.startsWith('AUTH_') ||
+        codigo.startsWith('KEY_') ||
+        codigo.startsWith('PASSPHRASE_');
+}
+
+function obtenerGestorRespaldosSesiones() {
+    if (gestorRespaldosSesiones) return gestorRespaldosSesiones;
+
+    try {
+        const protector = obtenerProtectorLocalSesiones();
+        gestorRespaldosSesiones = crearGestorRespaldosSesiones({
+            carpetaSesiones: CARPETA_SESIONES,
+            carpetaRespaldos: CARPETA_RESPALDOS_SESIONES,
+            protector,
+            intervaloMs: 24 * 60 * 60 * 1000,
+            retencionPorLinea: 3,
+            alActualizar: respaldo => {
+                if (!sincronizacionInicialActiva()) return;
+                const total = Number(respaldo.total) || 0;
+                const procesadas = Number(respaldo.procesadas) || 0;
+                estadoSincronizacionInicial = {
+                    ...estadoSincronizacionInicial,
+                    activa: true,
+                    completada: false,
+                    fase: 'respaldos_cifrados',
+                    total,
+                    procesadas,
+                    listas: Number(respaldo.creadas) || 0,
+                    omitidas:
+                        (Number(respaldo.omitidas) || 0) +
+                        (Number(respaldo.fallidas) || 0),
+                    loteActual: 0,
+                    totalLotes: 0,
+                    porcentaje: total > 0
+                        ? Math.round((procesadas / total) * 100)
+                        : 100,
+                    mensaje: respaldo.mensaje
+                };
+            }
+        });
+        return gestorRespaldosSesiones;
+    } catch (error) {
+        console.error(
+            'Los respaldos cifrados no están disponibles:',
+            error?.message || error
+        );
+        return null;
+    }
+}
+
+function diferirReconexionHastaFinalizarInicio(
+    linea,
+    retrasoMs = 0,
+    mensaje = null,
+    codigo = null
+) {
+    if (!linea || linea.reconexionBloqueada || linea.eliminando) return;
+
+    if (linea.temporizadorReconexion) {
+        clearTimeout(linea.temporizadorReconexion);
+        linea.temporizadorReconexion = null;
+    }
+    const ejecutarEn = Date.now() + Math.max(0, Number(retrasoMs) || 0);
+    linea.estado = 'reconectando';
+    linea.etiqueta = 'caida';
+    linea.conexionEnVerificacion = false;
+    if (mensaje) linea.ultimoError = String(mensaje);
+    if (codigo !== null && codigo !== undefined) {
+        linea.ultimoCodigoDesconexion = Number.isFinite(Number(codigo))
+            ? Number(codigo)
+            : linea.ultimoCodigoDesconexion;
+    }
+    linea.proximoIntentoReconexion = new Date(ejecutarEn).toISOString();
+    reconexionesDiferidasSincronizacionInicial.set(linea.id, {
+        lineaId: linea.id,
+        mensaje: mensaje || linea.ultimoError ||
+            'Reconexión pendiente restaurada.',
+        codigo: codigo ?? linea.ultimoCodigoDesconexion,
+        ejecutarEn
+    });
+    guardarLineas();
+}
+
+function reactivarReconexionesDiferidasDelInicio() {
+    if (tareaReactivacionInicio) return false;
+    const pendientes = [...reconexionesDiferidasSincronizacionInicial.values()]
+        .sort((a, b) => a.ejecutarEn - b.ejecutarEn);
+    reconexionesDiferidasSincronizacionInicial.clear();
+    if (!pendientes.length) return true;
+
+    tareaReactivacionInicio = reactivarReconexionesControladas(pendientes)
+        .catch(error => {
+            console.error(
+                'Falló la reactivación controlada posterior al inicio:',
+                error?.message || error
+            );
+        })
+        .finally(() => {
+            tareaReactivacionInicio = null;
+            if (reconexionesDiferidasSincronizacionInicial.size > 0) {
+                setImmediate(reactivarReconexionesDiferidasDelInicio);
+            }
+        });
+    return true;
+}
+
+function resultadoPreparacionInicialLinea(linea) {
+    if (!linea || !lineas.has(linea.id)) {
+        return { terminado: true, lista: false, estado: 'no_disponible' };
+    }
+    if (linea.reconexionBloqueada || linea.eliminando) {
+        return { terminado: true, lista: false, estado: 'requiere_intervencion' };
+    }
+    if (linea.qr) {
+        return { terminado: true, lista: false, estado: 'esperando_qr' };
+    }
+    if (ESTADOS_TERMINALES_PREPARACION_INICIAL.has(linea.estado)) {
+        return { terminado: true, lista: false, estado: linea.estado };
+    }
+    if (
+        linea.estado === 'conectado' &&
+        linea.socket &&
+        audienciaEstadosLista(linea)
+    ) {
+        return { terminado: true, lista: true, estado: 'lista' };
+    }
+    if (
+        linea.estado === 'conectado' &&
+        !linea.resincronizandoAudiencia &&
+        !linea.temporizadorAudiencia &&
+        (Number(linea.intentosResincronizacionAudiencia) || 0) >=
+            MAXIMOS_INTENTOS_AUDIENCIA
+    ) {
+        return { terminado: true, lista: false, estado: 'audiencia_pendiente' };
+    }
+
+    return { terminado: false, lista: false, estado: linea.estado || 'iniciando' };
+}
+
+async function prepararLineaAlInicioInterna(linea) {
+    if (!linea || linea.reconexionBloqueada || linea.eliminando) {
+        return { lista: false, estado: 'requiere_intervencion' };
+    }
+
+    const circuitBreaker = obtenerCircuitBreakerReconexionesActivo();
+    if (circuitBreaker) {
+        diferirReconexionPorCircuitBreaker(
+            linea,
+            'La conexión inicial quedó pausada por el corte global de seguridad.',
+            circuitBreaker.codigo,
+            circuitBreaker
+        );
+        return { lista: false, estado: 'circuit_breaker' };
+    }
+
+    const proximoIntento = Date.parse(linea.proximoIntentoReconexion || '');
+    if (Number.isFinite(proximoIntento) && proximoIntento > Date.now()) {
+        diferirReconexionHastaFinalizarInicio(
+            linea,
+            proximoIntento - Date.now()
+        );
+        return { lista: false, estado: 'reconexion_programada' };
+    }
+
+    const limite = Date.now() + TIEMPO_MAXIMO_PREPARACION_INICIAL_LINEA_MS;
+    const inicio = Promise.resolve(iniciarWhatsApp(linea.id)).then(
+        () => 'completado',
+        () => 'completado'
+    );
+    let temporizadorInicio = null;
+    const resultadoInicio = await Promise.race([
+        inicio,
+        new Promise(resolve => {
+            temporizadorInicio = setTimeout(
+                () => resolve('tiempo_agotado'),
+                TIEMPO_MAXIMO_PREPARACION_INICIAL_LINEA_MS
+            );
+            temporizadorInicio.unref?.();
+        })
+    ]);
+    if (temporizadorInicio) clearTimeout(temporizadorInicio);
+
+    if (resultadoInicio === 'tiempo_agotado') {
+        invalidarConexionActual(linea);
+        linea.iniciando = false;
+        linea.socket = null;
+        linea.jid = null;
+        linea.qr = null;
+        linea.estado = 'desconectado';
+        diferirReconexionHastaFinalizarInicio(linea, 3000);
+        return { lista: false, estado: 'tiempo_agotado' };
+    }
+
+    while (Date.now() < limite) {
+        const resultado = resultadoPreparacionInicialLinea(linea);
+        if (resultado.terminado) return resultado;
+        await esperar(250);
+    }
+
+    const intentoPendiente = Date.parse(linea.proximoIntentoReconexion || '');
+    if (
+        !linea.reconexionBloqueada &&
+        linea.estado !== 'conectado'
+    ) {
+        diferirReconexionHastaFinalizarInicio(
+            linea,
+            Number.isFinite(intentoPendiente)
+                ? Math.max(0, intentoPendiente - Date.now())
+                : 3000
+        );
+    }
+    return { lista: false, estado: 'tiempo_agotado' };
+}
+
+async function prepararLineaAlInicio(linea) {
+    if (!linea?.id) return prepararLineaAlInicioInterna(linea);
+    lineasAutorizadasTandaInicial.add(linea.id);
+    try {
+        return await prepararLineaAlInicioInterna(linea);
+    } finally {
+        lineasAutorizadasTandaInicial.delete(linea.id);
+    }
+}
+
+async function iniciarSincronizacionInicialPorLotes() {
+    sincronizacionInicialEnEjecucion = true;
+    const lineasOrdenadas = Array.from(lineas.values()).sort(
+        (a, b) =>
+            (Number(a.ordenConexion) || 0) -
+            (Number(b.ordenConexion) || 0)
+    );
+
+    const gestorRespaldos = obtenerGestorRespaldosSesiones();
+    const lineasRespaldables = lineasOrdenadas.filter(
+        linea => !linea.eliminando && !linea.eliminacionPendiente
+    );
+
+    try {
+        lineasAutorizadasMigracionCifrada.clear();
+        if (gestorRespaldos) {
+            try {
+                // Una tombstone sobreviviente nunca vuelve a generar copias.
+                // Sus respaldos previos se eliminan antes de revisar el resto.
+                for (const linea of lineasOrdenadas) {
+                    if (lineasRespaldables.includes(linea)) continue;
+                    try {
+                        await gestorRespaldos.eliminarLinea(linea.id);
+                    } catch (error) {
+                        // El gestor bloquea el ID antes de tocar el disco. Un
+                        // archivo trabado no debe impedir proteger las otras
+                        // sesiones activas.
+                        console.error(
+                            `No se pudieron purgar los respaldos pendientes de ${linea.nombre}:`,
+                            error?.message || error
+                        );
+                    }
+                }
+                await gestorRespaldos.ejecutar(lineasRespaldables);
+                for (const linea of lineasRespaldables) {
+                    const carpetaSesion = resolverCarpetaSesionSegura(linea.id);
+                    if (
+                        carpetaSesion &&
+                        !fs.existsSync(path.join(
+                            carpetaSesion,
+                            MARCADOR_AUTENTICACION_CIFRADA
+                        )) &&
+                        gestorRespaldos.tieneRespaldoVerificado(linea.id)
+                    ) {
+                        lineasAutorizadasMigracionCifrada.add(linea.id);
+                    }
+                }
+            } catch (error) {
+                console.error(
+                    'La verificación general de respaldos falló; ' +
+                    'las sesiones sin copia confirmada no se migrarán:',
+                    error?.message || error
+                );
+            }
+        }
+
+        coordinadorSincronizacionInicial = crearCoordinadorSincronizacionInicial({
+            tamanoLote: 10,
+            procesarLinea: prepararLineaAlInicio,
+            alActualizar: estado => {
+                estadoSincronizacionInicial = estado;
+            }
+        });
+        const resultado = await coordinadorSincronizacionInicial.ejecutar(
+            lineasOrdenadas
+        );
+        return resultado;
+    } catch (error) {
+        estadoSincronizacionInicial = {
+            ...estadoSincronizacionInicial,
+            activa: false,
+            completada: true,
+            finalizadaEn: new Date().toISOString(),
+            mensaje:
+                'La preparación inicial terminó con un error aislado. ' +
+                'Revisá las líneas pendientes.'
+        };
+        console.error(
+            'No se pudo completar la preparación inicial por tandas:',
+            error?.message || error
+        );
+        return estadoSincronizacionInicial;
+    } finally {
+        lineasAutorizadasTandaInicial.clear();
+        sincronizacionInicialEnEjecucion = false;
+        reactivarReconexionesDiferidasDelInicio();
+        gestorRespaldos?.iniciarVerificacionPeriodica(() =>
+            Array.from(lineas.values()).filter(
+                linea => !linea.eliminando && !linea.eliminacionPendiente
+            )
+        );
+    }
+}
 
 app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     console.log(
@@ -10405,21 +13018,16 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     cargarHistorial();
     cargarLineasGuardadas();
 
-    for (const linea of lineas.values()) {
-        if (linea.reconexionBloqueada) continue;
-
-        const proximoIntento = Date.parse(linea.proximoIntentoReconexion || '');
-        if (Number.isFinite(proximoIntento)) {
-            programarReconexionAutomatica(
-                linea.id,
-                linea.ultimoError || 'Reconexión pendiente restaurada.',
-                linea.ultimoCodigoDesconexion,
-                Math.max(0, proximoIntento - Date.now())
+    iniciarSincronizacionInicialPorLotes()
+        .catch(error => {
+            console.error(
+                'Falló la preparación inicial de conexiones:',
+                error?.message || error
             );
-        } else {
-            iniciarWhatsApp(linea.id);
-        }
-    }
-
-    cargarProgramaciones();
+        })
+        .finally(() => {
+            // Las tareas programadas se habilitan recién después de validar
+            // la última tanda, evitando publicaciones durante el arranque.
+            cargarProgramaciones();
+        });
 });

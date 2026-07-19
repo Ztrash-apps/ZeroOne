@@ -18,7 +18,7 @@ const TIPO_ON_DEMAND =
 const TIPO_RECIENTE =
     baileysReal.proto.HistorySync.HistorySyncType.RECENT;
 
-function datosLinea(id, nombre, ordenConexion) {
+function datosLinea(id, nombre, ordenConexion, vinculacionPendiente = true) {
     return {
         id,
         nombre,
@@ -26,7 +26,8 @@ function datosLinea(id, nombre, ordenConexion) {
         etiqueta: 'activa',
         intentosReconexion: 0,
         conexionEnVerificacion: false,
-        reconexionBloqueada: false
+        reconexionBloqueada: false,
+        vinculacionPendiente
     };
 }
 
@@ -39,11 +40,35 @@ function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
     fs.writeFileSync(
         path.join(rutaDatos, 'sesiones', 'lineas.json'),
         JSON.stringify([
-            datosLinea(ID_UNO, 'Línea uno', 1),
-            datosLinea(ID_DOS, 'Línea dos', 2)
+            datosLinea(
+                ID_UNO,
+                'Línea uno',
+                1,
+                sesionesRegistradas.get(ID_UNO) !== true
+            ),
+            datosLinea(
+                ID_DOS,
+                'Línea dos',
+                2,
+                sesionesRegistradas.get(ID_DOS) !== true
+            )
         ]),
         'utf8'
     );
+    for (const [id, registrada] of sesionesRegistradas) {
+        if (!registrada) continue;
+        const carpetaSesion = path.join(rutaDatos, 'sesiones', id);
+        fs.mkdirSync(carpetaSesion, { recursive: true });
+        const credenciales = baileysReal.initAuthCreds();
+        credenciales.me = {
+            id: '595999999999:1@s.whatsapp.net',
+            name: id
+        };
+        fs.writeFileSync(
+            path.join(carpetaSesion, 'creds.json'),
+            JSON.stringify(credenciales, baileysReal.BufferJSON.replacer)
+        );
+    }
 
     const configuraciones = [];
     const sockets = [];
@@ -90,6 +115,12 @@ function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
             useMultiFileAuthState: async carpeta => ({
                 state: {
                     creds: {
+                        me: sesionesRegistradas.get(path.basename(carpeta)) === true
+                            ? {
+                                id: '595999999999:1@s.whatsapp.net',
+                                name: path.basename(carpeta)
+                            }
+                            : undefined,
                         registered:
                             sesionesRegistradas.get(path.basename(carpeta)) ===
                             true
@@ -102,6 +133,10 @@ function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
 
     try {
         const fuente = original.slice(0, corte) + `
+            protectorSesionesLocal = require('./session-security')
+                .createPassphraseKeyProtector(
+                    'protector local exclusivo para pruebas internas'
+                );
             module.exports = {
                 cargarLineasGuardadas,
                 iniciarWhatsApp,

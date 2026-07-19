@@ -5,7 +5,8 @@ const {
     Menu,
     Notification,
     safeStorage,
-    shell
+    shell,
+    Tray
 } = require('electron');
 
 const path = require('path');
@@ -17,6 +18,7 @@ const NOMBRE_APLICACION = 'ZeroOne';
 const URL_APLICACION = 'http://127.0.0.1:3000';
 const ORIGEN_APLICACION = new URL(URL_APLICACION).origin;
 const INTERVALO_ACTUALIZACIONES = 5 * 60 * 60 * 1000;
+const ARGUMENTO_INICIO_WINDOWS = '--inicio-windows';
 const RUTA_ICONO = path.join(
     __dirname,
     'public',
@@ -28,16 +30,22 @@ const MODO_DESARROLLO_WEB = !app.isPackaged &&
 const TOKEN_SESION_ESCRITORIO = MODO_DESARROLLO_WEB
     ? ''
     : crypto.randomBytes(32).toString('base64url');
+const INICIO_DESDE_WINDOWS = process.argv.includes(
+    ARGUMENTO_INICIO_WINDOWS
+);
 
 app.setName(NOMBRE_APLICACION);
 process.env.ZEROONE_DESKTOP_TOKEN = TOKEN_SESION_ESCRITORIO;
 
 let ventanaPrincipal = null;
+let bandejaSistema = null;
 let temporizadorActualizaciones = null;
 let busquedaEnCurso = false;
 let descargaEnCurso = false;
 let cierreAplicacionEnCurso = false;
 let cierreAplicacionCompletado = false;
+let salidaSolicitada = false;
+let mostrarVentanaSolicitada = !INICIO_DESDE_WINDOWS;
 const sesionesEndurecidas = new WeakSet();
 const sesionesAutorizadas = new WeakSet();
 
@@ -276,14 +284,180 @@ function mostrarNotificacion(titulo, cuerpo) {
     });
 
     notificacion.on('click', () => {
-        if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) return;
-        if (ventanaPrincipal.isMinimized()) ventanaPrincipal.restore();
-        ventanaPrincipal.show();
-        ventanaPrincipal.focus();
+        mostrarVentanaPrincipal();
     });
 
     notificacion.show();
     return { correcto: true };
+}
+
+function mostrarVentanaPrincipal() {
+    if (salidaSolicitada || cierreAplicacionEnCurso) return;
+    mostrarVentanaSolicitada = true;
+    if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) {
+        if (app.isReady() && !salidaSolicitada) {
+            crearVentana({ mostrarAlCargar: true });
+        }
+        return;
+    }
+
+    if (ventanaPrincipal.isMinimized()) {
+        ventanaPrincipal.restore();
+    }
+
+    ventanaPrincipal.show();
+    ventanaPrincipal.focus();
+}
+
+function ocultarVentanaPrincipal() {
+    mostrarVentanaSolicitada = false;
+    if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) return;
+    ventanaPrincipal.hide();
+}
+
+function inicioConWindowsDisponible() {
+    return process.platform === 'win32' && app.isPackaged;
+}
+
+function obtenerInicioConWindows() {
+    if (!inicioConWindowsDisponible()) return false;
+
+    return app.getLoginItemSettings({
+        path: process.execPath,
+        args: [ARGUMENTO_INICIO_WINDOWS]
+    }).openAtLogin === true;
+}
+
+function guardarPreferenciaInicioWindows(activo) {
+    if (!inicioConWindowsDisponible()) return;
+
+    const ruta = path.join(
+        app.getPath('userData'),
+        'inicio-windows.json'
+    );
+    fs.writeFileSync(
+        ruta,
+        JSON.stringify({
+            configurado: true,
+            activo: activo === true
+        })
+    );
+}
+
+function establecerInicioConWindows(activo) {
+    if (!inicioConWindowsDisponible()) return false;
+
+    app.setLoginItemSettings({
+        openAtLogin: activo === true,
+        path: process.execPath,
+        args: [ARGUMENTO_INICIO_WINDOWS]
+    });
+
+    const resultado = obtenerInicioConWindows();
+    guardarPreferenciaInicioWindows(resultado);
+    return resultado;
+}
+
+function configurarInicioWindowsPredeterminado() {
+    if (!inicioConWindowsDisponible()) return;
+
+    const ruta = path.join(
+        app.getPath('userData'),
+        'inicio-windows.json'
+    );
+    if (fs.existsSync(ruta)) return;
+
+    // La primera ejecución de esta versión adopta el comportamiento
+    // solicitado también para instalaciones actualizadas. Después el usuario
+    // conserva control total desde el menú de la bandeja.
+    establecerInicioConWindows(true);
+}
+
+function solicitarSalidaAplicacion() {
+    salidaSolicitada = true;
+    app.quit();
+}
+
+function prepararSalidaRapidaDelSistema() {
+    salidaSolicitada = true;
+    if (temporizadorActualizaciones) {
+        clearInterval(temporizadorActualizaciones);
+        temporizadorActualizaciones = null;
+    }
+    try {
+        global.zerooneBackend?.cerrarInmediato?.();
+    } catch (error) {
+        console.error(
+            'No se pudo iniciar el cierre inmediato del backend:',
+            error?.message || error
+        );
+    }
+    try {
+        global.zerooneIaLocal?.detener?.();
+    } catch (error) {
+        console.error(
+            'No se pudo detener inmediatamente el motor de IA:',
+            error?.message || error
+        );
+    }
+    try {
+        global.zerooneAlmacenMensajes?.cerrar?.();
+        global.zerooneAlmacenMensajes = null;
+    } catch (error) {
+        console.error(
+            'No se pudo cerrar inmediatamente el almacén local:',
+            error?.message || error
+        );
+    }
+}
+
+function crearBandejaSistema() {
+    if (bandejaSistema && !bandejaSistema.isDestroyed()) {
+        return bandejaSistema;
+    }
+
+    bandejaSistema = new Tray(RUTA_ICONO);
+    bandejaSistema.setToolTip(NOMBRE_APLICACION);
+
+    const inicioDisponible = inicioConWindowsDisponible();
+    const menu = Menu.buildFromTemplate([
+        {
+            label: `Mostrar ${NOMBRE_APLICACION}`,
+            click: mostrarVentanaPrincipal
+        },
+        {
+            label: 'Iniciar con Windows',
+            type: 'checkbox',
+            checked: obtenerInicioConWindows(),
+            enabled: inicioDisponible,
+            toolTip: inicioDisponible
+                ? 'Abrir ZeroOne oculto en la bandeja al iniciar Windows.'
+                : 'Esta opcion esta disponible en la aplicacion instalada.',
+            click: elemento => {
+                try {
+                    elemento.checked = establecerInicioConWindows(
+                        elemento.checked
+                    );
+                } catch (error) {
+                    elemento.checked = obtenerInicioConWindows();
+                    console.error(
+                        'No se pudo cambiar el inicio con Windows:',
+                        error?.message || error
+                    );
+                }
+            }
+        },
+        { type: 'separator' },
+        {
+            label: 'Salir',
+            click: solicitarSalidaAplicacion
+        }
+    ]);
+
+    bandejaSistema.setContextMenu(menu);
+    bandejaSistema.on('click', mostrarVentanaPrincipal);
+
+    return bandejaSistema;
 }
 
 async function abrirEnlaceExterno(valor) {
@@ -461,7 +635,8 @@ function protegerContenidoVentana(ventana) {
     endurecerSesionProduccion(contenido.session);
 }
 
-function crearVentana() {
+function crearVentana({ mostrarAlCargar = true } = {}) {
+    mostrarVentanaSolicitada = mostrarAlCargar === true;
     const rutaPreload = path.join(__dirname, 'preload.js');
 
     ventanaPrincipal = new BrowserWindow({
@@ -487,6 +662,7 @@ function crearVentana() {
             webviewTag: false
         }
     });
+    const ventanaCreada = ventanaPrincipal;
 
     if (!MODO_DESARROLLO_WEB) {
         ventanaPrincipal.setMenu(null);
@@ -506,18 +682,32 @@ function crearVentana() {
     });
 
     async function cargarAplicacion() {
-        if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) {
+        if (
+            ventanaPrincipal !== ventanaCreada ||
+            ventanaCreada.isDestroyed()
+        ) {
             return;
         }
 
         try {
-            await ventanaPrincipal.loadURL(URL_APLICACION);
+            await ventanaCreada.loadURL(URL_APLICACION);
 
-            if (ventanaPrincipal && !ventanaPrincipal.isDestroyed()) {
-                ventanaPrincipal.maximize();
-                ventanaPrincipal.show();
+            if (
+                ventanaPrincipal === ventanaCreada &&
+                !ventanaCreada.isDestroyed()
+            ) {
+                ventanaCreada.maximize();
+                if (mostrarVentanaSolicitada) {
+                    mostrarVentanaPrincipal();
+                } else {
+                    ocultarVentanaPrincipal();
+                }
             }
         } catch (error) {
+            if (
+                ventanaPrincipal !== ventanaCreada ||
+                ventanaCreada.isDestroyed()
+            ) return;
             console.log(
                 'El servidor todavía no está listo. Reintentando...',
                 error.message
@@ -529,9 +719,28 @@ function crearVentana() {
 
     cargarAplicacion();
 
-    ventanaPrincipal.on('closed', () => {
-        ventanaPrincipal = null;
+    ventanaCreada.on('close', evento => {
+        if (salidaSolicitada || cierreAplicacionCompletado) return;
+        evento.preventDefault();
+        mostrarVentanaSolicitada = false;
+        ventanaCreada.hide();
     });
+
+    ventanaCreada.on('closed', () => {
+        if (ventanaPrincipal === ventanaCreada) {
+            ventanaPrincipal = null;
+        }
+    });
+
+    // Windows permite demorar el cierre en query-session-end. Se usa el mismo
+    // drenaje seguro que al elegir Salir; session-end queda como último recurso
+    // cuando el sistema ya no admite cancelar el evento.
+    ventanaCreada.on('query-session-end', evento => {
+        if (cierreAplicacionCompletado) return;
+        evento.preventDefault();
+        solicitarSalidaAplicacion();
+    });
+    ventanaCreada.on('session-end', prepararSalidaRapidaDelSistema);
 }
 
 function iniciarComprobacionesAutomaticas() {
@@ -547,17 +756,11 @@ function iniciarComprobacionesAutomaticas() {
 const bloqueoObtenido = app.requestSingleInstanceLock();
 
 if (!bloqueoObtenido) {
+    salidaSolicitada = true;
     app.quit();
 } else {
     app.on('second-instance', () => {
-        if (!ventanaPrincipal) return;
-
-        if (ventanaPrincipal.isMinimized()) {
-            ventanaPrincipal.restore();
-        }
-
-        ventanaPrincipal.show();
-        ventanaPrincipal.focus();
+        mostrarVentanaPrincipal();
     });
 
     app.whenReady().then(() => {
@@ -582,6 +785,16 @@ if (!bloqueoObtenido) {
             recursive: true
         });
 
+        try {
+            configurarInicioWindowsPredeterminado();
+        } catch (error) {
+            console.error(
+                'No se pudo configurar el inicio con Windows; ' +
+                'ZeroOne continuará abriendo normalmente:',
+                error?.message || error
+            );
+        }
+
         process.env.ZEROONE_DATA_DIR = carpetaDatos;
         process.env.ZEROONE_AI_DIR = path.join(
             process.env.LOCALAPPDATA || app.getPath('userData'),
@@ -595,13 +808,19 @@ if (!bloqueoObtenido) {
 
         require('./src/bot.js');
 
-        crearVentana();
+        crearVentana({
+            mostrarAlCargar: !INICIO_DESDE_WINDOWS
+        });
+        crearBandejaSistema();
         iniciarComprobacionesAutomaticas();
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) {
                 crearVentana();
+                return;
             }
+
+            mostrarVentanaPrincipal();
         });
     });
 }
@@ -611,33 +830,114 @@ app.on('before-quit', evento => {
     evento.preventDefault();
     if (cierreAplicacionEnCurso) return;
     cierreAplicacionEnCurso = true;
+    salidaSolicitada = true;
+    ocultarVentanaPrincipal();
     if (temporizadorActualizaciones) {
         clearInterval(temporizadorActualizaciones);
         temporizadorActualizaciones = null;
     }
-    Promise.resolve(
-        global.zerooneIaLocal?.cerrarYEsperar?.(5000)
-    ).then(cerrado => {
-        if (cerrado === false) {
+    const cerrarBackendConReintento = async () => {
+        let avisoMostrado = false;
+        while (true) {
+            try {
+                const resultado = await global.zerooneBackend?.cerrarYEsperar?.(
+                    15000
+                );
+                if (resultado === true) return true;
+            } catch (error) {
+                console.error(
+                    'El cierre seguro del backend se reintentará:',
+                    error?.message || error
+                );
+            }
+
+            // El backend ya dejó de aceptar operaciones y no se puede volver
+            // a presentar la ventana como operativa. Se mantiene el mismo
+            // cierre en curso hasta confirmar las escrituras pendientes.
+            if (!avisoMostrado) {
+                avisoMostrado = true;
+                try {
+                    if (Notification.isSupported()) {
+                        new Notification({
+                            title: 'ZeroOne está terminando de guardar',
+                            body:
+                                'El cierre está demorando porque aún hay datos seguros pendientes. No apagues el equipo.'
+                        }).show();
+                    }
+                } catch {}
+            }
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    };
+
+    Promise.allSettled([
+        cerrarBackendConReintento(),
+        Promise.resolve(
+            global.zerooneIaLocal?.cerrarYEsperar?.(5000)
+        )
+    ]).then(([backend, ia]) => {
+        const backendSeguro =
+            backend.status === 'fulfilled' && backend.value === true;
+        if (backend.status === 'rejected') {
+            console.error(
+                'No se pudo confirmar el cierre seguro del backend:',
+                backend.reason?.message || backend.reason
+            );
+        } else if (backend.value === false) {
+            console.error(
+                'El backend no confirmó todos sus guardados antes de salir.'
+            );
+        }
+        if (ia.status === 'rejected') {
+            console.error(
+                'No se pudo confirmar el cierre del motor de IA:',
+                ia.reason?.message || ia.reason
+            );
+        } else if (ia.value === false) {
             console.error(
                 'El motor de IA no confirmó su cierre antes de salir.'
             );
         }
-    }).catch(error => {
-        console.error(
-            'No se pudo confirmar el cierre del motor de IA:',
-            error?.message || error
-        );
-    }).finally(() => {
+
+        if (!backendSeguro) {
+            throw new Error(
+                'El backend no confirmó el cierre seguro de las credenciales.'
+            );
+        }
+
         global.zerooneAlmacenMensajes?.cerrar?.();
         global.zerooneAlmacenMensajes = null;
+        if (bandejaSistema && !bandejaSistema.isDestroyed()) {
+            bandejaSistema.destroy();
+        }
+        bandejaSistema = null;
         cierreAplicacionCompletado = true;
         app.quit();
+    }).catch(error => {
+        console.error(
+            'ZeroOne no pudo completar el cierre seguro:',
+            error?.message || error
+        );
+        // No se reactiva una interfaz cuyo backend ya está detenido. Un
+        // nuevo before-quit podrá continuar el mismo drenaje.
+        cierreAplicacionEnCurso = false;
+        try {
+            if (Notification.isSupported()) {
+                new Notification({
+                    title: 'ZeroOne protegió tus sesiones',
+                    body:
+                        'No se confirmó el cierre. Volvé a elegir Salir para continuar el drenaje seguro.'
+                }).show();
+            }
+        } catch (errorNotificacion) {
+            console.error(
+                'No se pudo mostrar la alerta de cierre seguro:',
+                errorNotificacion?.message || errorNotificacion
+            );
+        }
     });
 });
 
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    // La aplicacion permanece activa en la bandeja hasta elegir "Salir".
 });
