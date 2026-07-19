@@ -38,9 +38,27 @@ const RUNTIMES = Object.freeze([
     }
 ]);
 
-const HOSTS_DESCARGA = new Set(['huggingface.co', 'cdn-lfs.huggingface.co',
-    'cas-bridge.xethub.hf.co', 'github.com', 'objects.githubusercontent.com',
-    'release-assets.githubusercontent.com']);
+const HOSTS_DESCARGA = new Set([
+    'huggingface.co',
+    'cas-server.xethub.hf.co',
+    'cas-server.xethub-eu.hf.co',
+    'transfer.xethub.hf.co',
+    'transfer.xethub-eu.hf.co',
+    'cas-bridge.xethub.hf.co',
+    'cas-bridge.xethub-eu.hf.co',
+    'us.aws.cdn.hf.co',
+    'us.gcp.cdn.hf.co',
+    'cdn-lfs.hf.co',
+    'cdn-lfs-us-1.hf.co',
+    'cdn-lfs-eu-1.hf.co',
+    'cdn-lfs.huggingface.co',
+    'cdn-lfs-us-1.huggingface.co',
+    'cdn-lfs-eu-1.huggingface.co',
+    'github.com',
+    'objects.githubusercontent.com',
+    'release-assets.githubusercontent.com'
+]);
+const MAX_REDIRECCIONES_DESCARGA = 5;
 const TOTAL_DESCARGA = MODELO.bytes + RUNTIMES.reduce(
     (total, elemento) => total + elemento.bytes,
     0
@@ -48,10 +66,20 @@ const TOTAL_DESCARGA = MODELO.bytes + RUNTIMES.reduce(
 
 function hostDescargaPermitido(hostname) {
     const host = String(hostname || '').toLowerCase();
-    return HOSTS_DESCARGA.has(host)
-        || host.endsWith('.huggingface.co')
-        || host.endsWith('.xethub.hf.co')
-        || host.endsWith('.githubusercontent.com');
+    return HOSTS_DESCARGA.has(host);
+}
+
+function urlDescargaPermitida(valor) {
+    try {
+        const url = valor instanceof URL ? valor : new URL(valor);
+        return url.protocol === 'https:'
+            && (!url.port || url.port === '443')
+            && !url.username
+            && !url.password
+            && hostDescargaPermitido(url.hostname);
+    } catch {
+        return false;
+    }
 }
 
 class ErrorIALocal extends Error {
@@ -605,15 +633,44 @@ class RuntimeIALocal extends EventEmitter {
             ...(offset ? { Range: `bytes=${offset}-` } : {})
         };
         let respuesta;
+        let urlActual;
         try {
-            respuesta = await this.fetch(asset.url, { headers, signal, redirect: 'follow' });
+            urlActual = new URL(asset.url);
+            for (let redirecciones = 0; ; redirecciones += 1) {
+                if (!urlDescargaPermitida(urlActual)) {
+                    throw new ErrorIALocal(
+                        'DESCARGA_ORIGEN',
+                        'La descarga fue redirigida a un origen no permitido.'
+                    );
+                }
+                respuesta = await this.fetch(urlActual, {
+                    headers,
+                    signal,
+                    redirect: 'manual'
+                });
+                const urlRespondida = respuesta.url ? new URL(respuesta.url) : urlActual;
+                if (!urlDescargaPermitida(urlRespondida)) {
+                    throw new ErrorIALocal(
+                        'DESCARGA_ORIGEN',
+                        'La descarga fue redirigida a un origen no permitido.'
+                    );
+                }
+                urlActual = urlRespondida;
+                if (![301, 302, 303, 307, 308].includes(respuesta.status)) break;
+                const destino = respuesta.headers?.get?.('location');
+                if (!destino) break;
+                if (redirecciones >= MAX_REDIRECCIONES_DESCARGA) {
+                    throw new ErrorIALocal(
+                        'DESCARGA_REDIRECCIONES',
+                        'La descarga superó el límite de redirecciones seguras.'
+                    );
+                }
+                urlActual = new URL(destino, urlActual);
+            }
         } catch (error) {
             if (signal.aborted) throw new ErrorIALocal('DESCARGA_CANCELADA', 'La descarga fue detenida.', error);
+            if (error instanceof ErrorIALocal) throw error;
             throw new ErrorIALocal('DESCARGA_RED', 'No se pudo descargar la IA local.', error);
-        }
-        const urlFinal = new URL(respuesta.url || asset.url);
-        if (urlFinal.protocol !== 'https:' || !hostDescargaPermitido(urlFinal.hostname)) {
-            throw new ErrorIALocal('DESCARGA_ORIGEN', 'La descarga fue redirigida a un origen no permitido.');
         }
         if (offset && respuesta.status === 200) {
             fs.rmSync(parcial, { force: true });

@@ -367,6 +367,7 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(datos.variacionSegundosPredeterminada, 5);
             assert.equal(datos.maximoDestinatariosPorEstado, 1000);
             assert.equal(datos.limiteFallosSeguridad, 1);
+            assert.equal(datos.temaVisual, 'eva-01');
         });
 
         await t.test('permite limitar la base reciente a 500 destinatarios', async () => {
@@ -400,6 +401,54 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
                 configuracionGuardada.datos.maximoDestinatariosPorEstado,
                 500
             );
+        });
+
+        await t.test('guarda únicamente temas visuales permitidos', async () => {
+            const guardado = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 500,
+                        limiteFallosSeguridad: 1,
+                        notificaciones: true,
+                        temaVisual: 'rei'
+                    })
+                }
+            );
+
+            assert.equal(guardado.respuesta.status, 200);
+            assert.equal(guardado.datos.configuracion.temaVisual, 'rei');
+
+            const invalido = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 500,
+                        limiteFallosSeguridad: 1,
+                        notificaciones: true,
+                        temaVisual: 'eva-03'
+                    })
+                }
+            );
+
+            assert.equal(invalido.respuesta.status, 400);
+            assert.match(invalido.datos.error, /tema visual/i);
         });
 
         await t.test('rechaza límites fuera de 1 a 1.000 o decimales', async () => {
@@ -558,6 +607,7 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
 
             assert.equal(respuesta.status, 200);
             assert.equal(datos.maximoDestinatariosPorEstado, 500);
+            assert.equal(datos.temaVisual, 'rei');
         });
     } finally {
         await detenerServidor(servidor);

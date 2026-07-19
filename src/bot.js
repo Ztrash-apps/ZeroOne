@@ -440,6 +440,13 @@ const DURACION_CUARENTENA_ANALISIS_IA_MS = 30 * 60 * 1000;
 const MAXIMAS_MARCAS_CUARENTENA_ANALISIS_IA = 2000;
 const TIEMPO_MAXIMO_RESOLUCION_LID_MS = 3000;
 const MODOS_RITMO_PUBLICACION = new Set(['secuencial', 'grupos']);
+const TEMAS_VISUALES = new Set([
+    'eva-01',
+    'eva-00',
+    'eva-02',
+    'eva-13',
+    'rei'
+]);
 const ESTADOS_HISTORIAL_AGENDAMIENTO = new Set([
     'pendiente',
     'en_cola',
@@ -495,6 +502,7 @@ const MODOS_PRIVACIDAD_ESTADOS = Object.freeze({
 let configuracion = {
     limiteFallosSeguridad: 1,
     notificaciones: true,
+    temaVisual: 'eva-01',
     modoRitmoPredeterminado: 'secuencial',
     intervaloSegundosPredeterminado: 45,
     variacionSegundosPredeterminada: 5,
@@ -1254,6 +1262,11 @@ function normalizarModoRitmo(valor, respaldo = 'secuencial') {
     return MODOS_RITMO_PUBLICACION.has(valor) ? valor : respaldo;
 }
 
+function normalizarTemaVisual(valor, respaldo = 'eva-01') {
+    const normalizado = String(valor || '').trim().toLowerCase();
+    return TEMAS_VISUALES.has(normalizado) ? normalizado : respaldo;
+}
+
 function normalizarLimiteDestinatariosEstado(
     valor,
     respaldo = MAXIMO_DESTINATARIOS_ESTADO
@@ -1283,6 +1296,7 @@ function cargarConfiguracion() {
                 true
             ),
             notificaciones: datos.notificaciones !== false,
+            temaVisual: normalizarTemaVisual(datos.temaVisual),
             modoRitmoPredeterminado: normalizarModoRitmo(
                 datos.modoRitmoPredeterminado,
                 'secuencial'
@@ -10031,6 +10045,14 @@ app.put('/configuracion', (req, res) => {
     const lineasPorGrupo = Number(req.body.lineasPorGrupoPredeterminado);
     const intervalo = Number(req.body.intervaloMinutosPredeterminado);
     const maximoDestinatarios = Number(req.body.maximoDestinatariosPorEstado);
+    const temaVisualSolicitado = req.body.temaVisual ?? configuracion.temaVisual;
+    const temaVisual = String(temaVisualSolicitado || '').trim().toLowerCase();
+
+    if (!TEMAS_VISUALES.has(temaVisual)) {
+        return res.status(400).json({
+            error: 'El tema visual seleccionado no es válido.'
+        });
+    }
 
     if (
         !Number.isInteger(limiteFallos) ||
@@ -10097,6 +10119,7 @@ app.put('/configuracion', (req, res) => {
         ...configuracion,
         limiteFallosSeguridad: limiteFallos,
         notificaciones: req.body.notificaciones !== false,
+        temaVisual,
         modoRitmoPredeterminado: modoRitmo,
         intervaloSegundosPredeterminado: intervaloSegundos,
         variacionSegundosPredeterminada: variacionSegundos,

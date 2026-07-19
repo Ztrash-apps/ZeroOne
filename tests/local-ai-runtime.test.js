@@ -154,6 +154,159 @@ test('un .part completo y válido se promueve sin abrir la red', async t => {
     assert.equal(fs.existsSync(parcial), false);
 });
 
+test('sigue manualmente una redirección oficial de Hugging Face y conserva el contenido', async t => {
+    const carpeta = temporal(t);
+    const contenido = Buffer.from('modelo-entregado-por-cdn-oficial');
+    const sha256 = crypto.createHash('sha256').update(contenido).digest('hex');
+    const asset = {
+        id: 'prueba',
+        archivo: 'modelo-redirigido.bin',
+        bytes: contenido.length,
+        sha256,
+        url: 'https://huggingface.co/organizacion/modelo/resolve/main/modelo.bin'
+    };
+    const solicitudes = [];
+    const runtime = crearRuntimeIALocal({
+        carpeta,
+        fetch: async (url, opciones) => {
+            solicitudes.push({ url: String(url), redirect: opciones.redirect });
+            if (solicitudes.length === 1) {
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        location: 'https://us.aws.cdn.hf.co/modelo.bin?firma=prueba'
+                    }
+                });
+            }
+            return new Response(contenido, { status: 200 });
+        }
+    });
+    const final = path.join(carpeta, 'downloads', asset.archivo);
+
+    const descargados = await runtime.descargarArchivo(
+        asset,
+        final,
+        0,
+        new AbortController().signal
+    );
+
+    assert.equal(descargados, contenido.length);
+    assert.deepEqual(fs.readFileSync(final), contenido);
+    assert.deepEqual(solicitudes, [
+        { url: asset.url, redirect: 'manual' },
+        {
+            url: 'https://us.aws.cdn.hf.co/modelo.bin?firma=prueba',
+            redirect: 'manual'
+        }
+    ]);
+});
+
+test('bloquea una redirección a un origen ajeno antes de solicitarlo', async t => {
+    const carpeta = temporal(t);
+    const contenido = Buffer.from('contenido-no-usado');
+    const sha256 = crypto.createHash('sha256').update(contenido).digest('hex');
+    const asset = {
+        archivo: 'origen-ajeno.bin',
+        bytes: contenido.length,
+        sha256,
+        url: 'https://huggingface.co/modelo.bin'
+    };
+    let solicitudes = 0;
+    const runtime = crearRuntimeIALocal({
+        carpeta,
+        fetch: async () => {
+            solicitudes += 1;
+            return new Response(null, {
+                status: 302,
+                headers: { location: 'https://evil.example/modelo.bin' }
+            });
+        }
+    });
+
+    await assert.rejects(
+        runtime.descargarArchivo(
+            asset,
+            path.join(carpeta, asset.archivo),
+            0,
+            new AbortController().signal
+        ),
+        error => error.codigo === 'DESCARGA_ORIGEN'
+    );
+    assert.equal(solicitudes, 1);
+});
+
+test('bloquea un hostname engañoso que solo contiene el dominio oficial', async t => {
+    const carpeta = temporal(t);
+    const contenido = Buffer.from('contenido-no-usado');
+    const sha256 = crypto.createHash('sha256').update(contenido).digest('hex');
+    const asset = {
+        archivo: 'hostname-enganoso.bin',
+        bytes: contenido.length,
+        sha256,
+        url: 'https://huggingface.co/modelo.bin'
+    };
+    let solicitudes = 0;
+    const runtime = crearRuntimeIALocal({
+        carpeta,
+        fetch: async () => {
+            solicitudes += 1;
+            return new Response(null, {
+                status: 302,
+                headers: {
+                    location: 'https://us.aws.cdn.hf.co.evil.example/modelo.bin'
+                }
+            });
+        }
+    });
+
+    await assert.rejects(
+        runtime.descargarArchivo(
+            asset,
+            path.join(carpeta, asset.archivo),
+            0,
+            new AbortController().signal
+        ),
+        error => error.codigo === 'DESCARGA_ORIGEN'
+    );
+    assert.equal(solicitudes, 1);
+});
+
+test('detiene una cadena de más de cinco redirecciones seguras', async t => {
+    const carpeta = temporal(t);
+    const contenido = Buffer.from('contenido-no-usado');
+    const sha256 = crypto.createHash('sha256').update(contenido).digest('hex');
+    const asset = {
+        archivo: 'demasiadas-redirecciones.bin',
+        bytes: contenido.length,
+        sha256,
+        url: 'https://huggingface.co/modelo.bin'
+    };
+    let solicitudes = 0;
+    const runtime = crearRuntimeIALocal({
+        carpeta,
+        fetch: async () => {
+            solicitudes += 1;
+            return new Response(null, {
+                status: 302,
+                headers: {
+                    location: `https://us.aws.cdn.hf.co/salto-${solicitudes}.bin`
+                }
+            });
+        }
+    });
+
+    await assert.rejects(
+        runtime.descargarArchivo(
+            asset,
+            path.join(carpeta, asset.archivo),
+            0,
+            new AbortController().signal
+        ),
+        error => error.codigo === 'DESCARGA_REDIRECCIONES'
+    );
+    assert.equal(solicitudes, 6);
+});
+
 test('una carpeta existente solo se reutiliza con manifiesto y hashes válidos', async t => {
     const carpeta = temporal(t);
     const zip = crearZip('bin/llama-server.exe', 'runtime-original');
