@@ -368,6 +368,47 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(datos.maximoDestinatariosPorEstado, 1000);
             assert.equal(datos.limiteFallosSeguridad, 1);
             assert.equal(datos.temaVisual, 'eva-01');
+            assert.equal(datos.mantenerEnSegundoPlano, true);
+            assert.equal(datos.iniciarConWindows, true);
+            assert.equal(datos.agendarMutuosSinUsuario, false);
+        });
+
+        await t.test('guarda las preferencias de ejecución en segundo plano', async () => {
+            const guardado = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 1000,
+                        limiteFallosSeguridad: 1,
+                        notificaciones: true,
+                        mantenerEnSegundoPlano: false,
+                        iniciarConWindows: false,
+                        agendarMutuosSinUsuario: true
+                    })
+                }
+            );
+
+            assert.equal(guardado.respuesta.status, 200);
+            assert.equal(
+                guardado.datos.configuracion.mantenerEnSegundoPlano,
+                false
+            );
+            assert.equal(
+                guardado.datos.configuracion.iniciarConWindows,
+                false
+            );
+            assert.equal(
+                guardado.datos.configuracion.agendarMutuosSinUsuario,
+                true
+            );
         });
 
         await t.test('permite limitar la base reciente a 500 destinatarios', async () => {
@@ -608,6 +649,7 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(respuesta.status, 200);
             assert.equal(datos.maximoDestinatariosPorEstado, 500);
             assert.equal(datos.temaVisual, 'rei');
+            assert.equal(datos.agendarMutuosSinUsuario, true);
         });
     } finally {
         await detenerServidor(servidor);

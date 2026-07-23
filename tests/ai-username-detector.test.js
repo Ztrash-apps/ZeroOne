@@ -139,6 +139,14 @@ test('la solicitud usa esquema JSON estricto y no incluye identificador del chat
     );
     assert.doesNotMatch(JSON.stringify(solicitud), /595981123456/u);
     assert.match(JSON.stringify(solicitud), /rositaflor/u);
+    assert.match(
+        solicitud.messages[0].content,
+        /todos los mensajes salientes/u
+    );
+    assert.match(
+        solicitud.messages[0].content,
+        /referencias directas, no requisitos/u
+    );
 
     const directa = crearSolicitudChatCompletion({
         mensajes: Array.from({ length: 20 }, (_, indice) => ({
@@ -320,6 +328,28 @@ test('descarta alucinaciones, indices de otro mensaje y palabras invalidas', () 
         assert.equal(resultado.clasificacion, 'ninguno');
         assert.equal(resultado.usuario, null);
     }
+});
+
+test('un usuario incrustado por el CRM siempre requiere revisión humana', () => {
+    const [ventana] = crearVentanasMensajesSalientes([
+        mensaje(
+            'chat@s.whatsapp.net',
+            '¡Genial acreditado rositaflor77! Ya quedó todo actualizado gracias por la confianza ❤️',
+            1000,
+            'crm-1'
+        )
+    ]);
+    const resultado = validarDeteccionLocal(
+        {
+            usuario: 'rositaflor77',
+            confianza: 99,
+            indicesEvidencia: [0]
+        },
+        ventana
+    );
+    assert.equal(resultado.clasificacion, 'revision');
+    assert.equal(resultado.evidenciaFuerte, false);
+    assert.equal(resultado.usuario, 'rositaflor77');
 });
 
 test('no toma menciones ni segmentos de rutas como evidencia literal', () => {

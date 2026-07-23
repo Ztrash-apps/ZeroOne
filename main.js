@@ -5,7 +5,8 @@ const {
     Menu,
     Notification,
     safeStorage,
-    shell
+    shell,
+    Tray
 } = require('electron');
 
 const path = require('path');
@@ -28,16 +29,25 @@ const MODO_DESARROLLO_WEB = !app.isPackaged &&
 const TOKEN_SESION_ESCRITORIO = MODO_DESARROLLO_WEB
     ? ''
     : crypto.randomBytes(32).toString('base64url');
+const ARGUMENTO_INICIO_AUTOMATICO = '--zeroone-inicio-automatico';
+const INICIO_AUTOMATICO_SOLICITADO = process.argv.includes(
+    ARGUMENTO_INICIO_AUTOMATICO
+);
 
 app.setName(NOMBRE_APLICACION);
 process.env.ZEROONE_DESKTOP_TOKEN = TOKEN_SESION_ESCRITORIO;
 
 let ventanaPrincipal = null;
+let iconoBandeja = null;
 let temporizadorActualizaciones = null;
 let busquedaEnCurso = false;
 let descargaEnCurso = false;
 let cierreAplicacionEnCurso = false;
 let cierreAplicacionCompletado = false;
+let preferenciasEscritorio = {
+    mantenerEnSegundoPlano: true,
+    iniciarConWindows: true
+};
 const sesionesEndurecidas = new WeakSet();
 const sesionesAutorizadas = new WeakSet();
 
@@ -262,6 +272,117 @@ function instalarActualizacion() {
     };
 }
 
+function normalizarPreferenciasEscritorio(datos = {}) {
+    return {
+        mantenerEnSegundoPlano:
+            datos.mantenerEnSegundoPlano !== false,
+        iniciarConWindows:
+            datos.iniciarConWindows !== false
+    };
+}
+
+function cargarPreferenciasEscritorio(rutaConfiguracion) {
+    const candidatos = [
+        rutaConfiguracion,
+        `${rutaConfiguracion}.bak`
+    ];
+
+    for (const ruta of candidatos) {
+        if (!fs.existsSync(ruta)) continue;
+
+        try {
+            const datos = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+            preferenciasEscritorio =
+                normalizarPreferenciasEscritorio(datos);
+            return preferenciasEscritorio;
+        } catch (error) {
+            console.error(
+                `No se pudieron leer las preferencias de escritorio desde ${path.basename(ruta)}:`,
+                error.message
+            );
+        }
+    }
+
+    preferenciasEscritorio = normalizarPreferenciasEscritorio();
+    return preferenciasEscritorio;
+}
+
+function configurarInicioConWindows() {
+    if (process.platform !== 'win32' || !app.isPackaged) {
+        return {
+            disponible: false,
+            activo: preferenciasEscritorio.iniciarConWindows
+        };
+    }
+
+    app.setLoginItemSettings({
+        openAtLogin: preferenciasEscritorio.iniciarConWindows,
+        path: process.execPath,
+        args: [ARGUMENTO_INICIO_AUTOMATICO]
+    });
+
+    const estado = app.getLoginItemSettings({
+        path: process.execPath,
+        args: [ARGUMENTO_INICIO_AUTOMATICO]
+    });
+
+    return {
+        disponible: true,
+        activo: estado.openAtLogin === true
+    };
+}
+
+function aplicarPreferenciasEscritorio(datos = {}) {
+    preferenciasEscritorio = normalizarPreferenciasEscritorio(datos);
+    const inicioWindows = configurarInicioConWindows();
+
+    return {
+        ...preferenciasEscritorio,
+        inicioWindows
+    };
+}
+
+function mostrarVentanaPrincipal() {
+    if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) {
+        crearVentana(true);
+        return;
+    }
+
+    ventanaPrincipal.setSkipTaskbar(false);
+    if (ventanaPrincipal.isMinimized()) ventanaPrincipal.restore();
+    ventanaPrincipal.show();
+    ventanaPrincipal.focus();
+}
+
+function ocultarVentanaPrincipal() {
+    if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) return;
+    ventanaPrincipal.hide();
+    ventanaPrincipal.setSkipTaskbar(true);
+}
+
+function crearIconoBandeja() {
+    if (iconoBandeja && !iconoBandeja.isDestroyed()) return iconoBandeja;
+
+    iconoBandeja = new Tray(RUTA_ICONO);
+    iconoBandeja.setToolTip(
+        'ZeroOne · ejecutándose en segundo plano'
+    );
+    iconoBandeja.setContextMenu(Menu.buildFromTemplate([
+        {
+            label: 'Abrir ZeroOne',
+            click: mostrarVentanaPrincipal
+        },
+        { type: 'separator' },
+        {
+            label: 'Salir de ZeroOne',
+            click: () => app.quit()
+        }
+    ]));
+    iconoBandeja.on('click', mostrarVentanaPrincipal);
+    iconoBandeja.on('double-click', mostrarVentanaPrincipal);
+
+    return iconoBandeja;
+}
 
 function mostrarNotificacion(titulo, cuerpo) {
     if (!Notification.isSupported()) {
@@ -276,10 +397,7 @@ function mostrarNotificacion(titulo, cuerpo) {
     });
 
     notificacion.on('click', () => {
-        if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) return;
-        if (ventanaPrincipal.isMinimized()) ventanaPrincipal.restore();
-        ventanaPrincipal.show();
-        ventanaPrincipal.focus();
+        mostrarVentanaPrincipal();
     });
 
     notificacion.show();
@@ -354,7 +472,11 @@ function exponerActualizadorAlServidor() {
     global.zerooneDesktop = {
         notificar: mostrarNotificacion,
         obtenerVersion: () => app.getVersion(),
-        abrirEnlace: abrirEnlaceExterno
+        abrirEnlace: abrirEnlaceExterno,
+        aplicarPreferencias: aplicarPreferenciasEscritorio,
+        obtenerPreferencias: () => ({
+            ...preferenciasEscritorio
+        })
     };
 
     global.zerooneSecureStorage = {
@@ -461,7 +583,7 @@ function protegerContenidoVentana(ventana) {
     endurecerSesionProduccion(contenido.session);
 }
 
-function crearVentana() {
+function crearVentana(mostrarAlCargar = true) {
     const rutaPreload = path.join(__dirname, 'preload.js');
 
     ventanaPrincipal = new BrowserWindow({
@@ -505,6 +627,19 @@ function crearVentana() {
         enviarEstadoActualizacion();
     });
 
+    ventanaPrincipal.on('close', evento => {
+        if (
+            cierreAplicacionEnCurso ||
+            cierreAplicacionCompletado ||
+            !preferenciasEscritorio.mantenerEnSegundoPlano
+        ) {
+            return;
+        }
+
+        evento.preventDefault();
+        ocultarVentanaPrincipal();
+    });
+
     async function cargarAplicacion() {
         if (!ventanaPrincipal || ventanaPrincipal.isDestroyed()) {
             return;
@@ -515,7 +650,11 @@ function crearVentana() {
 
             if (ventanaPrincipal && !ventanaPrincipal.isDestroyed()) {
                 ventanaPrincipal.maximize();
-                ventanaPrincipal.show();
+                if (mostrarAlCargar) {
+                    mostrarVentanaPrincipal();
+                } else {
+                    ocultarVentanaPrincipal();
+                }
             }
         } catch (error) {
             console.log(
@@ -549,15 +688,15 @@ const bloqueoObtenido = app.requestSingleInstanceLock();
 if (!bloqueoObtenido) {
     app.quit();
 } else {
-    app.on('second-instance', () => {
-        if (!ventanaPrincipal) return;
-
-        if (ventanaPrincipal.isMinimized()) {
-            ventanaPrincipal.restore();
+    app.on('second-instance', (_evento, lineaComandos = []) => {
+        if (
+            preferenciasEscritorio.mantenerEnSegundoPlano &&
+            lineaComandos.includes(ARGUMENTO_INICIO_AUTOMATICO)
+        ) {
+            return;
         }
 
-        ventanaPrincipal.show();
-        ventanaPrincipal.focus();
+        mostrarVentanaPrincipal();
     });
 
     app.whenReady().then(() => {
@@ -589,18 +728,30 @@ if (!bloqueoObtenido) {
             'ia'
         );
 
+        cargarPreferenciasEscritorio(
+            path.join(carpetaDatos, 'configuracion.json')
+        );
+        configurarInicioConWindows();
         configurarActualizador();
         configurarIPC();
         exponerActualizadorAlServidor();
 
         require('./src/bot.js');
 
-        crearVentana();
+        crearIconoBandeja();
+        crearVentana(
+            !(
+                INICIO_AUTOMATICO_SOLICITADO &&
+                preferenciasEscritorio.mantenerEnSegundoPlano
+            )
+        );
         iniciarComprobacionesAutomaticas();
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) {
-                crearVentana();
+                crearVentana(true);
+            } else {
+                mostrarVentanaPrincipal();
             }
         });
     });
@@ -631,13 +782,20 @@ app.on('before-quit', evento => {
     }).finally(() => {
         global.zerooneAlmacenMensajes?.cerrar?.();
         global.zerooneAlmacenMensajes = null;
+        if (iconoBandeja && !iconoBandeja.isDestroyed()) {
+            iconoBandeja.destroy();
+        }
+        iconoBandeja = null;
         cierreAplicacionCompletado = true;
         app.quit();
     });
 });
 
 app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    if (
+        process.platform !== 'darwin' &&
+        !preferenciasEscritorio.mantenerEnSegundoPlano
+    ) {
         app.quit();
     }
 });

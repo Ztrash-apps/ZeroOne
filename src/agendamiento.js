@@ -46,7 +46,8 @@ const PALABRAS_COMUNES_NO_USUARIO = new Set([
     'registrado', 'saldo', 'se',
     'si', 'sin', 'solicitud', 'su', 'sus', 'sistema', 'te', 'telefono',
     'todo', 'toda', 'todos', 'todas', 'transaccion', 'tu', 'tus', 'un',
-    'una', 'unas', 'unos', 'user', 'usuario', 'y', 'ya', 'yo', 'que',
+    'una', 'unas', 'unos', 'user', 'usuario', 'username', 'name', 'y', 'ya',
+    'yo', 'que',
     'donde', 'contrasena'
 ]);
 
@@ -136,7 +137,7 @@ function normalizarUsuarioAutomatico(valor) {
 
 function normalizarUsuarioPersistido(registro) {
     if (!registro?.usuario) return null;
-    const fuente = ['regla', 'ia', 'ia_revision', 'manual'].includes(
+    const fuente = ['regla', 'ia', 'ia_revision', 'manual', 'whatsapp'].includes(
         registro.usuarioFuente
     ) ? registro.usuarioFuente : 'regla';
     const esDecisionHumana = fuente === 'manual' ||
@@ -325,6 +326,38 @@ function parsearUsuarioPorPalabrasClave(texto, palabrasClave) {
 }
 
 /**
+ * Reconoce variantes renderizadas por CRM donde el usuario queda incrustado
+ * en una frase, por ejemplo: "Genial acreditado rositaflor77! Ya quedó...".
+ * Es una señal útil, pero no suficientemente fuerte para agendar sin revisión.
+ * Los placeholders literales ({USERNAME}, {NAME}, etc.) nunca son usuarios.
+ */
+function parsearUsuarioEnPlantillaCRM(texto) {
+    const normalizado = normalizarTextoPlantilla(texto);
+    if (!normalizado || /\{(?:user(?:name)?|name|usuario|nombre)\}/iu.test(normalizado)) {
+        return null;
+    }
+
+    const patrones = [
+        /\b(?:acreditad[oa]|actualizad[oa]|cargad[oa])\s+([\p{L}][\p{L}\p{N}_]{3,31})(?=[^\p{L}\p{N}_]|$)/giu,
+        /\b(?:usuario|username|user|nombre|name)\s+(?:es\s+)?([\p{L}][\p{L}\p{N}_]{3,31})(?=[^\p{L}\p{N}_]|$)/giu
+    ];
+
+    for (const patron of patrones) {
+        for (const coincidencia of normalizado.matchAll(patron)) {
+            const usuario = normalizarUsuarioAutomatico(coincidencia[1]);
+            if (usuario) {
+                return {
+                    usuario,
+                    confianza: 90,
+                    tipoEvidencia: 'PLANTILLA_CRM'
+                };
+            }
+        }
+    }
+    return null;
+}
+
+/**
  * Reconoce únicamente la plantilla Greenvip acordada. Devuelve solamente el
  * usuario; nunca devuelve ni conserva la contraseña o el contenido original.
  */
@@ -425,6 +458,49 @@ function crearNombreGestionado(nombreLinea, usuario, mutuo = false, conservarMar
     return mutuo || conservarMarcador ? agregarMarcadorMutuo(base) : base;
 }
 
+function crearNombreTemporalMutuo(nombreLinea, telefono) {
+    const prefijo = obtenerPrefijoLinea(nombreLinea);
+    const numero = normalizarTelefono(telefono, '');
+    if (!prefijo || !numero) return null;
+    const referencia = numero.replace(/\D/gu, '').slice(-4).padStart(4, '0');
+    return agregarMarcadorMutuo(`${prefijo} Contacto ${referencia}`);
+}
+
+function extraerUsuarioContactoWhatsApp(nombreContacto, nombreLinea) {
+    const nombre = quitarMarcadoresMutuos(nombreContacto);
+    const prefijo = obtenerPrefijoLinea(nombreLinea);
+    if (!nombre || !prefijo) return null;
+
+    const prefijoLiteral = escaparExpresionRegular(prefijo);
+    const gestionado = nombre.match(
+        new RegExp(
+            `(?:^|\\s)${prefijoLiteral}\\s+([\\p{L}][\\p{L}\\p{N}_]{3,31})$`,
+            'iu'
+        )
+    );
+    if (gestionado) {
+        const usuario = normalizarUsuarioAutomatico(gestionado[1]);
+        return usuario
+            ? {
+                usuario,
+                confirmado: true,
+                mutuo: tieneMarcadorMutuo(nombreContacto)
+            }
+            : null;
+    }
+
+    // Un nombre compuesto natural no se interpreta. Un único token con forma
+    // de usuario se presenta como sugerencia para que una persona decida.
+    const usuario = normalizarUsuarioAutomatico(nombre);
+    return usuario
+        ? {
+            usuario,
+            confirmado: false,
+            mutuo: tieneMarcadorMutuo(nombreContacto)
+        }
+        : null;
+}
+
 function esNombreGestionado(nombre) {
     const sinPunto = quitarMarcadoresMutuos(nombre);
     return /^L\d+\s+[\p{L}\p{N}_.-]+$/u.test(sinPunto);
@@ -451,10 +527,14 @@ function obtenerMarcasAutostatues(persona) {
 }
 
 function crearMarcasAutostatues(lineaId, usuario) {
-    return [
-        { key: CLIENT_DATA_LINEA, value: textoSeguro(lineaId, 180) },
-        { key: CLIENT_DATA_USUARIO, value: normalizarUsuario(usuario) }
-    ];
+    const marcas = [];
+    const linea = textoSeguro(lineaId, 180);
+    const usuarioNormalizado = normalizarUsuario(usuario);
+    if (linea) marcas.push({ key: CLIENT_DATA_LINEA, value: linea });
+    if (usuarioNormalizado) {
+        marcas.push({ key: CLIENT_DATA_USUARIO, value: usuarioNormalizado });
+    }
+    return marcas;
 }
 
 function fusionarMarcasAutostatues(persona, lineaId, usuario) {
@@ -482,7 +562,12 @@ function esErrorGoogleDeCorte(error) {
 }
 
 function candidatoEstaSincronizado(candidato, cuentaId) {
-    if (!normalizarUsuario(candidato?.usuario)) return false;
+    const tieneIdentidadGestionada = Boolean(normalizarUsuario(candidato?.usuario))
+        || (
+            candidato?.mutuo === true
+            && candidato?.ultimoResultado?.temporal === true
+        );
+    if (!tieneIdentidadGestionada) return false;
     const exito = ['creado', 'actualizado', 'sin_cambios'].includes(
         candidato?.ultimoResultado?.tipo
     );
@@ -653,7 +738,7 @@ function sanitizarEstadoLeido(leido) {
                     telefono,
                     usuario,
                     usuarioFuente: usuario
-                        ? ['regla', 'ia', 'ia_revision', 'manual'].includes(
+                        ? ['regla', 'ia', 'ia_revision', 'manual', 'whatsapp'].includes(
                             candidatoLeido.usuarioFuente
                         ) ? candidatoLeido.usuarioFuente : 'regla'
                         : null,
@@ -689,13 +774,17 @@ function sanitizarEstadoLeido(leido) {
                         ? textoSeguro(candidatoLeido.usuarioDetectadoEn, 40) || null
                         : null,
                     actualizadoEn: textoSeguro(candidatoLeido.actualizadoEn, 40) || null,
-                    ultimoResultado: usuario && ultimo && typeof ultimo === 'object'
+                    ultimoResultado: (
+                        usuario
+                        || (mutuo && ultimo?.temporal === true)
+                    ) && ultimo && typeof ultimo === 'object'
                         ? {
                             tipo: textoSeguro(ultimo.tipo, 40),
                             codigo: textoSeguro(ultimo.codigo, 80) || undefined,
                             nombre: textoSeguro(ultimo.nombre, 180) || undefined,
                             nombreActual: textoSeguro(ultimo.nombreActual, 180) || undefined,
                             detalle: textoSeguro(ultimo.detalle, 220) || undefined,
+                            temporal: ultimo.temporal === true || undefined,
                             cuentaId: textoSeguro(ultimo.cuentaId, 100) || undefined,
                             fecha: textoSeguro(ultimo.fecha, 40) || null
                         }
@@ -732,7 +821,7 @@ function sanitizarEstadoLeido(leido) {
                     jid,
                     usuario: usuarioPendiente,
                     usuarioFuente: usuarioPendiente
-                        ? ['regla', 'ia', 'ia_revision', 'manual'].includes(
+                        ? ['regla', 'ia', 'ia_revision', 'manual', 'whatsapp'].includes(
                             pendienteLeido.usuarioFuente
                         ) ? pendienteLeido.usuarioFuente : 'regla'
                         : null,
@@ -1525,6 +1614,142 @@ class ServicioAgendamiento extends EventEmitter {
         return null;
     }
 
+    async registrarContactosWhatsApp(
+        lineaEntrada,
+        contactos,
+        resolverJid
+    ) {
+        const info = await this.resolverLinea(lineaEntrada);
+        const linea = this.asegurarLinea(info);
+        const lista = Array.isArray(contactos) ? contactos : [];
+        let confirmados = 0;
+        let revisiones = 0;
+        let omitidos = 0;
+        let huboCambios = false;
+
+        for (const contacto of lista) {
+            if (
+                !contacto ||
+                typeof contacto !== 'object' ||
+                !Object.prototype.hasOwnProperty.call(contacto, 'name')
+            ) {
+                omitidos += 1;
+                continue;
+            }
+            const deteccion = extraerUsuarioContactoWhatsApp(
+                contacto.name,
+                info.nombre
+            );
+            if (!deteccion) {
+                omitidos += 1;
+                continue;
+            }
+
+            const jids = [
+                contacto.phoneNumber,
+                contacto.id,
+                contacto.lid
+            ];
+            const telefono = await this.resolverPrimerTelefono(
+                jids,
+                resolverJid,
+                contacto
+            );
+            const jidPendiente = telefono
+                ? null
+                : obtenerPrimerJidLid(jids);
+            if (!telefono && !jidPendiente) {
+                omitidos += 1;
+                continue;
+            }
+
+            if (!deteccion.confirmado) {
+                const existente = telefono
+                    ? linea.candidatos[telefono]
+                    : linea.pendientesJid[jidPendiente];
+                if (
+                    normalizarPalabraComparable(existente?.usuario) ===
+                    normalizarPalabraComparable(deteccion.usuario)
+                ) {
+                    omitidos += 1;
+                    continue;
+                }
+                const revision = this.crearRevisionIA(
+                    linea,
+                    { telefono, jid: jidPendiente },
+                    {
+                        usuario: deteccion.usuario,
+                        confianza: 90,
+                        tipoEvidencia: 'CONTACTO_WHATSAPP',
+                        evidencias: [{
+                            id:
+                                contacto.id ||
+                                contacto.phoneNumber ||
+                                contacto.lid,
+                            timestampMs: 0
+                        }]
+                    }
+                );
+                if (revision?.estado === 'pendiente') {
+                    revisiones += 1;
+                    huboCambios = true;
+                } else {
+                    omitidos += 1;
+                }
+                continue;
+            }
+
+            const candidato = telefono
+                ? this.asegurarCandidato(linea, telefono)
+                : this.asegurarPendienteJid(linea, jidPendiente);
+            if (!candidato) {
+                omitidos += 1;
+                continue;
+            }
+            const usuarioAnterior = normalizarPalabraComparable(
+                candidato.usuario
+            );
+            const usuarioNuevo = normalizarPalabraComparable(
+                deteccion.usuario
+            );
+            if (
+                candidato.usuarioBloqueadoManual === true &&
+                candidato.usuario &&
+                usuarioAnterior !== usuarioNuevo
+            ) {
+                omitidos += 1;
+                continue;
+            }
+            if (usuarioAnterior !== usuarioNuevo && candidato.ultimoResultado) {
+                candidato.ultimoResultado = null;
+            }
+            const conservarDecisionManual =
+                candidato.usuarioFuente === 'manual' &&
+                candidato.usuarioBloqueadoManual === true;
+            candidato.usuario = deteccion.usuario;
+            candidato.usuarioFuente = conservarDecisionManual
+                ? 'manual'
+                : 'whatsapp';
+            candidato.usuarioConfianza = 100;
+            candidato.usuarioBloqueadoManual = true;
+            candidato.usuarioDetectadoEn =
+                candidato.usuarioDetectadoEn || fechaIso(this.ahora);
+            candidato.actualizadoEn = fechaIso(this.ahora);
+            if (telefono && deteccion.mutuo && !candidato.mutuo) {
+                candidato.mutuo = true;
+                candidato.ultimoResultado = null;
+            }
+            confirmados += 1;
+            huboCambios = true;
+        }
+
+        if (huboCambios) {
+            linea.actualizadaEn = fechaIso(this.ahora);
+            this.guardar();
+        }
+        return { confirmados, revisiones, omitidos };
+    }
+
     async registrarMensajes(lineaEntrada, mensajes, resolverJid, opciones = {}) {
         if (resolverJid && typeof resolverJid === 'object') {
             opciones = resolverJid;
@@ -1555,11 +1780,15 @@ class ServicioAgendamiento extends EventEmitter {
                 omitidos += 1;
                 continue;
             }
+            const textoMensaje = extraerTextoMensaje(mensaje);
             const resultado = parsearUsuarioPorPalabrasClave(
-                extraerTextoMensaje(mensaje),
+                textoMensaje,
                 this.estado?.busqueda?.palabrasClaveUsuario
             );
-            if (!resultado) {
+            const sugerenciaCRM = resultado
+                ? null
+                : parsearUsuarioEnPlantillaCRM(textoMensaje);
+            if (!resultado && !sugerenciaCRM) {
                 omitidos += 1;
                 continue;
             }
@@ -1574,6 +1803,39 @@ class ServicioAgendamiento extends EventEmitter {
                 resolverJid,
                 mensaje
             );
+            if (sugerenciaCRM) {
+                const destino = telefono
+                    ? { telefono, jid: null }
+                    : { telefono: null, jid: esJidLid(remoteJid) ? remoteJid : null };
+                const existente = telefono
+                    ? linea.candidatos[telefono]
+                    : linea.pendientesJid[remoteJid];
+                if (
+                    normalizarPalabraComparable(existente?.usuario) ===
+                    normalizarPalabraComparable(sugerenciaCRM.usuario)
+                ) {
+                    omitidos += 1;
+                    continue;
+                }
+                const revision = this.crearRevisionIA(linea, destino, {
+                    usuario: sugerenciaCRM.usuario,
+                    confianza: sugerenciaCRM.confianza,
+                    tipoEvidencia: sugerenciaCRM.tipoEvidencia,
+                    evidencias: [{
+                        id:
+                            mensaje?.key?.id ||
+                            `${remoteJid}:${fuente.timestamp}:${indice}`,
+                        timestampMs: fuente.timestamp
+                    }]
+                });
+                if (revision?.estado === 'pendiente') {
+                    detectados += 1;
+                    actualizados += 1;
+                } else {
+                    omitidos += 1;
+                }
+                continue;
+            }
             if (!telefono) {
                 const pendiente = this.asegurarPendienteJid(linea, remoteJid);
                 if (!pendiente) {
@@ -2114,7 +2376,9 @@ class ServicioAgendamiento extends EventEmitter {
                         candidato.usuario,
                         Boolean(candidato.mutuo)
                     )
-                    : null,
+                    : candidato.mutuo
+                        ? crearNombreTemporalMutuo(linea.nombre, candidato.telefono)
+                        : null,
                 ultimoResultado: candidato.ultimoResultado
                     ? clonarSeguro(candidato.ultimoResultado)
                     : null,
@@ -2490,7 +2754,9 @@ class ServicioAgendamiento extends EventEmitter {
                 signal
             });
         } finally {
-            if (this.sincronizacion === control) control.enMutacion = false;
+            if (control && this.sincronizacion === control) {
+                control.enMutacion = false;
+            }
         }
     }
 
@@ -2529,7 +2795,9 @@ class ServicioAgendamiento extends EventEmitter {
                 signal
             });
         } finally {
-            if (this.sincronizacion === control) control.enMutacion = false;
+            if (control && this.sincronizacion === control) {
+                control.enMutacion = false;
+            }
         }
     }
 
@@ -2567,7 +2835,7 @@ class ServicioAgendamiento extends EventEmitter {
         return false;
     }
 
-    async iniciarSincronizacion(lineaEntrada, cuentaIdEntrada) {
+    async iniciarSincronizacion(lineaEntrada, cuentaIdEntrada, opciones = {}) {
         if (this.sincronizacion || this.reservaSincronizacion) {
             throw new ErrorAgendamiento(
                 'SINCRONIZACION_ACTIVA',
@@ -2625,11 +2893,19 @@ class ServicioAgendamiento extends EventEmitter {
                 );
             }
 
+            const agendarMutuosSinUsuario =
+                opciones.agendarMutuosSinUsuario === true;
             candidatos = Object.values(linea.candidatos || {})
                 .filter(item => (
                     item
                     && item.telefono
-                    && normalizarUsuario(item.usuario)
+                    && (
+                        normalizarUsuario(item.usuario)
+                        || (
+                            agendarMutuosSinUsuario
+                            && item.mutuo === true
+                        )
+                    )
                     && !candidatoEstaSincronizado(item, cuentaId)
                 ))
                 .sort((a, b) => a.telefono.localeCompare(b.telefono));
@@ -2637,6 +2913,7 @@ class ServicioAgendamiento extends EventEmitter {
                 cancelado: false,
                 enMutacion: false,
                 controlador: new AbortController(),
+                agendarMutuosSinUsuario,
                 progreso: {
                     estado: 'preparando',
                     lineaId: info.id,
@@ -2697,7 +2974,11 @@ class ServicioAgendamiento extends EventEmitter {
                         candidato,
                         indice,
                         recursosCompartidos,
-                        control.controlador.signal
+                        control.controlador.signal,
+                        {
+                            agendarMutuosSinUsuario:
+                                control.agendarMutuosSinUsuario
+                        }
                     );
                 } catch (error) {
                     if (error?.name === 'AbortError') break;
@@ -2783,9 +3064,14 @@ class ServicioAgendamiento extends EventEmitter {
         candidato,
         indice,
         recursosCompartidos,
-        signal
+        signal,
+        opciones = {}
     ) {
-        if (!candidato.usuario) {
+        const usuarioSolicitud = normalizarUsuario(candidato.usuario);
+        const esTemporalMutuo = !usuarioSolicitud
+            && candidato.mutuo === true
+            && opciones.agendarMutuosSinUsuario === true;
+        if (!usuarioSolicitud && !esTemporalMutuo) {
             return { tipo: 'pendiente', codigo: 'SIN_USUARIO' };
         }
         const existentes = indice.get(candidato.telefono) || [];
@@ -2819,13 +3105,14 @@ class ServicioAgendamiento extends EventEmitter {
                         'La escritura anterior sigue sin aparecer en Google. Esperá 10 minutos antes de reintentar para evitar un duplicado.'
                 };
             }
-            const usuarioSolicitud = candidato.usuario;
             const huellaOperacion = crearHuellaCandidato(linea, candidato);
-            const nombre = crearNombreGestionado(
-                linea.nombre,
-                usuarioSolicitud,
-                Boolean(candidato.mutuo)
-            );
+            const nombre = esTemporalMutuo
+                ? crearNombreTemporalMutuo(linea.nombre, candidato.telefono)
+                : crearNombreGestionado(
+                    linea.nombre,
+                    usuarioSolicitud,
+                    Boolean(candidato.mutuo)
+                );
             const creada = await this.crearContactoGoogle(
                 token,
                 candidato.telefono,
@@ -2844,7 +3131,12 @@ class ServicioAgendamiento extends EventEmitter {
                 clientData: creada.clientData?.length ? creada.clientData : marcas
             };
             indice.set(candidato.telefono, [persona]);
-            return { tipo: 'creado', nombre, huellaOperacion };
+            return {
+                tipo: 'creado',
+                nombre,
+                temporal: esTemporalMutuo || undefined,
+                huellaOperacion
+            };
         }
 
         const persona = existentes[0];
@@ -2868,6 +3160,24 @@ class ServicioAgendamiento extends EventEmitter {
                 nombreActual
             };
         }
+        if (
+            esTemporalMutuo
+            && (
+                marcasActuales.usuario
+                || (
+                    prefijoLegacy === linea.prefijo
+                    && esNombreGestionado(nombreActual)
+                )
+            )
+        ) {
+            return {
+                tipo: 'revision',
+                codigo: 'USUARIO_GOOGLE_EXISTENTE',
+                nombreActual,
+                detalle:
+                    'El contacto ya tiene un usuario administrado en Google y no se reemplazará por un nombre temporal.'
+            };
+        }
         if (yaTienePunto && !candidato.mutuo) {
             candidato.mutuo = true;
             candidato.ultimoResultado = null;
@@ -2875,24 +3185,31 @@ class ServicioAgendamiento extends EventEmitter {
         let nombreNuevo;
         let clientDataNuevo = null;
 
-        nombreNuevo = crearNombreGestionado(
-            linea.nombre,
-            candidato.usuario,
-            Boolean(candidato.mutuo),
-            yaTienePunto
-        );
+        nombreNuevo = esTemporalMutuo
+            ? crearNombreTemporalMutuo(linea.nombre, candidato.telefono)
+            : crearNombreGestionado(
+                linea.nombre,
+                usuarioSolicitud,
+                Boolean(candidato.mutuo),
+                yaTienePunto
+            );
         clientDataNuevo = fusionarMarcasAutostatues(
             persona,
             linea.prefijo,
-            candidato.usuario
+            usuarioSolicitud
         );
         const huellaOperacion = crearHuellaCandidato(linea, candidato);
 
         const marcasYaActualizadas = clientDataNuevo
-            ? marcasAutostatuesCoinciden(persona, linea.prefijo, candidato.usuario)
+            ? marcasAutostatuesCoinciden(persona, linea.prefijo, usuarioSolicitud)
             : true;
         if (!nombreNuevo || (nombreNuevo === nombreActual && marcasYaActualizadas)) {
-            return { tipo: 'sin_cambios', nombre: nombreActual, huellaOperacion };
+            return {
+                tipo: 'sin_cambios',
+                nombre: nombreActual,
+                temporal: esTemporalMutuo || undefined,
+                huellaOperacion
+            };
         }
         if (!obtenerFuenteContacto(persona)) {
             return {
@@ -2916,7 +3233,12 @@ class ServicioAgendamiento extends EventEmitter {
                 ? actualizada.clientData
                 : (clientDataNuevo || persona.clientData)
         });
-        return { tipo: 'actualizado', nombre: nombreNuevo, huellaOperacion };
+        return {
+            tipo: 'actualizado',
+            nombre: nombreNuevo,
+            temporal: esTemporalMutuo || undefined,
+            huellaOperacion
+        };
     }
 
     cerrar() {
@@ -2944,8 +3266,10 @@ module.exports = {
     candidatoEstaSincronizado,
     crearMarcasAutostatues,
     crearNombreGestionado,
+    crearNombreTemporalMutuo,
     crearServicioAgendamiento,
     esNombreGestionado,
+    extraerUsuarioContactoWhatsApp,
     extraerTextoMensaje,
     fusionarMarcasAutostatues,
     indexarConexiones,
@@ -2961,6 +3285,7 @@ module.exports = {
     obtenerNombrePersona,
     obtenerPrefijoLinea,
     parsearPlantillaGreenvip,
+    parsearUsuarioEnPlantillaCRM,
     parsearUsuarioPorPalabrasClave,
     quitarMarcadoresMutuos
 };

@@ -1,0 +1,155 @@
+/*
+ * ZeroOne Interface System
+ * Tokens y comportamientos compartidos por todos los temas.
+ */
+
+:root[data-theme] {
+    --zo-space-1: 4px;
+    --zo-space-2: 8px;
+    --zo-space-3: 12px;
+    --zo-space-4: 16px;
+    --zo-space-5: 20px;
+    --zo-radius-control: 11px;
+    --zo-radius-card: 16px;
+    --zo-radius-panel: 20px;
+    --zo-focus-ring: 0 0 0 3px rgba(var(--signal-rgb), .18);
+    --zo-elevation-card:
+        0 14px 34px rgba(0, 0, 0, .14),
+        inset 0 1px 0 rgba(255, 255, 255, .025);
+    --zo-elevation-panel:
+        0 22px 52px rgba(0, 0, 0, .18),
+        inset 0 1px 0 rgba(255, 255, 255, .035);
+    --zo-motion-fast: 140ms;
+    --zo-motion-standard: 200ms;
+    --zo-ease: cubic-bezier(.2, .75, .25, 1);
+}
+
+:is(
+    button,
+    input,
+    textarea,
+    select,
+    [role="button"],
+    [tabindex]:not([tabindex="-1"])
+):focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 2px;
+    box-shadow: var(--zo-focus-ring);
+}
+
+:is(
+    .primary-button,
+    .secondary-button,
+    .icon-button,
+    .view-button,
+    .line-view-button,
+    .settings-tab,
+    .nav-button
+) {
+    transition:
+        color var(--zo-motion-fast) var(--zo-ease),
+        border-color var(--zo-motion-fast) var(--zo-ease),
+        background var(--zo-motion-fast) var(--zo-ease),
+        box-shadow var(--zo-motion-standard) var(--zo-ease),
+        transform var(--zo-motion-fast) var(--zo-ease);
+}
+
+:is(
+    .primary-button,
+    .secondary-button,
+    .icon-button,
+    .view-button,
+    .line-view-button,
+    .settings-tab
+):active:not(:disabled) {
+    transform: scale(.975);
+}
+
+:is(
+    .panel,
+    .connected-line-card,
+    .pending-line-card,
+    .program-card,
+    .active-group-card
+) {
+    box-shadow: var(--zo-elevation-card);
+}
+
+.panel {
+    box-shadow: var(--zo-elevation-panel);
+}
+
+:is(
+    .input,
+    input[type="text"],
+    input[type="number"],
+    input[type="search"],
+    input[type="time"],
+    textarea,
+    select
+) {
+    transition:
+        border-color var(--zo-motion-fast) var(--zo-ease),
+        background var(--zo-motion-fast) var(--zo-ease),
+        box-shadow var(--zo-motion-fast) var(--zo-ease);
+}
+
+:is(
+    .input,
+    input[type="text"],
+    input[type="number"],
+    input[type="search"],
+    input[type="time"],
+    textarea,
+    select
+):focus {
+    border-color: rgba(var(--signal-rgb), .55);
+    box-shadow: var(--zo-focus-ring);
+}
+
+/* El navegador omite layout y pintura de elementos fuera del viewport. */
+:is(
+    .connected-line-card,
+    .pending-line-card,
+    .program-card,
+    .active-group-card,
+    .history-item
+) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 280px;
+}
+
+.agenda-contact-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 76px;
+}
+
+.agenda-ai-review-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 120px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    :is(
+        .connected-line-card,
+        .pending-line-card,
+        .program-card,
+        .active-group-card
+    ):hover {
+        border-color: rgba(var(--signal-rgb), .24);
+        box-shadow:
+            0 18px 42px rgba(0, 0, 0, .20),
+            inset 0 1px 0 rgba(255, 255, 255, .045);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}

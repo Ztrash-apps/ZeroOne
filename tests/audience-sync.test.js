@@ -29,6 +29,7 @@ function cargarBackendAislado(rutaDatos) {
                 resincronizarAudienciaEstados,
                 cancelarReintentoAudiencia,
                 finalizarAudienciaConfirmadaLocalmente,
+                seleccionarMejorAudiencia,
                 registrarVisualizacionesEstadosActivos,
                 obtenerVistaEstadosActivos,
                 estadosActivos,
@@ -86,6 +87,43 @@ function crearLinea(socket) {
         cacheResumenPriorizacionAudiencia: null
     };
 }
+
+test('elige la audiencia mayor y WhatsApp gana los empates', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-source-')
+    );
+    let backend = null;
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        const linea = crearLinea({});
+        linea.contactosEstadoWhatsApp = new Set([
+            '595981000001@s.whatsapp.net',
+            '595981000002@s.whatsapp.net'
+        ]);
+        linea.contactosEstadoGoogle = new Set([
+            '595981000003@s.whatsapp.net',
+            '595981000004@s.whatsapp.net',
+            '595981000005@s.whatsapp.net'
+        ]);
+
+        let seleccion = backend.seleccionarMejorAudiencia(linea);
+        assert.equal(seleccion.origen, 'google');
+        assert.equal(seleccion.total, 3);
+        assert.equal(linea.origenAudiencia, 'google');
+
+        linea.contactosEstadoWhatsApp.add(
+            '595981000006@s.whatsapp.net'
+        );
+        seleccion = backend.seleccionarMejorAudiencia(linea);
+        assert.equal(seleccion.origen, 'whatsapp');
+        assert.equal(seleccion.total, 3);
+        assert.equal(linea.origenAudiencia, 'whatsapp');
+    } finally {
+        backend?.runtimeIALocal?.cerrar?.();
+        backend?.servicioAgendamiento?.cerrar?.();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
 
 test('cuenta una sola visualización por persona y estado', () => {
     const rutaDatos = fs.mkdtempSync(

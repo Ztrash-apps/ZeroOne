@@ -9,14 +9,19 @@ const test = require('node:test');
 
 const {
     agregarMarcadorMutuo,
+    candidatoEstaSincronizado,
+    crearMarcasAutostatues,
     crearNombreGestionado,
+    crearNombreTemporalMutuo,
     crearServicioAgendamiento,
     esNombreGestionado,
+    extraerUsuarioContactoWhatsApp,
     indexarConexiones,
     normalizarPalabrasClaveUsuario,
     normalizarTelefono,
     obtenerPrefijoLinea,
     parsearPlantillaGreenvip,
+    parsearUsuarioEnPlantillaCRM,
     parsearUsuarioPorPalabrasClave
 } = require('../src/agendamiento');
 
@@ -122,6 +127,110 @@ test('el parser reconoce solamente la plantilla acordada y no expone la clave', 
         ),
         { usuario: 'cliente_78' }
     );
+});
+
+test('las variantes CRM incrustadas se detectan sólo como sugerencias revisables', async t => {
+    assert.deepEqual(
+        parsearUsuarioEnPlantillaCRM(
+            '¡Genial acreditado rositaflor77! Ya quedó todo actualizado gracias por la confianza ❤️'
+        ),
+        {
+            usuario: 'rositaflor77',
+            confianza: 90,
+            tipoEvidencia: 'PLANTILLA_CRM'
+        }
+    );
+    assert.equal(
+        parsearUsuarioEnPlantillaCRM(
+            '¡Genial acreditado {USERNAME}! Ya quedó todo actualizado'
+        ),
+        null
+    );
+
+    const servicio = crearServicioAgendamiento({
+        rutaDatos: crearTemporal(t),
+        codigoPais: '595'
+    });
+    const linea = { id: 'linea-crm', nombre: 'Línea 47' };
+    const resultado = await servicio.registrarMensajes(linea, [{
+        key: {
+            fromMe: true,
+            remoteJid: '595981470001@s.whatsapp.net',
+            id: 'CRM-1'
+        },
+        messageTimestamp: 1_700_000_000,
+        message: {
+            conversation:
+                '¡Genial acreditado rositaflor77! Ya quedó todo actualizado gracias por la confianza ❤️'
+        }
+    }]);
+
+    assert.equal(resultado.detectados, 1);
+    const vista = servicio.obtenerVista(linea);
+    assert.equal(vista.candidatos.length, 0);
+    assert.equal(vista.revisionesIA.length, 1);
+    assert.equal(vista.revisionesIA[0].usuario, 'rositaflor77');
+    assert.equal(vista.revisionesIA[0].tipoEvidencia, 'PLANTILLA_CRM');
+    servicio.cerrar();
+});
+
+test('corrobora primero contactos gestionados de WhatsApp y revisa nombres ambiguos', async t => {
+    assert.deepEqual(
+        extraerUsuarioContactoWhatsApp('TT L47 rositaflor77 🟣', 'TT L47'),
+        { usuario: 'rositaflor77', confirmado: true, mutuo: true }
+    );
+    assert.deepEqual(
+        extraerUsuarioContactoWhatsApp('florencia88', 'TT L47'),
+        { usuario: 'florencia88', confirmado: false, mutuo: false }
+    );
+    assert.equal(
+        extraerUsuarioContactoWhatsApp('María González', 'TT L47'),
+        null
+    );
+    assert.equal(
+        extraerUsuarioContactoWhatsApp('L48 usuarioajeno77', 'TT L47'),
+        null
+    );
+
+    const rutaDatos = crearTemporal(t);
+    const linea = { id: 'linea-contactos-wa', nombre: 'TT L47' };
+    const servicio = crearServicioAgendamiento({
+        rutaDatos,
+        codigoPais: '595'
+    });
+    const resultado = await servicio.registrarContactosWhatsApp(linea, [
+        {
+            id: '595981470010@s.whatsapp.net',
+            name: 'L47 rositaflor77 🟣'
+        },
+        {
+            id: '595981470011@s.whatsapp.net',
+            name: 'florencia88'
+        },
+        {
+            id: '595981470012@s.whatsapp.net',
+            name: 'María González'
+        }
+    ]);
+
+    assert.deepEqual(resultado, {
+        confirmados: 1,
+        revisiones: 1,
+        omitidos: 1
+    });
+    let vista = servicio.obtenerVista(linea);
+    assert.equal(vista.candidatos.length, 1);
+    assert.equal(vista.candidatos[0].usuario, 'rositaflor77');
+    assert.equal(vista.candidatos[0].usuarioFuente, 'whatsapp');
+    assert.equal(vista.candidatos[0].usuarioBloqueadoManual, true);
+    assert.equal(vista.candidatos[0].mutuo, true);
+    assert.equal(vista.revisionesIA[0].usuario, 'florencia88');
+    servicio.cerrar();
+
+    const recargado = crearServicioAgendamiento({ rutaDatos, codigoPais: '595' });
+    vista = recargado.obtenerVista(linea);
+    assert.equal(vista.candidatos[0].usuarioFuente, 'whatsapp');
+    recargado.cerrar();
 });
 
 test('las palabras clave son literales, configurables y se conservan sin guardar chats', async t => {
@@ -725,6 +834,76 @@ test('normaliza teléfonos y genera nombres idempotentes desde el último númer
     assert.equal(agregarMarcadorMutuo('María 🟣'), 'María 🟣');
     assert.equal(esNombreGestionado('L28 cliente_77 🟣'), true);
     assert.equal(esNombreGestionado('María 🟣'), false);
+});
+
+test('agenda contactos mutuos sin usuario solo cuando la preferencia está activa', async t => {
+    assert.equal(
+        crearNombreTemporalMutuo('TT L21', '+595983730123'),
+        'L21 Contacto 0123 🟣'
+    );
+    assert.deepEqual(crearMarcasAutostatues('L21', null), [
+        { key: 'autostatues_line', value: 'L21' }
+    ]);
+
+    const rutaDatos = crearTemporal(t);
+    let cuerpoCreado = null;
+    const servicio = crearServicioAgendamiento({
+        rutaDatos,
+        codigoPais: '595',
+        fetch: async (_url, opciones = {}) => {
+            cuerpoCreado = JSON.parse(opciones.body);
+            return respuestaJson({
+                resourceName: 'people/contacto-temporal',
+                names: cuerpoCreado.names,
+                phoneNumbers: cuerpoCreado.phoneNumbers,
+                clientData: cuerpoCreado.clientData
+            });
+        }
+    });
+    const candidato = {
+        telefono: '+595983730123',
+        usuario: null,
+        mutuo: true,
+        ultimoResultado: null
+    };
+    const linea = { id: 'linea-21', nombre: 'TT L21', prefijo: 'L21' };
+    const signal = new AbortController().signal;
+
+    const omitido = await servicio.procesarCandidato(
+        'token',
+        linea,
+        candidato,
+        new Map(),
+        new Set(),
+        signal,
+        { agendarMutuosSinUsuario: false }
+    );
+    assert.equal(omitido.codigo, 'SIN_USUARIO');
+    assert.equal(cuerpoCreado, null);
+
+    const creado = await servicio.procesarCandidato(
+        'token',
+        linea,
+        candidato,
+        new Map(),
+        new Set(),
+        signal,
+        { agendarMutuosSinUsuario: true }
+    );
+    assert.equal(creado.tipo, 'creado');
+    assert.equal(creado.temporal, true);
+    assert.equal(creado.nombre, 'L21 Contacto 0123 🟣');
+    assert.deepEqual(cuerpoCreado.clientData, [
+        { key: 'autostatues_line', value: 'L21' }
+    ]);
+
+    candidato.ultimoResultado = {
+        tipo: 'creado',
+        temporal: true,
+        cuentaId: 'cuenta-1'
+    };
+    assert.equal(candidatoEstaSincronizado(candidato, 'cuenta-1'), true);
+    servicio.cerrar();
 });
 
 test('conserva una señal que llega antes que el usuario y persiste sin texto ni contraseña', async t => {

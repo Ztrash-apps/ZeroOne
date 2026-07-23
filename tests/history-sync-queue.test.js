@@ -309,6 +309,65 @@ test('el selector une hosted LID y PN antes de crear contexto para Qwen', async 
     );
 });
 
+test('el selector entrega todos los mensajes salientes aunque no tengan referencias', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-ai-sin-prefiltro-')
+    );
+    const backend = cargarBackendAislado(rutaDatos);
+    t.after(() => cerrarBackendAislado(backend, rutaDatos));
+    const jid = '595981230100@s.whatsapp.net';
+    const mensajes = Array.from({ length: 10 }, (_, indice) =>
+        mensajeSaliente(
+            jid,
+            `conversación libre número ${indice}`,
+            1700001000 + indice,
+            `libre-${indice}`
+        )
+    );
+    const entrante = {
+        ...mensajeSaliente(
+            jid,
+            'este mensaje recibido no debe analizarse',
+            1700001011,
+            'recibido'
+        ),
+        key: {
+            fromMe: false,
+            remoteJid: jid,
+            id: 'recibido'
+        }
+    };
+    const sinIdA = mensajeSaliente(
+        jid,
+        'primer mensaje sin identificador',
+        1700001010,
+        undefined
+    );
+    const sinIdB = mensajeSaliente(
+        jid,
+        'segundo mensaje sin identificador',
+        1700001010,
+        undefined
+    );
+
+    const lote = backend.seleccionarMensajesContextualesIA(
+        [...mensajes, sinIdA, sinIdB, entrante],
+        ['Usuario:'],
+        {
+            mapeosActividadContactos: new Map(),
+            marcaAnalisisIA: null
+        }
+    );
+
+    assert.equal(lote.mensajes.length, 12);
+    assert.equal(lote.mensajesDisponibles, 12);
+    assert.equal(lote.marcasLote.length, 2);
+    assert.deepEqual(
+        lote.mensajes.filter(item => item.key.id).map(item => item.key.id),
+        mensajes.map(item => item.key.id)
+    );
+});
+
 test('la marca estable continúa la tanda aunque entren chats más nuevos', async t => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'autostatues-ai-cursor-estable-')

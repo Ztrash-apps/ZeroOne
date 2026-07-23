@@ -23,17 +23,23 @@ const {
 } = require('./image-compression');
 const {
     ErrorAgendamiento,
+    crearNombreTemporalMutuo,
     crearServicioAgendamiento,
     extraerTextoMensaje,
     obtenerPrefijoLinea,
     indexarConexiones
 } = require('./agendamiento');
 const {
+    MAXIMO_MENSAJES_POR_VENTANA,
+    SEPARACION_MAXIMA_MS,
     crearDetectorUsuarioIA,
     redactarTextoParaIA
 } = require('./ai-username-detector');
 const { crearRuntimeIALocal } = require('./local-ai-runtime');
 const { crearAlmacenMensajesRecientes } = require('./recent-message-store');
+const {
+    registrarRutasConfiguracion
+} = require('./routes/configuration');
 
 const app = express();
 app.disable('x-powered-by');
@@ -407,6 +413,80 @@ function normalizarOrigenAudiencia(valor) {
     return ['whatsapp', 'google'].includes(valor) ? valor : null;
 }
 
+function normalizarContactosAudiencia(valores) {
+    return new Set(
+        (Array.isArray(valores) ? valores : [...(valores || [])])
+            .map(normalizarJidDestinatario)
+            .filter(Boolean)
+    );
+}
+
+function asegurarFuentesAudiencia(linea) {
+    if (!(linea.contactosEstado instanceof Set)) {
+        linea.contactosEstado = normalizarContactosAudiencia(
+            linea.contactosEstado
+        );
+    }
+    if (!(linea.contactosEstadoWhatsApp instanceof Set)) {
+        linea.contactosEstadoWhatsApp = new Set();
+    }
+    if (!(linea.contactosEstadoGoogle instanceof Set)) {
+        linea.contactosEstadoGoogle = new Set();
+    }
+
+    // Compatibilidad con instantáneas creadas antes de separar las fuentes.
+    if (
+        linea.contactosEstado.size > 0 &&
+        linea.contactosEstadoWhatsApp.size < 1 &&
+        linea.contactosEstadoGoogle.size < 1
+    ) {
+        const origen = normalizarOrigenAudiencia(linea.origenAudiencia);
+        const destino = origen === 'google'
+            ? linea.contactosEstadoGoogle
+            : linea.contactosEstadoWhatsApp;
+        for (const jid of linea.contactosEstado) destino.add(jid);
+    }
+}
+
+function seleccionarMejorAudiencia(linea, opciones = {}) {
+    asegurarFuentesAudiencia(linea);
+    const permitirWhatsApp = opciones.permitirWhatsApp !== false;
+    const permitirGoogle = opciones.permitirGoogle !== false;
+    const whatsapp = permitirWhatsApp
+        ? linea.contactosEstadoWhatsApp
+        : new Set();
+    const google = permitirGoogle
+        ? linea.contactosEstadoGoogle
+        : new Set();
+    let origen = null;
+    let seleccion = new Set();
+
+    // WhatsApp se evalúa primero y gana los empates.
+    if (whatsapp.size > 0 && whatsapp.size >= google.size) {
+        origen = 'whatsapp';
+        seleccion = whatsapp;
+    } else if (google.size > 0) {
+        origen = 'google';
+        seleccion = google;
+    }
+
+    const anterior = linea.contactosEstado;
+    const cambio = normalizarOrigenAudiencia(linea.origenAudiencia) !== origen ||
+        anterior.size !== seleccion.size ||
+        [...seleccion].some(jid => !anterior.has(jid));
+    linea.contactosEstado = new Set(seleccion);
+    linea.origenAudiencia = origen;
+    if (cambio) invalidarResumenPriorizacionAudiencia(linea);
+
+    return {
+        cambio,
+        origen,
+        total: seleccion.size,
+        whatsapp: linea.contactosEstadoWhatsApp.size,
+        google: linea.contactosEstadoGoogle.size
+    };
+}
+
 let colaPublicaciones = Promise.resolve();
 let publicacionesPendientes = 0;
 let generacionColaPublicaciones = 0;
@@ -529,6 +609,9 @@ const MODOS_PRIVACIDAD_ESTADOS = Object.freeze({
 let configuracion = {
     limiteFallosSeguridad: 1,
     notificaciones: true,
+    mantenerEnSegundoPlano: true,
+    iniciarConWindows: true,
+    agendarMutuosSinUsuario: false,
     temaVisual: 'eva-01',
     modoRitmoPredeterminado: 'secuencial',
     intervaloSegundosPredeterminado: 45,
@@ -1323,6 +1406,12 @@ function cargarConfiguracion() {
                 true
             ),
             notificaciones: datos.notificaciones !== false,
+            mantenerEnSegundoPlano:
+                datos.mantenerEnSegundoPlano !== false,
+            iniciarConWindows:
+                datos.iniciarConWindows !== false,
+            agendarMutuosSinUsuario:
+                datos.agendarMutuosSinUsuario === true,
             temaVisual: normalizarTemaVisual(datos.temaVisual),
             modoRitmoPredeterminado: normalizarModoRitmo(
                 datos.modoRitmoPredeterminado,
@@ -3023,6 +3112,8 @@ function audienciaEstadosLista(linea) {
 
 function cargarAudienciaEstados(linea) {
     linea.contactosEstado = new Set();
+    linea.contactosEstadoWhatsApp = new Set();
+    linea.contactosEstadoGoogle = new Set();
     linea.privacidadEstados = null;
     linea.origenAudiencia = null;
     linea.audienciaResincronizada = false;
@@ -3037,13 +3128,24 @@ function cargarAudienciaEstados(linea) {
         const datos = JSON.parse(fs.readFileSync(ruta, 'utf8'));
         const contactos = Array.isArray(datos.contactos) ? datos.contactos : [];
 
-        linea.contactosEstado = new Set(
-            contactos.map(normalizarJidDestinatario).filter(Boolean)
-        );
+        linea.contactosEstado = normalizarContactosAudiencia(contactos);
         linea.privacidadEstados = normalizarPrivacidadEstados(datos.privacidad);
         linea.origenAudiencia = linea.contactosEstado.size > 0
             ? normalizarOrigenAudiencia(datos.origenAudiencia)
             : null;
+        const tieneFuentesSeparadas =
+            Array.isArray(datos.contactosWhatsApp) ||
+            Array.isArray(datos.contactosGoogle);
+        if (tieneFuentesSeparadas) {
+            linea.contactosEstadoWhatsApp = normalizarContactosAudiencia(
+                datos.contactosWhatsApp
+            );
+            linea.contactosEstadoGoogle = normalizarContactosAudiencia(
+                datos.contactosGoogle
+            );
+        }
+        asegurarFuentesAudiencia(linea);
+        seleccionarMejorAudiencia(linea);
 
         // La instantánea guardada sirve como respaldo, pero no se considera
         // actual hasta que WhatsApp la valide otra vez en este proceso.
@@ -3064,12 +3166,15 @@ function asegurarAudienciaEstados(linea) {
 
 function guardarAudienciaEstados(linea) {
     asegurarAudienciaEstados(linea);
+    asegurarFuentesAudiencia(linea);
 
     const ruta = rutaAudienciaEstados(linea.id);
     fs.mkdirSync(path.dirname(ruta), { recursive: true });
 
     guardarJSONAtomico(ruta, {
         contactos: [...linea.contactosEstado].sort(),
+        contactosWhatsApp: [...linea.contactosEstadoWhatsApp].sort(),
+        contactosGoogle: [...linea.contactosEstadoGoogle].sort(),
         privacidad: linea.privacidadEstados,
         origenAudiencia: normalizarOrigenAudiencia(linea.origenAudiencia),
         audienciaResincronizada: linea.audienciaResincronizada === true
@@ -3457,6 +3562,58 @@ function registrarMensajesParaAgendamiento(
     return linea.promesaIngestaAgendamiento;
 }
 
+function registrarContactosWhatsAppParaAgendamiento(
+    linea,
+    socket,
+    contactos
+) {
+    if (
+        !linea || !socket ||
+        lineas.get(linea.id) !== linea ||
+        linea.socket !== socket ||
+        linea.eliminando ||
+        !Array.isArray(contactos) ||
+        contactos.length < 1
+    ) return Promise.resolve(null);
+
+    const generacionConexion = Number(linea.generacionConexion) || 0;
+    const resolver = (jid, contexto) =>
+        resolverJidAgendamiento(linea, socket, jid, contexto);
+    const anterior =
+        linea.promesaIngestaAgendamiento || Promise.resolve();
+    const actual = Promise.resolve(anterior)
+        .catch(() => {})
+        .then(() => {
+            if (
+                !conexionSigueVigente(
+                    linea.id,
+                    linea,
+                    generacionConexion,
+                    socket
+                ) ||
+                linea.eliminando
+            ) return null;
+            return servicioAgendamiento.registrarContactosWhatsApp(
+                describirLineaParaAgendamiento(linea),
+                contactos,
+                resolver
+            );
+        });
+
+    linea.promesaIngestaAgendamiento = actual.catch(error => {
+        linea.errorIngestaAgendamiento =
+            error?.codigo ||
+            error?.message ||
+            'ERROR_CONTACTOS_WHATSAPP';
+        console.warn(
+            `No se pudieron corroborar los contactos guardados de ${linea.nombre}:`,
+            linea.errorIngestaAgendamiento
+        );
+        return null;
+    });
+    return linea.promesaIngestaAgendamiento;
+}
+
 function obtenerMensajesRecientesCombinados(linea) {
     const combinados = new Map();
     try {
@@ -3511,31 +3668,6 @@ async function reanalizarMensajesRecientesAgendamiento(linea) {
     return { disponibles: mensajes.length, procesados: true };
 }
 
-function textoComparableIA(valor) {
-    return String(valor || '')
-        .normalize('NFD')
-        .replace(/\p{M}/gu, '')
-        .toLocaleLowerCase('es');
-}
-
-function textoContieneFraseIA(texto, frase) {
-    if (!texto || !frase) return false;
-    const esToken = caracter => /[\p{L}\p{N}_.-]/u.test(caracter || '');
-    let desde = 0;
-    while (desde <= texto.length - frase.length) {
-        const indice = texto.indexOf(frase, desde);
-        if (indice < 0) return false;
-        const antesValido = !esToken(frase[0]) ||
-            indice === 0 || !esToken(texto[indice - 1]);
-        const final = indice + frase.length;
-        const despuesValido = !esToken(frase.at(-1)) ||
-            final === texto.length || !esToken(texto[final]);
-        if (antesValido && despuesValido) return true;
-        desde = indice + 1;
-    }
-    return false;
-}
-
 function normalizarCuarentenaAnalisisIA(entrada, ahora = Date.now()) {
     const unicas = new Map();
     for (const item of Array.isArray(entrada) ? entrada : []) {
@@ -3574,16 +3706,25 @@ function ponerLoteEnCuarentenaAnalisisIA(linea, marcas) {
     return linea.cuarentenaAnalisisIA.length;
 }
 
-function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null) {
-    const disparadores = (Array.isArray(palabrasClave) ? palabrasClave : [])
-        .map(textoComparableIA)
-        .filter(valor => valor.length >= 2);
-    const frasesBase = [
-        'usuario:', 'alias:', 'todo listo', 'ya esta', 'ya quedo',
-        'carga lista', 'carga hecha', 'carga realizada', 'carga acreditada',
-        'carga completada'
-    ];
-    const frases = [...new Set([...disparadores, ...frasesBase])];
+function claveMensajeAnalisisIA(mensaje) {
+    const jid = String(mensaje?.key?.remoteJid || '');
+    const id = String(mensaje?.key?.id || '').trim();
+    if (id) return `${jid}\u0000id:${id}`;
+    const timestamp = normalizarTimestampActividadContactos(
+        mensaje?.messageTimestamp
+    );
+    const textoHash = crypto.createHash('sha256')
+        .update(extraerTextoMensaje(mensaje))
+        .digest('hex')
+        .slice(0, 24);
+    return `${jid}\u0000fallback:${timestamp || ''}:${textoHash}`;
+}
+
+function seleccionarMensajesContextualesIA(
+    mensajes,
+    _referenciasDirectas,
+    linea = null
+) {
     const grupos = new Map();
     for (const mensaje of Array.isArray(mensajes) ? mensajes : []) {
         if (mensaje?.key?.fromMe !== true) continue;
@@ -3618,25 +3759,23 @@ function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null
             String(a?.key?.id || '').localeCompare(String(b?.key?.id || ''))
         ));
         const unidades = [];
-        for (let indice = 0; indice < lista.length; indice += 1) {
-            const texto = textoComparableIA(extraerTextoMensaje(lista[indice]));
-            if (!frases.some(frase => textoContieneFraseIA(texto, frase))) {
-                continue;
-            }
-            const mensajesUnidad = lista.slice(
-                Math.max(0, indice - 3),
-                Math.min(lista.length, indice + 2)
+        let mensajesUnidad = [];
+        let timestampAnterior = 0;
+        const cerrarUnidad = () => {
+            if (!mensajesUnidad.length) return;
+            const ancla = mensajesUnidad[0];
+            const idMensaje = String(ancla?.key?.id || '').trim();
+            const timestampAncla = normalizarTimestampActividadContactos(
+                ancla?.messageTimestamp
             );
-            const disparador = lista[indice];
-            const idMensaje = String(disparador?.key?.id || '').trim();
             const timestampUnidad = normalizarTimestampActividadContactos(
-                disparador?.messageTimestamp
+                mensajesUnidad.at(-1)?.messageTimestamp
             );
             const identidadUnidad = idMensaje
-                ? `id:${idMensaje}:${timestampUnidad || ''}`
-                : `fallback:${jid}:${timestampUnidad || ''}:${
+                ? `id:${idMensaje}:${timestampAncla || ''}`
+                : `fallback:${jid}:${timestampAncla || ''}:${
                     crypto.createHash('sha256')
-                        .update(extraerTextoMensaje(disparador))
+                        .update(extraerTextoMensaje(ancla))
                         .digest('hex')
                 }`;
             unidades.push({
@@ -3647,7 +3786,29 @@ function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null
                     .digest('hex'),
                 timestamp: timestampUnidad
             });
+            mensajesUnidad = [];
+            timestampAnterior = 0;
+        };
+
+        for (const mensaje of lista) {
+            const timestamp = normalizarTimestampActividadContactos(
+                mensaje?.messageTimestamp
+            );
+            const superaSeparacion =
+                mensajesUnidad.length > 0 &&
+                timestampAnterior > 0 &&
+                timestamp > 0 &&
+                timestamp - timestampAnterior > SEPARACION_MAXIMA_MS;
+            if (
+                mensajesUnidad.length >= MAXIMO_MENSAJES_POR_VENTANA ||
+                superaSeparacion
+            ) {
+                cerrarUnidad();
+            }
+            mensajesUnidad.push(mensaje);
+            timestampAnterior = timestamp;
         }
+        cerrarUnidad();
         unidades.sort((a, b) => b.timestamp - a.timestamp);
         if (unidades.length) unidadesPorChat.push({ jid, unidades });
     }
@@ -3684,17 +3845,13 @@ function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null
     const clavesTotales = new Set();
     for (const unidad of unidadesJustas) {
         for (const mensaje of unidad.mensajes) {
-            clavesTotales.add(`${mensaje?.key?.remoteJid || ''}\u0000${
-                mensaje?.key?.id || mensaje?.messageTimestamp || ''
-            }`);
+            clavesTotales.add(claveMensajeAnalisisIA(mensaje));
         }
     }
     const clavesEnCuarentena = new Set();
     for (const unidad of unidadesEnCuarentena) {
         for (const mensaje of unidad.mensajes) {
-            clavesEnCuarentena.add(`${mensaje?.key?.remoteJid || ''}\u0000${
-                mensaje?.key?.id || mensaje?.messageTimestamp || ''
-            }`);
+            clavesEnCuarentena.add(claveMensajeAnalisisIA(mensaje));
         }
     }
     const totalUnidades = unidadesDisponibles.length;
@@ -3716,9 +3873,7 @@ function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null
         const indiceUnidad = (cursorInicial + paso) % totalUnidades;
         const unidad = unidadesDisponibles[indiceUnidad];
         const nuevos = unidad.mensajes.filter(mensaje => {
-            const clave = `${mensaje?.key?.remoteJid || ''}\u0000${
-                mensaje?.key?.id || mensaje?.messageTimestamp || ''
-            }`;
+            const clave = claveMensajeAnalisisIA(mensaje);
             return !vistos.has(clave);
         });
         if (
@@ -3729,9 +3884,7 @@ function seleccionarMensajesContextualesIA(mensajes, palabrasClave, linea = null
             break;
         }
         for (const mensaje of nuevos) {
-            const clave = `${mensaje?.key?.remoteJid || ''}\u0000${
-                mensaje?.key?.id || mensaje?.messageTimestamp || ''
-            }`;
+            const clave = claveMensajeAnalisisIA(mensaje);
             vistos.add(clave);
             seleccionados.push(mensaje);
         }
@@ -4167,6 +4320,7 @@ async function actualizarContactosEstado(
     if (!Array.isArray(contactos) || contactos.length === 0) return;
 
     asegurarAudienciaEstados(linea);
+    asegurarFuentesAudiencia(linea);
     asegurarActividadContactos(linea);
     let huboCambios = false;
     let huboCambiosActividad = false;
@@ -4224,8 +4378,8 @@ async function actualizarContactosEstado(
         }
 
         if (estaGuardado && jid) {
-            if (!linea.contactosEstado.has(jid)) {
-                linea.contactosEstado.add(jid);
+            if (!linea.contactosEstadoWhatsApp.has(jid)) {
+                linea.contactosEstadoWhatsApp.add(jid);
                 huboCambios = true;
             }
 
@@ -4235,7 +4389,7 @@ async function actualizarContactosEstado(
                 for (const relacionado of jidsRelacionados) {
                     if (
                         esJidLid(relacionado) &&
-                        linea.contactosEstado.delete(relacionado)
+                        linea.contactosEstadoWhatsApp.delete(relacionado)
                     ) {
                         huboCambios = true;
                     }
@@ -4243,7 +4397,7 @@ async function actualizarContactosEstado(
             }
         } else {
             for (const relacionado of jidsRelacionados) {
-                if (linea.contactosEstado.delete(relacionado)) {
+                if (linea.contactosEstadoWhatsApp.delete(relacionado)) {
                     huboCambios = true;
                 }
             }
@@ -4251,8 +4405,10 @@ async function actualizarContactosEstado(
     }
 
     if (huboCambios && linea.socket === socket) {
-        linea.origenAudiencia = 'whatsapp';
-        invalidarResumenPriorizacionAudiencia(linea);
+        seleccionarMejorAudiencia(linea, {
+            permitirGoogle:
+                linea.audienciaGoogleConfirmadaEnConexion === true
+        });
         guardarAudienciaEstados(linea);
     }
 
@@ -4382,9 +4538,11 @@ async function refrescarAudienciaDesdeGoogle(
         return { ok: false, motivo: 'CONEXION_CAMBIO', total: 0 };
     }
 
-    linea.contactosEstado = resultado.contactos;
+    asegurarFuentesAudiencia(linea);
+    linea.contactosEstadoGoogle = new Set(resultado.contactos);
+    linea.audienciaGoogleConfirmadaEnConexion = true;
+    const seleccion = seleccionarMejorAudiencia(linea);
     linea.contactosAudienciaConfirmados = true;
-    linea.origenAudiencia = 'google';
     linea.audienciaResincronizada = false;
     linea.ultimoErrorAudiencia = null;
     invalidarResumenPriorizacionAudiencia(linea);
@@ -4400,7 +4558,8 @@ async function refrescarAudienciaDesdeGoogle(
 
     console.log(
         `[Audiencia] ${linea.nombre}: ${resultado.total} contacto(s) ` +
-        `actualizados desde Google Contacts (${origen}).`
+        `disponibles desde Google Contacts (${origen}); ` +
+        `se eligió ${seleccion.origen || 'ninguna fuente'} (${seleccion.total}).`
     );
 
     return {
@@ -4784,6 +4943,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
             linea.socketValidacionAudiencia = socket;
             linea.contactosAudienciaConfirmados = false;
             linea.privacidadAudienciaConfirmada = false;
+            linea.audienciaGoogleConfirmadaEnConexion = false;
         }
 
         linea.intentosResincronizacionAudiencia =
@@ -4800,6 +4960,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
         };
 
         if (!linea.contactosAudienciaConfirmados) {
+            asegurarFuentesAudiencia(linea);
             resultadoContactos = await sincronizarColeccionAudiencia(
                 linea,
                 socket,
@@ -4810,15 +4971,23 @@ async function resincronizarAudienciaEstados(linea, socket) {
                 return;
             }
 
+            // Algunos dobles de prueba y versiones antiguas sólo actualizan
+            // la colección seleccionada. La migramos únicamente cuando no hay
+            // datos atribuidos a Google para no confundir ambas fuentes.
             if (
                 resultadoContactos.correcta &&
+                linea.contactosEstadoWhatsApp.size < 1 &&
+                linea.contactosEstadoGoogle.size < 1 &&
                 linea.contactosEstado.size > 0
             ) {
-                linea.contactosAudienciaConfirmados = true;
-                linea.origenAudiencia =
-                    normalizarOrigenAudiencia(linea.origenAudiencia) ||
-                    'whatsapp';
-            } else if (resultadoContactos.correcta) {
+                linea.contactosEstadoWhatsApp =
+                    new Set(linea.contactosEstado);
+            }
+
+            const whatsappConfirmado =
+                resultadoContactos.correcta &&
+                linea.contactosEstadoWhatsApp.size > 0;
+            if (resultadoContactos.correcta && !whatsappConfirmado) {
                 resultadoContactos = {
                     ...resultadoContactos,
                     correcta: false,
@@ -4828,72 +4997,90 @@ async function resincronizarAudienciaEstados(linea, socket) {
                 };
             }
 
-            // Una sincronización sin error también puede llegar vacía.
-            // En ese caso usamos la cuenta Google asociada igual que ante un
-            // 403, en vez de dejar la línea verificando con audiencia cero.
-            if (
-                !linea.contactosAudienciaConfirmados &&
-                (
-                    linea.contactosEstado.size < 1 ||
-                    esFalloDescargaAppState(resultadoContactos.error)
-                )
-            ) {
-                try {
-                    const fallbackGoogle =
-                        await cargarContactosAudienciaDesdeGoogle(linea);
+            // WhatsApp siempre se consulta antes. Luego se obtiene Google para
+            // comparar ambas listas; la mayor gana y WhatsApp gana los empates.
+            let resultadoGoogle = null;
+            try {
+                resultadoGoogle =
+                    await cargarContactosAudienciaDesdeGoogle(linea);
 
-                    if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
-                        return;
-                    }
-
-                    if (fallbackGoogle.ok && Number(fallbackGoogle.total || 0) > 0) {
-                        linea.contactosEstado = fallbackGoogle.contactos;
-                        linea.contactosAudienciaConfirmados = true;
-                        linea.origenAudiencia = 'google';
-                        resultadoContactos = {
-                            ...resultadoContactos,
-                            correcta: true,
-                            error: null,
-                            fallback: true,
-                            fallbackOrigen: 'google'
-                        };
-
-                        console.log(
-                            `[Audiencia] ${linea.nombre}: ` +
-                            `contactos cargados desde Google Contacts (${fallbackGoogle.total}).`
-                        );
-                    } else if (fallbackGoogle.motivo === 'SIN_CUENTA_ASOCIADA') {
-                        resultadoContactos = {
-                            ...resultadoContactos,
-                            correcta: false,
-                            error: new Error(
-                                'No hay cuenta de Google asociada para recuperar contactos de audiencia.'
-                            )
-                        };
-                    } else if (fallbackGoogle.motivo === 'SIN_CONTACTOS') {
-                        resultadoContactos = {
-                            ...resultadoContactos,
-                            correcta: false,
-                            error: new Error(
-                                'Google Contacts no devolvió contactos para esta cuenta.'
-                            )
-                        };
-                    } else {
-                        resultadoContactos = {
-                            ...resultadoContactos,
-                            correcta: false,
-                            error: fallbackGoogle.error || new Error(
-                                'No se pudo recuperar la audiencia desde Google Contacts.'
-                            )
-                        };
-                    }
-                } catch (errorFallback) {
-                    resultadoContactos = {
-                        ...resultadoContactos,
-                        correcta: false,
-                        error: errorFallback
-                    };
+                if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
+                    return;
                 }
+
+                if (resultadoGoogle.ok && Number(resultadoGoogle.total || 0) > 0) {
+                    linea.contactosEstadoGoogle =
+                        new Set(resultadoGoogle.contactos);
+                    linea.audienciaGoogleConfirmadaEnConexion = true;
+                }
+            } catch (errorGoogle) {
+                resultadoGoogle = {
+                    ok: false,
+                    motivo: 'ERROR_GOOGLE',
+                    total: 0,
+                    error: errorGoogle
+                };
+            }
+
+            const googleConfirmado =
+                resultadoGoogle?.ok === true &&
+                linea.contactosEstadoGoogle.size > 0;
+            if (!googleConfirmado) {
+                linea.audienciaGoogleConfirmadaEnConexion = false;
+            }
+            const seleccion = seleccionarMejorAudiencia(linea, {
+                permitirWhatsApp: whatsappConfirmado,
+                permitirGoogle: googleConfirmado
+            });
+            linea.contactosAudienciaConfirmados =
+                seleccion.total > 0 &&
+                (whatsappConfirmado || googleConfirmado);
+
+            if (linea.contactosAudienciaConfirmados) {
+                resultadoContactos = {
+                    ...resultadoContactos,
+                    correcta: true,
+                    error: null,
+                    fallback: !whatsappConfirmado && googleConfirmado,
+                    fallbackOrigen:
+                        !whatsappConfirmado && googleConfirmado
+                            ? 'google'
+                            : null
+                };
+                console.log(
+                    `[Audiencia] ${linea.nombre}: WhatsApp ` +
+                    `${linea.contactosEstadoWhatsApp.size}, Google ` +
+                    `${linea.contactosEstadoGoogle.size}; se eligió ` +
+                    `${seleccion.origen} (${seleccion.total}).`
+                );
+            } else if (
+                resultadoContactos.correcta === false &&
+                resultadoContactos.error
+            ) {
+                // Conserva el error de WhatsApp: explica mejor un 403 o una
+                // libreta vacía que la ausencia opcional de Google.
+            } else if (resultadoGoogle?.motivo === 'SIN_CUENTA_ASOCIADA') {
+                resultadoContactos = {
+                    ...resultadoContactos,
+                    correcta: false,
+                    error: new Error(
+                        'WhatsApp no confirmó contactos y no hay una cuenta de Google asociada.'
+                    )
+                };
+            } else if (resultadoGoogle?.motivo === 'SIN_CONTACTOS') {
+                resultadoContactos = {
+                    ...resultadoContactos,
+                    correcta: false,
+                    error: new Error(
+                        'WhatsApp y Google Contacts no devolvieron contactos.'
+                    )
+                };
+            } else if (resultadoGoogle?.error) {
+                resultadoContactos = {
+                    ...resultadoContactos,
+                    correcta: false,
+                    error: resultadoGoogle.error
+                };
             }
         }
         if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
@@ -5680,6 +5867,8 @@ function cargarLineasGuardadas() {
                     : null,
                 proximoIntentoReconexion,
                 contactosEstado: new Set(),
+                contactosEstadoWhatsApp: new Set(),
+                contactosEstadoGoogle: new Set(),
                 privacidadEstados: null,
                 origenAudiencia: null,
                 audienciaResincronizada: false,
@@ -7148,6 +7337,11 @@ async function iniciarWhatsApp(lineaId) {
         // contactos del historial de chats porque también contiene personas
         // no guardadas y podría exponerles un estado por error.
         sock.ev.on('contacts.upsert', contactos => {
+            registrarContactosWhatsAppParaAgendamiento(
+                linea,
+                sock,
+                contactos
+            );
             if (
                 sincronizacionHistorialAgendamientoActiva?.lineaId !==
                     lineaId ||
@@ -7161,6 +7355,11 @@ async function iniciarWhatsApp(lineaId) {
             });
         });
         sock.ev.on('contacts.update', contactos => {
+            registrarContactosWhatsAppParaAgendamiento(
+                linea,
+                sock,
+                contactos
+            );
             if (
                 sincronizacionHistorialAgendamientoActiva?.lineaId !==
                     lineaId ||
@@ -7192,6 +7391,11 @@ async function iniciarWhatsApp(lineaId) {
                 ].includes(historial?.syncType)
             ) return;
 
+            registrarContactosWhatsAppParaAgendamiento(
+                linea,
+                sock,
+                historial?.contacts
+            );
             registrarActividad({
                 mensajes: historial?.messages,
                 chats: historial?.chats,
@@ -7588,6 +7792,8 @@ async function iniciarWhatsApp(lineaId) {
                     linea.estado = 'sesion_cerrada';
                     linea.ultimoError = 'La sesión de WhatsApp fue cerrada.';
                     linea.contactosEstado = new Set();
+                    linea.contactosEstadoWhatsApp = new Set();
+                    linea.contactosEstadoGoogle = new Set();
                     linea.privacidadEstados = null;
                     linea.audienciaResincronizada = false;
                     linea.promesaContactosEstado = Promise.resolve();
@@ -9127,6 +9333,8 @@ function resultadoCandidatoEstaSincronizado(candidato) {
 }
 
 function transformarVistaAgendamiento(vista, linea = null) {
+    const agendarMutuosSinUsuario =
+        configuracion.agendarMutuosSinUsuario === true;
     const candidatosOriginales = [
         ...(Array.isArray(vista?.candidatos) ? vista.candidatos : []),
         ...(Array.isArray(vista?.pendientesResolucion)
@@ -9137,7 +9345,14 @@ function transformarVistaAgendamiento(vista, linea = null) {
         resultadoCandidatoEstaSincronizado
     ).length;
     const pendientes = candidatosOriginales.filter(candidato =>
-        Boolean(candidato.usuario) &&
+        (
+            Boolean(candidato.usuario)
+            || (
+                agendarMutuosSinUsuario
+                && candidato.mutuo === true
+                && Boolean(candidato.telefono)
+            )
+        ) &&
         !resultadoCandidatoEstaSincronizado(candidato)
     ).length;
     const usuariosPendientesJid =
@@ -9159,11 +9374,19 @@ function transformarVistaAgendamiento(vista, linea = null) {
             fuentes.unshift(
                 candidato.usuarioFuente === 'ia'
                     ? `IA local${Number.isFinite(confianza) ? ` · estimación ${Math.round(confianza)}%` : ''}`
+                    : candidato.usuarioFuente === 'whatsapp'
+                        ? 'Contacto guardado en WhatsApp'
                     : candidato.usuarioFuente === 'manual'
                         ? 'Revisión manual'
                         : 'Regla estricta'
             );
+        } else if (candidato.mutuo) {
+            fuentes.unshift('Contacto mutuo sin usuario');
         }
+
+        const esTemporalMutuo = !candidato.usuario
+            && candidato.mutuo === true
+            && Boolean(candidato.telefono);
 
         return {
             telefono: candidato.telefono,
@@ -9174,11 +9397,26 @@ function transformarVistaAgendamiento(vista, linea = null) {
                 : null,
             usuarioBloqueadoManual:
                 candidato.usuarioBloqueadoManual === true,
-            nombre: candidato.nombreObjetivo,
+            nombre: candidato.nombreObjetivo || (
+                esTemporalMutuo
+                    ? crearNombreTemporalMutuo(
+                        vista?.linea?.nombre,
+                        candidato.telefono
+                    )
+                    : null
+            ),
+            temporal: esTemporalMutuo,
+            incluidoPorPreferencia:
+                esTemporalMutuo && agendarMutuosSinUsuario,
             mutuo: candidato.mutuo === true,
             estado: resultadoCandidatoEstaSincronizado(candidato)
                 ? 'agendado'
-                : resultado?.tipo || (candidato.usuario ? 'pendiente' : 'sin_usuario'),
+                : resultado?.tipo || (
+                    candidato.usuario
+                    || (esTemporalMutuo && agendarMutuosSinUsuario)
+                        ? 'pendiente'
+                        : 'sin_usuario'
+                ),
             detalle: resultado?.detalle || resultado?.codigo || null,
             fuentes
         };
@@ -9191,13 +9429,25 @@ function transformarVistaAgendamiento(vista, linea = null) {
             servicioAgendamiento.obtenerConfiguracionBusqueda(),
         lineaId: vista?.linea?.id || null,
         cuentaId: vista?.cuentaId || null,
+        preferencias: {
+            agendarMutuosSinUsuario
+        },
         historial: linea
             ? obtenerEstadoPublicoHistorialAgendamiento(linea)
             : null,
         resumen: {
             detectados:
                 (Number(vista?.totales?.conUsuario) || 0) +
-                usuariosPendientesJid,
+                usuariosPendientesJid +
+                (
+                    agendarMutuosSinUsuario
+                        ? candidatosOriginales.filter(candidato =>
+                            !candidato.usuario
+                            && candidato.mutuo === true
+                            && Boolean(candidato.telefono)
+                        ).length
+                        : 0
+                ),
             pendientes,
             agendados: sincronizados,
             mutuos: Number(vista?.totales?.mutuos) || 0,
@@ -9252,6 +9502,10 @@ app.get('/agendamiento', (req, res) => {
             credencialesConfiguradas: Boolean(servicioAgendamiento.estado?.oauth),
             cuentas: servicioAgendamiento.listarCuentas(),
             busqueda: servicioAgendamiento.obtenerConfiguracionBusqueda(),
+            preferencias: {
+                agendarMutuosSinUsuario:
+                    configuracion.agendarMutuosSinUsuario === true
+            },
             lineaId: null,
             cuentaId: null,
             resumen: {
@@ -9456,9 +9710,9 @@ app.put('/agendamiento/palabras-clave', async (req, res) => {
         res.json({
             mensaje: linea
                 ? disponibles > 0
-                    ? `Se guardaron ${busqueda.palabrasClave.length} frase(s) y se revisaron ${disponibles} mensaje(s) recientes de ${linea.nombre}.`
-                    : `Se guardaron ${busqueda.palabrasClave.length} frase(s). Los mensajes recientes de ${linea.nombre} se analizarán a medida que WhatsApp los entregue.`
-                : `Se guardaron ${busqueda.palabrasClave.length} frase(s) para el agendamiento.`,
+                    ? `Se guardaron ${busqueda.palabrasClave.length} referencia(s) y se revisaron ${disponibles} mensaje(s) recientes de ${linea.nombre}.`
+                    : `Se guardaron ${busqueda.palabrasClave.length} referencia(s). Los mensajes recientes de ${linea.nombre} se analizarán a medida que WhatsApp los entregue.`
+                : `Se guardaron ${busqueda.palabrasClave.length} referencia(s) para el agendamiento.`,
             busqueda,
             mensajesRecientesRevisados: disponibles
         });
@@ -9653,7 +9907,11 @@ app.post('/agendamiento/lineas/:id/iniciar', (req, res) => {
         // llamada, antes de liberar nuestra preparación HTTP.
         const promesa = servicioAgendamiento.iniciarSincronizacion(
             describirLineaParaAgendamiento(linea),
-            vista.cuentaId
+            vista.cuentaId,
+            {
+                agendarMutuosSinUsuario:
+                    configuracion.agendarMutuosSinUsuario === true
+            }
         );
         if (preparacionAgendamiento === preparacion) {
             preparacionAgendamiento = null;
@@ -9786,6 +10044,8 @@ app.post('/lineas', (req, res) => {
         ultimoCodigoDesconexion: null,
         proximoIntentoReconexion: null,
         contactosEstado: new Set(),
+        contactosEstadoWhatsApp: new Set(),
+        contactosEstadoGoogle: new Set(),
         privacidadEstados: null,
         origenAudiencia: null,
         audienciaResincronizada: false,
@@ -9892,6 +10152,10 @@ app.get('/estado', (req, res) => {
             ultimoCodigoDesconexion: linea.ultimoCodigoDesconexion ?? null,
             proximoIntentoReconexion: linea.proximoIntentoReconexion || null,
             contactosEstado: linea.contactosEstado?.size || 0,
+            contactosEstadoWhatsApp:
+                linea.contactosEstadoWhatsApp?.size || 0,
+            contactosEstadoGoogle:
+                linea.contactosEstadoGoogle?.size || 0,
             origenAudiencia: normalizarOrigenAudiencia(
                 linea.origenAudiencia
             ),
@@ -10798,103 +11062,19 @@ app.post(
     }
 );
 
-app.get('/configuracion', (req, res) => {
-    res.json(configuracion);
-});
-
-app.put('/configuracion', (req, res) => {
-    const limiteFallos = Number(req.body.limiteFallosSeguridad);
-    const modoRitmo = req.body.modoRitmoPredeterminado;
-    const intervaloSegundos = Number(req.body.intervaloSegundosPredeterminado);
-    const variacionSegundos = Number(req.body.variacionSegundosPredeterminada);
-    const lineasPorGrupo = Number(req.body.lineasPorGrupoPredeterminado);
-    const intervalo = Number(req.body.intervaloMinutosPredeterminado);
-    const maximoDestinatarios = Number(req.body.maximoDestinatariosPorEstado);
-    const temaVisualSolicitado = req.body.temaVisual ?? configuracion.temaVisual;
-    const temaVisual = String(temaVisualSolicitado || '').trim().toLowerCase();
-
-    if (!TEMAS_VISUALES.has(temaVisual)) {
-        return res.status(400).json({
-            error: 'El tema visual seleccionado no es válido.'
-        });
-    }
-
-    if (
-        !Number.isInteger(limiteFallos) ||
-        limiteFallos < 1 ||
-        limiteFallos > 10
-    ) {
-        return res.status(400).json({
-            error: 'El corte de seguridad debe estar entre 1 y 10 líneas con fallos.'
-        });
-    }
-
-    if (!MODOS_RITMO_PUBLICACION.has(modoRitmo)) {
-        return res.status(400).json({
-            error: 'El modo de ritmo predeterminado no es válido.'
-        });
-    }
-
-    if (
-        !Number.isInteger(intervaloSegundos) ||
-        intervaloSegundos < 10 ||
-        intervaloSegundos > 3600
-    ) {
-        return res.status(400).json({
-            error: 'El intervalo secuencial debe estar entre 10 y 3600 segundos.'
-        });
-    }
-
-    if (
-        !Number.isInteger(variacionSegundos) ||
-        variacionSegundos < 0 ||
-        variacionSegundos > 30 ||
-        variacionSegundos > intervaloSegundos
-    ) {
-        return res.status(400).json({
-            error: 'La distribución de carga debe estar entre 0 y 30 segundos y no superar el intervalo base.'
-        });
-    }
-
-    if (!Number.isInteger(lineasPorGrupo) || lineasPorGrupo < 1 || lineasPorGrupo > 10) {
-        return res.status(400).json({
-            error: 'Las líneas por grupo deben estar entre 1 y 10.'
-        });
-    }
-
-    if (!Number.isFinite(intervalo) || intervalo < 0 || intervalo > 1440) {
-        return res.status(400).json({
-            error: 'El intervalo debe estar entre 0 y 1440 minutos.'
-        });
-    }
-
-    if (
-        !Number.isInteger(maximoDestinatarios) ||
-        maximoDestinatarios < MINIMO_DESTINATARIOS_ESTADO ||
-        maximoDestinatarios > MAXIMO_DESTINATARIOS_ESTADO
-    ) {
-        return res.status(400).json({
-            error: `Los destinatarios por estado deben estar entre ` +
-                `${MINIMO_DESTINATARIOS_ESTADO} y ` +
-                `${MAXIMO_DESTINATARIOS_ESTADO}.`
-        });
-    }
-
-    configuracion = {
-        ...configuracion,
-        limiteFallosSeguridad: limiteFallos,
-        notificaciones: req.body.notificaciones !== false,
-        temaVisual,
-        modoRitmoPredeterminado: modoRitmo,
-        intervaloSegundosPredeterminado: intervaloSegundos,
-        variacionSegundosPredeterminada: variacionSegundos,
-        lineasPorGrupoPredeterminado: lineasPorGrupo,
-        intervaloMinutosPredeterminado: intervalo,
-        maximoDestinatariosPorEstado: maximoDestinatarios
-    };
-    guardarConfiguracion();
-
-    res.json({ mensaje: 'Configuración guardada.', configuracion });
+registrarRutasConfiguracion(app, {
+    obtenerConfiguracion: () => configuracion,
+    guardarConfiguracion: nuevaConfiguracion => {
+        configuracion = nuevaConfiguracion;
+        guardarConfiguracion();
+    },
+    aplicarPreferenciasEscritorio: preferencias => {
+        global.zerooneDesktop?.aplicarPreferencias?.(preferencias);
+    },
+    temasVisuales: TEMAS_VISUALES,
+    modosRitmo: MODOS_RITMO_PUBLICACION,
+    minimoDestinatarios: MINIMO_DESTINATARIOS_ESTADO,
+    maximoDestinatarios: MAXIMO_DESTINATARIOS_ESTADO
 });
 
 app.post('/lineas/reconectar-todas', (req, res) => {
