@@ -4,11 +4,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const TAMANO_MAXIMO_PREDETERMINADO = 5 * 1024 * 1024;
-const MAXIMOS_ARCHIVOS_PREDETERMINADOS = 8;
 const MAXIMOS_CARACTERES_LINEA = 12000;
 
 function fechaArchivo(ahora = new Date()) {
     return ahora.toISOString().slice(0, 10);
+}
+
+function horaArchivo(ahora = new Date()) {
+    return ahora.toISOString().slice(11, 19).replace(/:/gu, '-');
+}
+
+function normalizarVersionArchivo(version) {
+    const segura = String(version || 'sin-version')
+        .trim()
+        .replace(/[^a-z0-9._-]+/giu, '-')
+        .replace(/^-+|-+$/gu, '');
+    return segura || 'sin-version';
 }
 
 function ocultarTelefono(valor) {
@@ -85,45 +96,11 @@ function describirArgumentoSeguro(argumento) {
     return `[${redactarTextoLog(nombre)} omitido por seguridad]`;
 }
 
-function limpiarArchivosAntiguos(
-    directorio,
-    maximosArchivos = MAXIMOS_ARCHIVOS_PREDETERMINADOS,
-    fsModule = fs
-) {
-    let archivos;
-    try {
-        archivos = fsModule.readdirSync(directorio, { withFileTypes: true })
-            .filter(entrada =>
-                entrada.isFile() &&
-                /^zeroone-\d{4}-\d{2}-\d{2}\.log(?:\.\d+)?$/u.test(entrada.name)
-            )
-            .map(entrada => {
-                const ruta = path.join(directorio, entrada.name);
-                return {
-                    ruta,
-                    fecha: fsModule.statSync(ruta).mtimeMs
-                };
-            })
-            .sort((a, b) => b.fecha - a.fecha);
-    } catch {
-        return;
-    }
-
-    for (const archivo of archivos.slice(Math.max(1, maximosArchivos))) {
-        try {
-            fsModule.unlinkSync(archivo.ruta);
-        } catch {
-            // Un registro bloqueado se conserva y se intentará limpiar al reiniciar.
-        }
-    }
-}
-
 function crearRegistradorLocal(opciones = {}) {
     const {
         directorio,
         version = '',
         tamanoMaximo = TAMANO_MAXIMO_PREDETERMINADO,
-        maximosArchivos = MAXIMOS_ARCHIVOS_PREDETERMINADOS,
         fsModule = fs,
         ahora = () => new Date()
     } = opciones;
@@ -131,65 +108,174 @@ function crearRegistradorLocal(opciones = {}) {
     if (!directorio) throw new TypeError('La carpeta de logs es obligatoria.');
 
     fsModule.mkdirSync(rutaDirectorio, { recursive: true });
-    limpiarArchivosAntiguos(rutaDirectorio, maximosArchivos, fsModule);
 
+    const versionArchivo = normalizarVersionArchivo(version);
     let diaActual = fechaArchivo(ahora());
-    let rutaActual = path.join(rutaDirectorio, `zeroone-${diaActual}.log`);
+    let rutaActual = path.join(
+        rutaDirectorio,
+        `zeroone-v${versionArchivo}-${diaActual}.log`
+    );
     let bytesActuales = fsModule.existsSync(rutaActual)
         ? fsModule.statSync(rutaActual).size
         : 0;
 
-    function actualizarArchivoDiario() {
-        const nuevoDia = fechaArchivo(ahora());
-        if (nuevoDia === diaActual) return;
-        diaActual = nuevoDia;
-        rutaActual = path.join(rutaDirectorio, `zeroone-${diaActual}.log`);
-        bytesActuales = fsModule.existsSync(rutaActual)
-            ? fsModule.statSync(rutaActual).size
-            : 0;
-        limpiarArchivosAntiguos(rutaDirectorio, maximosArchivos, fsModule);
+    function rutaUnica(sufijo, fecha = ahora()) {
+        const base = `zeroone-v${versionArchivo}-${fechaArchivo(fecha)}-${sufijo}`;
+        let indice = 1;
+        let candidata = path.join(rutaDirectorio, `${base}.log`);
+
+        while (fsModule.existsSync(candidata)) {
+            indice += 1;
+            candidata = path.join(
+                rutaDirectorio,
+                `${base}-${indice}.log`
+            );
+        }
+
+        return candidata;
     }
 
-    function rotarSiCorresponde(bytesNuevos) {
-        if (bytesActuales + bytesNuevos <= Math.max(1024, tamanoMaximo)) return;
-
-        for (let indice = maximosArchivos - 1; indice >= 1; indice -= 1) {
-            const origen = indice === 1
-                ? rutaActual
-                : `${rutaActual}.${indice - 1}`;
-            const destino = `${rutaActual}.${indice}`;
-            if (!fsModule.existsSync(origen)) continue;
-            try {
-                if (fsModule.existsSync(destino)) fsModule.unlinkSync(destino);
-                fsModule.renameSync(origen, destino);
-            } catch {
-                // Si Windows mantiene el archivo ocupado, se continúa sin perder el log.
-            }
-        }
+    function activarRuta(ruta) {
+        rutaActual = ruta;
         bytesActuales = fsModule.existsSync(rutaActual)
             ? fsModule.statSync(rutaActual).size
             : 0;
-        limpiarArchivosAntiguos(rutaDirectorio, maximosArchivos, fsModule);
+    }
+
+    function seleccionarDestinoRegistro(bytesNuevos, fecha) {
+        const nuevoDia = fechaArchivo(fecha);
+        if (nuevoDia !== diaActual) {
+            return {
+                ruta: path.join(
+                    rutaDirectorio,
+                    `zeroone-v${versionArchivo}-${nuevoDia}.log`
+                ),
+                dia: nuevoDia,
+                exclusivo: false
+            };
+        }
+        if (bytesActuales + bytesNuevos > Math.max(1024, tamanoMaximo)) {
+            return {
+                ruta: rutaUnica(`parte-${horaArchivo(fecha)}`, fecha),
+                dia: nuevoDia,
+                exclusivo: true
+            };
+        }
+        return {
+            ruta: rutaActual,
+            dia: diaActual,
+            exclusivo: false
+        };
+    }
+
+    function construirLineaRegistro(nivel, argumentos, fecha = ahora()) {
+        const contenido = (Array.isArray(argumentos) ? argumentos : [argumentos])
+            .map(describirArgumentoSeguro)
+            .join(' ');
+        return (
+            `[${fecha.toISOString()}] ` +
+            `[${String(nivel || 'INFO').toUpperCase()}] ${contenido}\r\n`
+        );
+    }
+
+    function crearArchivoRegistro(ruta, mensaje, fecha) {
+        const linea = construirLineaRegistro('INFO', [mensaje], fecha);
+        fsModule.appendFileSync(ruta, linea, {
+            encoding: 'utf8',
+            flag: 'wx',
+            mode: 0o600
+        });
     }
 
     function registrar(nivel, argumentos = []) {
         try {
-            actualizarArchivoDiario();
-            const marca = ahora().toISOString();
-            const contenido = (Array.isArray(argumentos) ? argumentos : [argumentos])
-                .map(describirArgumentoSeguro)
-                .join(' ');
-            const linea = `[${marca}] [${String(nivel || 'INFO').toUpperCase()}] ${contenido}\r\n`;
+            const fecha = ahora();
+            const linea = construirLineaRegistro(nivel, argumentos, fecha);
             const bytes = Buffer.byteLength(linea);
-            rotarSiCorresponde(bytes);
-            fsModule.appendFileSync(rutaActual, linea, {
-                encoding: 'utf8',
-                mode: 0o600
-            });
-            bytesActuales += bytes;
+            const destino = seleccionarDestinoRegistro(bytes, fecha);
+            try {
+                fsModule.appendFileSync(destino.ruta, linea, {
+                    encoding: 'utf8',
+                    flag: destino.exclusivo ? 'wx' : 'a',
+                    mode: 0o600
+                });
+                if (destino.ruta === rutaActual) {
+                    bytesActuales += bytes;
+                } else {
+                    diaActual = destino.dia;
+                    activarRuta(destino.ruta);
+                }
+            } catch (error) {
+                if (destino.ruta === rutaActual) throw error;
+
+                // Si Windows impide crear la nueva parte, conservar el
+                // registro es más importante que respetar momentáneamente el
+                // límite de tamaño. La próxima entrada volverá a intentar.
+                fsModule.appendFileSync(rutaActual, linea, {
+                    encoding: 'utf8',
+                    mode: 0o600
+                });
+                bytesActuales += bytes;
+            }
         } catch {
             // Los fallos del registro nunca deben interrumpir ZeroOne.
         }
+    }
+
+    function crearNuevoRegistro() {
+        const fecha = ahora();
+        const rutaNueva = rutaUnica(`nuevo-${horaArchivo(fecha)}`, fecha);
+        crearArchivoRegistro(
+            rutaNueva,
+            `ZeroOne ${version || 'sin versión'} inició un nuevo registro de diagnóstico por solicitud del usuario.`,
+            fecha
+        );
+        diaActual = fechaArchivo(fecha);
+        activarRuta(rutaNueva);
+        return {
+            correcto: true,
+            archivo: path.basename(rutaActual)
+        };
+    }
+
+    function leerRegistroActual() {
+        if (!fsModule.existsSync(rutaActual)) return '';
+        return fsModule.readFileSync(rutaActual, 'utf8');
+    }
+
+    function eliminarRegistroActual() {
+        const rutaEliminada = rutaActual;
+        const archivoEliminado = path.basename(rutaEliminada);
+        const fecha = ahora();
+        const rutaNueva = rutaUnica(`nuevo-${horaArchivo(fecha)}`, fecha);
+        crearArchivoRegistro(
+            rutaNueva,
+            `ZeroOne ${version || 'sin versión'} inició un registro de diagnóstico después de eliminar el anterior.`,
+            fecha
+        );
+
+        try {
+            if (fsModule.existsSync(rutaEliminada)) {
+                fsModule.unlinkSync(rutaEliminada);
+            }
+        } catch (error) {
+            try {
+                fsModule.unlinkSync(rutaNueva);
+            } catch {
+                // El archivo nuevo no contiene datos previos y puede quedar
+                // como respaldo si Windows impide retirarlo.
+            }
+            throw error;
+        }
+
+        diaActual = fechaArchivo(fecha);
+        activarRuta(rutaNueva);
+
+        return {
+            correcto: true,
+            archivoEliminado,
+            archivo: path.basename(rutaActual)
+        };
     }
 
     registrar('INFO', [
@@ -198,6 +284,9 @@ function crearRegistradorLocal(opciones = {}) {
 
     return {
         directorio: rutaDirectorio,
+        crearNuevoRegistro,
+        eliminarRegistroActual,
+        leerRegistroActual,
         obtenerRutaActual: () => rutaActual,
         registrar
     };

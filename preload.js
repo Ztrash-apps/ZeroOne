@@ -51,5 +51,17 @@ contextBridge.exposeInMainWorld('sistema', {
 
     abrirCarpetaLogs() {
         return ipcRenderer.invoke('sistema:abrir-carpeta-logs');
+    },
+
+    crearLog() {
+        return ipcRenderer.invoke('sistema:crear-log');
+    },
+
+    copiarLog() {
+        return ipcRenderer.invoke('sistema:copiar-log');
+    },
+
+    eliminarLog() {
+        return ipcRenderer.invoke('sistema:eliminar-log');
     }
 });

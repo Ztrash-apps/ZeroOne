@@ -1,6 +1,7 @@
 const {
     app,
     BrowserWindow,
+    clipboard,
     ipcMain,
     Menu,
     Notification,
@@ -471,6 +472,32 @@ async function abrirCarpetaLogs() {
     });
 }
 
+function exigirRegistradorLocal() {
+    if (!registradorLocal) {
+        throw new Error('El registro de diagnóstico todavía no está disponible.');
+    }
+    return registradorLocal;
+}
+
+function crearNuevoLog() {
+    return exigirRegistradorLocal().crearNuevoRegistro();
+}
+
+function copiarLogActual() {
+    const registrador = exigirRegistradorLocal();
+    const contenido = registrador.leerRegistroActual();
+    clipboard.writeText(contenido);
+    return {
+        correcto: true,
+        archivo: path.basename(registrador.obtenerRutaActual()),
+        caracteres: contenido.length
+    };
+}
+
+function eliminarLogActual() {
+    return exigirRegistradorLocal().eliminarRegistroActual();
+}
+
 function cifrarDatoLocal(valor) {
     if (!safeStorage.isEncryptionAvailable()) {
         throw new Error('El cifrado seguro de Windows no está disponible.');
@@ -515,6 +542,27 @@ function configurarIPC() {
             throw new Error('La solicitud para abrir los logs no es válida.');
         }
         return abrirCarpetaLogs();
+    });
+
+    ipcMain.handle('sistema:crear-log', evento => {
+        if (!eventoProvieneDeVentanaPrincipal(evento)) {
+            throw new Error('La solicitud para crear el log no es válida.');
+        }
+        return crearNuevoLog();
+    });
+
+    ipcMain.handle('sistema:copiar-log', evento => {
+        if (!eventoProvieneDeVentanaPrincipal(evento)) {
+            throw new Error('La solicitud para copiar el log no es válida.');
+        }
+        return copiarLogActual();
+    });
+
+    ipcMain.handle('sistema:eliminar-log', evento => {
+        if (!eventoProvieneDeVentanaPrincipal(evento)) {
+            throw new Error('La solicitud para eliminar el log no es válida.');
+        }
+        return eliminarLogActual();
     });
 }
 

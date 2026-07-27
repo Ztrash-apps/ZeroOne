@@ -533,6 +533,8 @@ const RETRASOS_REINTENTO_AUDIENCIA_CDN_MS = [
 ];
 const MAXIMAS_SINCRONIZACIONES_AUDIENCIA_SIMULTANEAS = 3;
 const MAXIMOS_FALLOS_PRIVACIDAD_PERSONALIZADA = 2;
+const CONFIRMACION_REAPLICAR_PRIVACIDAD =
+    'REAPLICAR_MIS_CONTACTOS';
 const MAXIMOS_INTENTOS_AUDIENCIA =
     RETRASOS_REINTENTO_AUDIENCIA_CDN_MS.length + 1;
 const tiempoMaximoAudienciaConfigurado = Number(
@@ -2638,12 +2640,14 @@ function obtenerCodigoError(error) {
         error?.output?.payload?.statusCode,
         error?.statusCode,
         error?.status,
+        error?.response?.status,
         error?.data?.statusCode,
         error?.data?.status,
         error?.cause?.output?.statusCode,
         error?.cause?.output?.payload?.statusCode,
         error?.cause?.statusCode,
         error?.cause?.status,
+        error?.cause?.response?.status,
         error?.cause?.data?.statusCode
     ];
 
@@ -3650,6 +3654,7 @@ function audienciaEstadosLista(linea) {
 
     return (
         linea.audienciaResincronizada === true &&
+        linea.verificacionPrivacidadForzadaPendiente !== true &&
         privacidadEstadosEsSegura(linea.privacidadEstados)
     );
 }
@@ -3685,6 +3690,8 @@ function cargarAudienciaEstados(linea) {
         const datos = JSON.parse(fs.readFileSync(ruta, 'utf8'));
         const contactos = Array.isArray(datos.contactos) ? datos.contactos : [];
 
+        linea.verificacionPrivacidadForzadaPendiente =
+            datos.verificacionPrivacidadForzadaPendiente === true;
         linea.contactosEstado = normalizarContactosAudiencia(contactos);
         linea.privacidadEstados = normalizarPrivacidadEstados(datos.privacidad);
         linea.origenAudiencia = linea.contactosEstado.size > 0
@@ -3719,6 +3726,18 @@ function asegurarAudienciaEstados(linea) {
     if (!Number.isFinite(Number(linea.fallosPrivacidadPersonalizada))) {
         linea.fallosPrivacidadPersonalizada = 0;
     }
+    if (typeof linea.modoPrivacidadEstadosInformado !== 'string') {
+        linea.modoPrivacidadEstadosInformado = null;
+    }
+    if (linea.reparacionPrivacidadDisponible !== true) {
+        linea.reparacionPrivacidadDisponible = false;
+    }
+    if (linea.reparandoPrivacidadAudiencia !== true) {
+        linea.reparandoPrivacidadAudiencia = false;
+    }
+    if (linea.verificacionPrivacidadForzadaPendiente !== true) {
+        linea.verificacionPrivacidadForzadaPendiente = false;
+    }
 
     if (!linea.audienciaEstadosCargada) {
         cargarAudienciaEstados(linea);
@@ -3738,6 +3757,8 @@ function guardarAudienciaEstados(linea) {
         contactosGoogle: [...linea.contactosEstadoGoogle].sort(),
         privacidad: linea.privacidadEstados,
         origenAudiencia: normalizarOrigenAudiencia(linea.origenAudiencia),
+        verificacionPrivacidadForzadaPendiente:
+            linea.verificacionPrivacidadForzadaPendiente === true,
         audienciaResincronizada: linea.audienciaResincronizada === true
     });
 }
@@ -3853,7 +3874,8 @@ function resolverPendientesAgendamiento(linea, socket) {
         !socket ||
         lineas.get(linea.id) !== linea ||
         linea.socket !== socket ||
-        linea.eliminando
+        linea.eliminando ||
+        linea.reparandoPrivacidadAudiencia
     ) {
         return Promise.resolve(null);
     }
@@ -3866,7 +3888,8 @@ function resolverPendientesAgendamiento(linea, socket) {
             if (
                 lineas.get(linea.id) !== linea ||
                 linea.socket !== socket ||
-                linea.eliminando
+                linea.eliminando ||
+                linea.reparandoPrivacidadAudiencia
             ) return null;
 
             return servicioAgendamiento.resolverPendientesJid(
@@ -5006,6 +5029,7 @@ function finalizarAudienciaConfirmadaLocalmente(linea, socket) {
         linea.contactosAudienciaConfirmados !== true ||
         linea.privacidadAudienciaConfirmada !== true ||
         linea.contactosEstado.size < 1 ||
+        linea.verificacionPrivacidadForzadaPendiente === true ||
         !privacidadEstadosEsSegura(linea.privacidadEstados)
     ) {
         return false;
@@ -5013,6 +5037,7 @@ function finalizarAudienciaConfirmadaLocalmente(linea, socket) {
 
     cancelarReintentoAudiencia(linea);
     linea.fallosPrivacidadPersonalizada = 0;
+    linea.reparacionPrivacidadDisponible = false;
     linea.audienciaResincronizada = true;
     linea.intentosResincronizacionAudiencia = 0;
     linea.noReintentarAudienciaAntes = 0;
@@ -5194,6 +5219,13 @@ function esFalloDescargaAppState(error) {
             mensajeBajo.includes('referencia') ||
             mensajeBajo.includes('sincronizaci')
         ))
+    );
+}
+
+function esFalloDescargaAppState403(error) {
+    return (
+        obtenerCodigoError(error) === 403 &&
+        esFalloDescargaAppState(error)
     );
 }
 
@@ -5422,6 +5454,10 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
         const sinExclusiones =
             estado === 'contacts' ||
             estado === 'all';
+        linea.modoPrivacidadEstadosInformado = estado;
+        if (!personalizada) {
+            linea.reparacionPrivacidadDisponible = false;
+        }
 
         // El IQ de privacidad no incluye listas personalizadas. Solamente el
         // modo "contacts" o "all" es suficiente para reconstruir una regla
@@ -5451,7 +5487,10 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
             usuarios: [],
             usuariosInvalidos: 0
         });
+        linea.verificacionPrivacidadForzadaPendiente = false;
         linea.fallosPrivacidadPersonalizada = 0;
+        linea.reparacionPrivacidadDisponible = false;
+        guardarAudienciaEstados(linea);
 
         return { validada: true, estado, personalizada: false, error: null };
     } catch (error) {
@@ -5503,7 +5542,7 @@ function programarResincronizacionAudiencia(linea, socket, retrasoMs) {
 
     const esperaProtegida = Math.max(
         0,
-        Number(linea.noReintentarAudienciaAntes) - Date.now()
+        (Number(linea.noReintentarAudienciaAntes) || 0) - Date.now()
     );
     const esperaSolicitada = Math.max(0, Number(retrasoMs) || 0);
 
@@ -5560,6 +5599,296 @@ function reiniciarCicloSincronizacionAudiencia(
     programarResincronizacionAudiencia(linea, socket, 0);
     guardarLineas();
     return true;
+}
+
+function crearErrorReparacionPrivacidad(
+    codigo,
+    mensaje,
+    estadoHttp = 409
+) {
+    const error = new Error(mensaje);
+    error.codigo = codigo;
+    error.estadoHttp = estadoHttp;
+    return error;
+}
+
+function lineaTieneActividadAgendamiento(linea) {
+    return Boolean(
+        linea &&
+        (
+            historialAgendamientoEnCurso(linea.id) ||
+            linea.modoHistorialAgendamiento === true ||
+            obtenerProcesoAgendamientoActivo()?.lineaId === linea.id ||
+            tareaAnalisisIA?.lineaId === linea.id
+        )
+    );
+}
+
+function responderConflictoReparacionPrivacidad(res, linea) {
+    if (linea?.reparandoPrivacidadAudiencia !== true) return false;
+
+    res.status(409).json({
+        codigo: 'REPARACION_PRIVACIDAD_ACTIVA',
+        error:
+            'Esperá a que termine la reparación de privacidad de esta línea.'
+    });
+    return true;
+}
+
+function puedeReaplicarPrivacidadMisContactos(linea) {
+    if (!linea) return false;
+    asegurarAudienciaEstados(linea);
+
+    return (
+        linea.reparacionPrivacidadDisponible === true &&
+        linea.modoPrivacidadEstadosInformado === 'contact_blacklist' &&
+        !audienciaEstadosLista(linea) &&
+        linea.estado === 'conectado' &&
+        Boolean(linea.socket) &&
+        !linea.eliminando &&
+        !linea.reparandoPrivacidadAudiencia &&
+        !linea.resincronizandoAudiencia &&
+        !lineaTieneActividadAgendamiento(linea) &&
+        typeof linea.socket.updateStatusPrivacy === 'function' &&
+        typeof linea.socket.fetchPrivacySettings === 'function' &&
+        progresoPublicacion.activo !== true &&
+        publicacionesPendientes < 1
+    );
+}
+
+function verificarSocketReparacionPrivacidad(linea, socket) {
+    if (
+        !lineas.has(linea.id) ||
+        lineas.get(linea.id) !== linea ||
+        linea.socket !== socket ||
+        linea.estado !== 'conectado' ||
+        linea.eliminando
+    ) {
+        throw crearErrorReparacionPrivacidad(
+            'SOCKET_REEMPLAZADO',
+            'La conexión cambió durante la reparación. No se modificó la sesión; volvé a intentarlo cuando la línea esté estable.'
+        );
+    }
+}
+
+async function consultarPrivacidadEstadosForzada(linea, socket) {
+    const limiteEn =
+        Date.now() + TIEMPO_MAXIMO_CONSULTA_PRIVACIDAD_IQ_MS;
+    let ultimoEstado = null;
+    let ultimoError = null;
+
+    // Después del SET consultamos directamente al servidor. Se permiten
+    // varios intentos breves porque algunos dispositivos tardan unos
+    // instantes en reflejar el cambio, pero nunca se acepta un valor cacheado.
+    for (let intento = 0; intento < 3 && Date.now() < limiteEn; intento += 1) {
+        if (intento > 0) {
+            await esperar(350 * intento);
+            verificarSocketReparacionPrivacidad(linea, socket);
+            if (Date.now() >= limiteEn) break;
+        }
+
+        const restante = Math.max(1, limiteEn - Date.now());
+        const control = {
+            socket,
+            limiteEn,
+            duracionMaximaMs: restante
+        };
+
+        try {
+            const ajustes = await ejecutarOperacionAudienciaConLimite(
+                control,
+                'La verificación de la nueva privacidad de estados',
+                () => socket.fetchPrivacySettings(true)
+            );
+            verificarSocketReparacionPrivacidad(linea, socket);
+
+            ultimoEstado =
+                String(ajustes?.status || '').trim() || null;
+            if (
+                ultimoEstado === 'contacts' ||
+                ultimoEstado === 'all'
+            ) {
+                return {
+                    confirmada: true,
+                    estado: ultimoEstado,
+                    error: null
+                };
+            }
+        } catch (error) {
+            ultimoError = error;
+            if (error?.codigo === 'SOCKET_REEMPLAZADO') throw error;
+        }
+    }
+
+    return {
+        confirmada: false,
+        estado: ultimoEstado,
+        error: ultimoError
+    };
+}
+
+async function reaplicarPrivacidadEstadosMisContactos(linea) {
+    if (!linea) {
+        throw crearErrorReparacionPrivacidad(
+            'LINEA_NO_ENCONTRADA',
+            'La línea ya no existe.',
+            404
+        );
+    }
+
+    asegurarAudienciaEstados(linea);
+
+    if (linea.eliminando) {
+        throw crearErrorReparacionPrivacidad(
+            'LINEA_ELIMINANDOSE',
+            'La línea se está eliminando y no puede cambiar su privacidad.'
+        );
+    }
+    if (linea.reparandoPrivacidadAudiencia) {
+        throw crearErrorReparacionPrivacidad(
+            'REPARACION_EN_CURSO',
+            'La privacidad de esta línea ya se está reparando.'
+        );
+    }
+    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+        throw crearErrorReparacionPrivacidad(
+            'PUBLICACION_ACTIVA',
+            'Esperá a que termine la publicación antes de cambiar la privacidad de Estados.'
+        );
+    }
+    if (lineaTieneActividadAgendamiento(linea)) {
+        throw crearErrorReparacionPrivacidad(
+            'LINEA_OCUPADA',
+            'Detené el proceso de esta línea antes de cambiar su privacidad de Estados.'
+        );
+    }
+    if (linea.resincronizandoAudiencia) {
+        throw crearErrorReparacionPrivacidad(
+            'AUDIENCIA_EN_CURSO',
+            'La audiencia todavía se está comprobando. Esperá a que termine antes de repararla.'
+        );
+    }
+    if (
+        linea.reparacionPrivacidadDisponible !== true ||
+        linea.modoPrivacidadEstadosInformado !== 'contact_blacklist' ||
+        audienciaEstadosLista(linea)
+    ) {
+        throw crearErrorReparacionPrivacidad(
+            'REPARACION_NO_DISPONIBLE',
+            'Esta reparación solo está disponible cuando WhatsApp informa una lista de exclusiones, pero no entrega su detalle.'
+        );
+    }
+
+    const socket = linea.socket;
+    if (
+        linea.estado !== 'conectado' ||
+        !socket ||
+        typeof socket.updateStatusPrivacy !== 'function' ||
+        typeof socket.fetchPrivacySettings !== 'function'
+    ) {
+        throw crearErrorReparacionPrivacidad(
+            'LINEA_NO_CONECTADA',
+            'La línea debe estar conectada y estable para reaplicar su privacidad.'
+        );
+    }
+
+    linea.reparandoPrivacidadAudiencia = true;
+    linea.verificacionPrivacidadForzadaPendiente = true;
+    cancelarReintentoAudiencia(linea);
+    linea.audienciaResincronizada = false;
+    linea.privacidadAudienciaConfirmada = false;
+    linea.ultimoErrorAudiencia =
+        'Reaplicando “Mis contactos” y esperando la confirmación de WhatsApp.';
+    invalidarResumenPriorizacionAudiencia(linea);
+
+    try {
+        guardarAudienciaEstados(linea);
+        // Un SET de privacidad no se puede cancelar de forma fiable. No se
+        // libera el candado mediante un timeout local porque la operación
+        // podría completarse más tarde y provocar dos cambios simultáneos.
+        await socket.updateStatusPrivacy('contacts');
+        verificarSocketReparacionPrivacidad(linea, socket);
+
+        // Una consulta anterior en vuelo no puede servir para verificar un
+        // cambio posterior. La siguiente sincronización también debe leer un
+        // valor nuevo.
+        consultasPrivacidadIqAudiencia.delete(socket);
+        const verificacion = await consultarPrivacidadEstadosForzada(
+            linea,
+            socket
+        );
+        verificarSocketReparacionPrivacidad(linea, socket);
+
+        linea.modoPrivacidadEstadosInformado =
+            verificacion.estado ||
+            linea.modoPrivacidadEstadosInformado;
+
+        if (!verificacion.confirmada) {
+            linea.audienciaResincronizada = false;
+            linea.privacidadAudienciaConfirmada = false;
+            linea.reparacionPrivacidadDisponible =
+                linea.modoPrivacidadEstadosInformado ===
+                    'contact_blacklist';
+            linea.ultimoErrorAudiencia = verificacion.error
+                ? 'WhatsApp recibió el cambio, pero no permitió comprobarlo. La audiencia seguirá pendiente para evitar publicar con una privacidad incierta.'
+                : 'WhatsApp todavía informa una lista de exclusiones. La audiencia seguirá pendiente hasta que confirme “Mis contactos”.';
+            guardarLineas();
+            programarResincronizacionAudiencia(linea, socket, 3000);
+
+            throw crearErrorReparacionPrivacidad(
+                verificacion.error
+                    ? 'PRIVACIDAD_NO_VERIFICADA'
+                    : 'PRIVACIDAD_NO_CONFIRMADA',
+                linea.ultimoErrorAudiencia,
+                502
+            );
+        }
+
+        // Recién después del GET forzado se reemplaza la regla anterior. El
+        // SET por sí solo nunca habilita la línea de forma optimista.
+        actualizarPrivacidadEstados(linea, {
+            modo: MODOS_PRIVACIDAD_ESTADOS.TODOS_LOS_CONTACTOS,
+            usuarios: [],
+            usuariosInvalidos: 0
+        });
+        linea.privacidadAudienciaConfirmada = true;
+        linea.verificacionPrivacidadForzadaPendiente = false;
+        linea.reparacionPrivacidadDisponible = false;
+        linea.fallosPrivacidadPersonalizada = 0;
+        linea.intentosResincronizacionAudiencia = 0;
+        linea.noReintentarAudienciaAntes = 0;
+        linea.audienciaResincronizada = false;
+        linea.ultimoErrorAudiencia =
+            '“Mis contactos” fue confirmado. Revalidando la audiencia antes de habilitar publicaciones.';
+        invalidarResumenPriorizacionAudiencia(linea);
+        guardarAudienciaEstados(linea);
+        guardarLineas();
+        programarResincronizacionAudiencia(linea, socket, 0);
+
+        return {
+            estado: verificacion.estado,
+            audienciaEstadosLista: false
+        };
+    } catch (error) {
+        if (
+            linea.socket === socket &&
+            linea.estado === 'conectado' &&
+            !linea.eliminando &&
+            ![
+                'PRIVACIDAD_NO_VERIFICADA',
+                'PRIVACIDAD_NO_CONFIRMADA',
+                'SOCKET_REEMPLAZADO'
+            ].includes(error?.codigo)
+        ) {
+            linea.ultimoErrorAudiencia =
+                `No se pudo reaplicar “Mis contactos”: ${error.message}`;
+            linea.reparacionPrivacidadDisponible = true;
+            guardarLineas();
+        }
+        throw error;
+    } finally {
+        linea.reparandoPrivacidadAudiencia = false;
+    }
 }
 
 function prepararSincronizacionAudienciasPublicacion(lineasPublicacion) {
@@ -5682,6 +6011,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
         !lineas.has(linea.id) ||
         linea.socket !== socket ||
         audienciaEstadosLista(linea) ||
+        linea.reparandoPrivacidadAudiencia ||
         linea.resincronizandoAudiencia
     ) {
         return;
@@ -5741,7 +6071,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
         linea.audienciaResincronizada = false;
 
         let privacidadValidada =
-            linea.privacidadAudienciaConfirmada === true;
+            linea.privacidadAudienciaConfirmada === true &&
+            linea.verificacionPrivacidadForzadaPendiente !== true;
         let resultadoPrivacidadIq = null;
 
         // La consulta IQ es directa y no descarga referencias de la CDN. Se
@@ -5931,6 +6262,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
 
             if (
                 linea.privacidadAudienciaConfirmada === true &&
+                linea.verificacionPrivacidadForzadaPendiente !== true &&
                 privacidadEstadosEsSegura(linea.privacidadEstados)
             ) {
                 privacidadValidada = true;
@@ -5949,6 +6281,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
             linea.audienciaResincronizada = true;
             linea.intentosResincronizacionAudiencia = 0;
             linea.fallosPrivacidadPersonalizada = 0;
+            linea.reparacionPrivacidadDisponible = false;
             linea.noReintentarAudienciaAntes = 0;
             linea.ultimoErrorAudiencia = null;
             guardarAudienciaEstados(linea);
@@ -6008,6 +6341,17 @@ async function resincronizarAudienciaEstados(linea, socket) {
         const falloDescargaAppState = errores.some(item =>
             esFalloDescargaAppState(item.error)
         );
+        const falloDescargaPrivacidadPersonalizada =
+            privacidadPersonalizadaPendiente &&
+            esFalloDescargaAppState403(resultadoPrivacidad.error);
+        if (falloDescargaPrivacidadPersonalizada) {
+            // Este es el caso específico que puede repararse de forma manual:
+            // el IQ confirma una lista de exclusiones, pero WhatsApp devuelve
+            // una referencia 403 al pedir su detalle.
+            linea.reparacionPrivacidadDisponible = true;
+        } else if (!privacidadPersonalizadaPendiente) {
+            linea.reparacionPrivacidadDisponible = false;
+        }
         const componentesPendientes = errores
             .map(item => item.componente)
             .join(' y ');
@@ -6706,6 +7050,10 @@ function cargarLineasGuardadas() {
                 reiniciosRequeridos: 0,
                 reconexionManualEnCurso: false,
                 fallosPrivacidadPersonalizada: 0,
+                modoPrivacidadEstadosInformado: null,
+                reparacionPrivacidadDisponible: false,
+                reparandoPrivacidadAudiencia: false,
+                verificacionPrivacidadForzadaPendiente: false,
                 resincronizandoAudiencia: false,
                 intentosResincronizacionAudiencia: 0,
                 controlSincronizacionAudiencia: null,
@@ -8304,6 +8652,8 @@ async function iniciarWhatsApp(lineaId) {
         sock.ev.on('settings.update', actualizacion => {
             if (
                 linea.socket === sock &&
+                linea.reparandoPrivacidadAudiencia !== true &&
+                linea.verificacionPrivacidadForzadaPendiente !== true &&
                 actualizacion?.setting === 'statusPrivacy' &&
                 !(
                     sincronizacionHistorialAgendamientoActiva?.lineaId ===
@@ -8318,6 +8668,12 @@ async function iniciarWhatsApp(lineaId) {
                         cancelarReintentoAudiencia(linea);
                         linea.intentosResincronizacionAudiencia = 0;
                         linea.fallosPrivacidadPersonalizada = 0;
+                        linea.modoPrivacidadEstadosInformado =
+                            linea.privacidadEstados?.modo ===
+                                MODOS_PRIVACIDAD_ESTADOS.EXCLUIR_CONTACTOS
+                                ? 'contact_blacklist'
+                                : 'contacts';
+                        linea.reparacionPrivacidadDisponible = false;
                         linea.noReintentarAudienciaAntes = 0;
 
                         if (linea.socketValidacionAudiencia !== sock) {
@@ -8468,6 +8824,9 @@ async function iniciarWhatsApp(lineaId) {
                 linea.controlSincronizacionAudiencia = null;
                 linea.reinicioAudienciaPendiente = null;
                 linea.fallosPrivacidadPersonalizada = 0;
+                linea.modoPrivacidadEstadosInformado = null;
+                linea.reparacionPrivacidadDisponible = false;
+                linea.reparandoPrivacidadAudiencia = false;
                 linea.resincronizandoAudiencia = false;
                 linea.intentosResincronizacionAudiencia = 0;
                 linea.noReintentarAudienciaAntes = 0;
@@ -9784,8 +10143,41 @@ async function ejecutarPublicacion({
     }
 }
 
+function obtenerLineasReparandoPrivacidad(idsLineas = []) {
+    return normalizarIdsLineas(idsLineas)
+        .map(id => lineas.get(id))
+        .filter(linea => linea?.reparandoPrivacidadAudiencia === true);
+}
+
+function crearErrorPublicacionDuranteReparacion(idsLineas = []) {
+    const afectadas = obtenerLineasReparandoPrivacidad(idsLineas);
+    if (!afectadas.length) return null;
+
+    const nombres = afectadas
+        .slice(0, 3)
+        .map(linea => linea.nombre)
+        .join(', ');
+    const restantes = Math.max(0, afectadas.length - 3);
+    return crearErrorPublicacion(
+        'REPARACION_PRIVACIDAD_ACTIVA',
+        'seguridad_linea',
+        `Esperá a que termine la reparación de privacidad de ${nombres}` +
+            (restantes > 0 ? ` y ${restantes} línea(s) más.` : '.'),
+        {
+            reintentable: true,
+            envioConfirmado: false,
+            envioIncierto: false,
+            reintentoSeguro: true
+        }
+    );
+}
+
 function encolarPublicacion(datosPublicacion) {
     try {
+        const errorReparacion = crearErrorPublicacionDuranteReparacion(
+            datosPublicacion?.idsLineas
+        );
+        if (errorReparacion) throw errorReparacion;
         verificarMiddlewarePublicacion();
     } catch (error) {
         return Promise.reject(error);
@@ -10611,6 +11003,7 @@ app.delete('/agendamiento/ia', async (_req, res) => {
 app.post('/agendamiento/lineas/:id/ia/analizar', (req, res) => {
     const linea = lineas.get(req.params.id);
     if (!linea) return res.status(404).json({ error: 'La línea no existe.' });
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
     if (agendamientoEstaOcupado()) {
         return res.status(409).json({
             error: 'Terminá el proceso de agendamiento o IA que ya está activo.',
@@ -10643,6 +11036,7 @@ app.post('/agendamiento/lineas/:id/ia/detener', (req, res) => {
 app.post('/agendamiento/lineas/:id/ia/revisiones/:revisionId', async (req, res) => {
     const linea = lineas.get(req.params.id);
     if (!linea) return res.status(404).json({ error: 'La línea no existe.' });
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
     if (agendamientoEstaOcupado()) {
         return res.status(409).json({
             error: 'Terminá el proceso activo antes de resolver sugerencias.',
@@ -10687,6 +11081,7 @@ app.put('/agendamiento/palabras-clave', async (req, res) => {
     if (lineaId && !linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
 
     try {
         const busqueda = servicioAgendamiento.configurarPalabrasClaveUsuario(
@@ -10790,6 +11185,7 @@ app.put('/agendamiento/lineas/:id/cuenta', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
     if (obtenerProcesoAgendamientoActivo()?.lineaId === linea.id) {
         return res.status(409).json({
             error: 'Detené el agendamiento antes de cambiar su cuenta.',
@@ -10833,6 +11229,7 @@ app.post('/agendamiento/lineas/:id/iniciar', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
     if (agendamientoEstaOcupado()) {
         return res.status(409).json({
             error: 'Ya hay un agendamiento en curso.',
@@ -11022,6 +11419,10 @@ app.post('/lineas', (req, res) => {
         reconexionManualEnCurso: false,
         resincronizandoAudiencia: false,
         fallosPrivacidadPersonalizada: 0,
+        modoPrivacidadEstadosInformado: null,
+        reparacionPrivacidadDisponible: false,
+        reparandoPrivacidadAudiencia: false,
+        verificacionPrivacidadForzadaPendiente: false,
         intentosResincronizacionAudiencia: 0,
         controlSincronizacionAudiencia: null,
         reinicioAudienciaPendiente: null,
@@ -11195,6 +11596,10 @@ app.get('/estado', (req, res) => {
                 destinatariosEstadoTotales - destinatariosEstadoBase
             ),
             audienciaEstadosLista: audienciaEstadosLista(linea),
+            reparacionPrivacidadDisponible:
+                puedeReaplicarPrivacidadMisContactos(linea),
+            reparandoPrivacidadAudiencia:
+                linea.reparandoPrivacidadAudiencia === true,
             priorizacionAudiencia,
             historialAgendamiento:
                 obtenerEstadoPublicoHistorialAgendamiento(linea)
@@ -11314,6 +11719,43 @@ app.post('/lineas/:id/habilitar-publicaciones', (req, res) => {
         listaParaPublicar: evaluacion.lista,
         motivoBloqueoPublicacion: evaluacion.error
     });
+});
+
+app.post('/lineas/:id/reaplicar-privacidad-contactos', async (req, res) => {
+    const linea = lineas.get(req.params.id);
+    if (!linea) {
+        return res.status(404).json({ error: 'La línea no existe.' });
+    }
+
+    if (
+        String(req.body?.confirmacion || '') !==
+            CONFIRMACION_REAPLICAR_PRIVACIDAD
+    ) {
+        return res.status(400).json({
+            codigo: 'CONFIRMACION_REQUERIDA',
+            error:
+                'Debés confirmar explícitamente que querés reemplazar cualquier exclusión por “Mis contactos”.'
+        });
+    }
+
+    try {
+        const resultado = await reaplicarPrivacidadEstadosMisContactos(
+            linea
+        );
+        res.status(202).json({
+            codigo: 'PRIVACIDAD_REAPLICADA',
+            mensaje:
+                'WhatsApp confirmó “Mis contactos”. ZeroOne está revalidando la audiencia sin cerrar la sesión.',
+            ...resultado
+        });
+    } catch (error) {
+        res.status(Number(error?.estadoHttp) || 500).json({
+            codigo: error?.codigo || 'ERROR_REPARACION_PRIVACIDAD',
+            error:
+                error?.message ||
+                'No se pudo reaplicar la privacidad de Estados.'
+        });
+    }
 });
 
 app.get('/progreso', (req, res) => {
@@ -11542,6 +11984,16 @@ app.post(
         lineasPorGrupo,
         intervaloMinutos
     } = validacion;
+    const errorReparacion = crearErrorPublicacionDuranteReparacion(
+        idsLineas
+    );
+    if (errorReparacion) {
+        eliminarArchivoSeguro(rutaTemporalFoto);
+        return res.status(409).json({
+            codigo: errorReparacion.codigo,
+            error: errorReparacion.message
+        });
+    }
 
     res.status(202).json({
         mensaje: `Publicación iniciada para ${idsLineas.length} línea(s).`
@@ -12110,6 +12562,15 @@ app.post(
             error: 'Ya existe una publicación en curso o en espera.'
         });
     }
+    const errorReparacion = crearErrorPublicacionDuranteReparacion(
+        idsLineas
+    );
+    if (errorReparacion) {
+        return res.status(409).json({
+            codigo: errorReparacion.codigo,
+            error: errorReparacion.message
+        });
+    }
 
     res.status(202).json({
         mensaje: `Reintento iniciado para ${idsLineas.length} línea(s).`
@@ -12234,6 +12695,7 @@ app.post('/lineas/:id/reconectar', (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
 
     if (linea.eliminando) {
         return res.status(409).json({
@@ -12285,6 +12747,7 @@ app.delete('/lineas/:id', async (req, res) => {
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
+    if (responderConflictoReparacionPrivacidad(res, linea)) return;
 
     cancelarSincronizacionHistorialAgendamiento(
         id,

@@ -775,6 +775,11 @@
                     !audienciaLista &&
                     !audienciaSincronizando &&
                     !audienciaEsperando;
+                const reparacionPrivacidadDisponible =
+                    linea.reparacionPrivacidadDisponible === true &&
+                    !audienciaLista &&
+                    !audienciaSincronizando &&
+                    !simulada;
                 const contactosAudienciaConocidos = Math.max(
                     0,
                     audienciaSeleccionada,
@@ -911,6 +916,24 @@
                         </div>
                     `
                     : '';
+                const avisoReparacionPrivacidad =
+                    reparacionPrivacidadDisponible
+                        ? `
+                            <div class="publication-review-notice">
+                                <span class="publication-review-copy">
+                                    ${iconoSVG('alert')}
+                                    <span>WhatsApp informa exclusiones, pero no entregó su lista. Si el teléfono está en “Mis contactos”, podés reaplicarlo sin cerrar la sesión.</span>
+                                </span>
+                                <button
+                                    type="button"
+                                    class="btn-habilitar-publicaciones btn-reaplicar-privacidad"
+                                    data-id="${escaparHTML(idLinea)}"
+                                >
+                                    Reaplicar Mis contactos
+                                </button>
+                            </div>
+                        `
+                        : '';
 
                 const contenidoTarjeta = `
                     <div class="connected-line-card-header">
@@ -989,6 +1012,7 @@
                     </div>
 
                     ${avisoPublicacion}
+                    ${avisoReparacionPrivacidad}
 
                     ${simulada ? '' : selectorEtiquetaHTML(linea)}
 
@@ -1543,6 +1567,65 @@
         });
 
         async function manejarClickLineasConectadas(evento) {
+            const botonReaplicarPrivacidad = evento.target.closest(
+                '.btn-reaplicar-privacidad'
+            );
+            if (botonReaplicarPrivacidad) {
+                const id = botonReaplicarPrivacidad.dataset.id;
+                const linea = cacheLineasSeccion.find(
+                    item => String(item.id) === String(id)
+                );
+                const confirmado = await solicitarConfirmacion({
+                    titulo: 'Reaplicar “Mis contactos”',
+                    mensaje:
+                        `Esta acción cambiará la privacidad real de Estados de ${linea?.nombre || 'esta línea'} a “Mis contactos”. ` +
+                        'Se eliminará cualquier exclusión configurada en WhatsApp. Confirmá únicamente si ya revisaste el teléfono.',
+                    textoConfirmar: 'Usar Mis contactos',
+                    tono: 'primary',
+                    icono: 'alert'
+                });
+                if (!confirmado) return;
+
+                const contenidoOriginal =
+                    botonReaplicarPrivacidad.innerHTML;
+                botonReaplicarPrivacidad.disabled = true;
+                botonReaplicarPrivacidad.innerHTML =
+                    `${iconoSVG('loader', 'spin')}<span>Comprobando...</span>`;
+
+                try {
+                    const respuesta = await fetch(
+                        `/lineas/${encodeURIComponent(id)}/reaplicar-privacidad-contactos`,
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                confirmacion:
+                                    'REAPLICAR_MIS_CONTACTOS'
+                            })
+                        }
+                    );
+                    const data = await exigirRespuesta(
+                        respuesta,
+                        'No se pudo reaplicar “Mis contactos”.'
+                    );
+                    toast(
+                        data.mensaje ||
+                            'Privacidad reaplicada. Revalidando audiencia.',
+                        'success'
+                    );
+                    actualizarLineas();
+                } catch (error) {
+                    botonReaplicarPrivacidad.disabled = false;
+                    botonReaplicarPrivacidad.innerHTML =
+                        contenidoOriginal;
+                    toast(error.message, tipoToastErrorHTTP(error));
+                    actualizarLineas();
+                }
+                return;
+            }
+
             const botonHabilitar = evento.target.closest('.btn-habilitar-publicaciones');
             if (botonHabilitar) {
                 const id = botonHabilitar.dataset.id;

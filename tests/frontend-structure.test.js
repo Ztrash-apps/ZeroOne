@@ -252,7 +252,7 @@ test('EVA-05 tiene catálogo, selector, paleta y arranque temprano coherentes', 
     assert.equal(meta.contenido, '#080d09');
 });
 
-test('Ajustes abre únicamente la carpeta fija de logs mediante el puente seguro', () => {
+test('Ajustes gestiona únicamente los logs internos mediante el puente seguro', () => {
     const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
     const bootstrap = fs.readFileSync(
         path.join(rutaPublica, 'js', 'bootstrap.js'),
@@ -262,14 +262,54 @@ test('Ajustes abre únicamente la carpeta fija de logs mediante el puente seguro
     const principal = fs.readFileSync(path.join(raiz, 'main.js'), 'utf8');
 
     assert.match(html, /id="btn-abrir-carpeta-logs"/u);
+    assert.match(html, /id="btn-crear-log"/u);
+    assert.match(html, /id="btn-copiar-log"/u);
+    assert.match(html, /id="btn-eliminar-log"/u);
     assert.match(html, /Registros de diagnóstico/u);
+    assert.match(html, /Cada versión guarda sus propios logs/u);
     assert.match(
         bootstrap,
         /btn-abrir-carpeta-logs[\s\S]+window\.sistema\.abrirCarpetaLogs\(\)/u
     );
     assert.match(
+        bootstrap,
+        /btn-crear-log[\s\S]+window\.sistema\.crearLog\(\)/u
+    );
+    assert.match(
+        bootstrap,
+        /btn-copiar-log[\s\S]+window\.sistema\.copiarLog\(\)/u
+    );
+    assert.match(
+        bootstrap,
+        /btn-eliminar-log[\s\S]+solicitarConfirmacion\(\{[\s\S]+window\.sistema\.eliminarLog\(\)/u
+    );
+    const inicioEliminar = bootstrap.indexOf(
+        "document.getElementById('btn-eliminar-log').onclick"
+    );
+    const finEliminar = bootstrap.indexOf(
+        "document.getElementById('btn-alto-total').onclick",
+        inicioEliminar
+    );
+    const manejadorEliminar = bootstrap.slice(inicioEliminar, finEliminar);
+    assert.ok(
+        manejadorEliminar.indexOf('const boton = evento.currentTarget') <
+        manejadorEliminar.indexOf('await solicitarConfirmacion')
+    );
+    assert.match(
         preload,
         /abrirCarpetaLogs\(\)\s*\{\s*return ipcRenderer\.invoke\('sistema:abrir-carpeta-logs'\)/u
+    );
+    assert.match(
+        preload,
+        /crearLog\(\)\s*\{\s*return ipcRenderer\.invoke\('sistema:crear-log'\)/u
+    );
+    assert.match(
+        preload,
+        /copiarLog\(\)\s*\{\s*return ipcRenderer\.invoke\('sistema:copiar-log'\)/u
+    );
+    assert.match(
+        preload,
+        /eliminarLog\(\)\s*\{\s*return ipcRenderer\.invoke\('sistema:eliminar-log'\)/u
     );
     assert.doesNotMatch(preload, /shell|openPath|showItemInFolder|abrirRuta/u);
     assert.match(principal, /app\.setAppLogsPath\(carpetaLogs\)/u);
@@ -281,6 +321,19 @@ test('Ajustes abre únicamente la carpeta fija de logs mediante el puente seguro
         principal,
         /abrirDirectorioLogsSeguro\(\{[\s\S]+directorio:\s*rutaCarpetaLogs[\s\S]+shell\.openPath/u
     );
+    for (const canal of [
+        'sistema:crear-log',
+        'sistema:copiar-log',
+        'sistema:eliminar-log'
+    ]) {
+        assert.match(
+            principal,
+            new RegExp(
+                `ipcMain\\.handle\\('${canal}',\\s*evento[\\s\\S]+eventoProvieneDeVentanaPrincipal`,
+                'u'
+            )
+        );
+    }
 });
 
 test('Windows recibe la identidad y el icono nativo de ZeroOne', () => {
@@ -354,5 +407,37 @@ test('las tarjetas separan conexión disponible de audiencia validada', () => {
     assert.match(
         publicacion,
         /visiblesPreparando[\s\S]+preparando audiencia/u
+    );
+});
+
+test('la reparación de privacidad solo se ofrece con confirmación explícita', () => {
+    const lineas = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'lines.js'),
+        'utf8'
+    );
+    const backend = fs.readFileSync(
+        path.join(raiz, 'src', 'bot.js'),
+        'utf8'
+    );
+
+    assert.match(
+        lineas,
+        /linea\.reparacionPrivacidadDisponible\s*===\s*true[\s\S]+btn-reaplicar-privacidad/u
+    );
+    assert.match(
+        lineas,
+        /Se eliminará cualquier exclusión configurada en WhatsApp/u
+    );
+    assert.match(
+        lineas,
+        /reaplicar-privacidad-contactos[\s\S]+REAPLICAR_MIS_CONTACTOS/u
+    );
+    assert.match(
+        backend,
+        /sock\.ev\.on\('settings\.update'[\s\S]+linea\.reparandoPrivacidadAudiencia\s*!==\s*true[\s\S]+linea\.verificacionPrivacidadForzadaPendiente\s*!==\s*true/u
+    );
+    assert.match(
+        backend,
+        /function audienciaEstadosLista[\s\S]+verificacionPrivacidadForzadaPendiente\s*!==\s*true/u
     );
 });

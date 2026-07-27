@@ -1024,12 +1024,26 @@
                                     </span>
                                     <span class="settings-action-copy">
                                         <strong>Registros de diagnóstico</strong>
-                                        <small>Abre la carpeta con los logs protegidos de ZeroOne para enviarlos a soporte.</small>
+                                        <small>Cada versión guarda sus propios logs. Se conservan hasta que decidas eliminarlos.</small>
                                     </span>
-                                    <button type="button" id="btn-abrir-carpeta-logs" class="secondary-button">
-                                        <svg class="icon"><use href="#i-folder"></use></svg>
-                                        <span>Abrir carpeta de logs</span>
-                                    </button>
+                                    <div class="settings-log-actions" aria-label="Acciones de registros de diagnóstico">
+                                        <button type="button" id="btn-crear-log" class="secondary-button">
+                                            <svg class="icon"><use href="#i-refresh"></use></svg>
+                                            <span>Nuevo log</span>
+                                        </button>
+                                        <button type="button" id="btn-copiar-log" class="secondary-button">
+                                            <svg class="icon"><use href="#i-copy"></use></svg>
+                                            <span>Copiar actual</span>
+                                        </button>
+                                        <button type="button" id="btn-abrir-carpeta-logs" class="secondary-button">
+                                            <svg class="icon"><use href="#i-folder"></use></svg>
+                                            <span>Abrir carpeta</span>
+                                        </button>
+                                        <button type="button" id="btn-eliminar-log" class="danger-button">
+                                            <svg class="icon"><use href="#i-trash"></use></svg>
+                                            <span>Eliminar actual</span>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </section>

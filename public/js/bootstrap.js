@@ -1169,6 +1169,89 @@
             }
         };
 
+        document.getElementById('btn-crear-log').onclick = async evento => {
+            const boton = evento.currentTarget;
+            const contenidoOriginal = boton.innerHTML;
+            boton.disabled = true;
+            boton.innerHTML = `${iconoSVG('loader', 'spin')}<span>Creando...</span>`;
+
+            try {
+                if (!window.sistema?.crearLog) {
+                    throw new Error(
+                        'Los logs solo están disponibles en la aplicación de escritorio.'
+                    );
+                }
+                await window.sistema.crearLog();
+                toast('Nuevo log iniciado. El anterior se conservó.', 'success');
+            } catch (error) {
+                toast(
+                    error?.message || 'No se pudo iniciar un nuevo log.',
+                    'error'
+                );
+            } finally {
+                boton.disabled = false;
+                boton.innerHTML = contenidoOriginal;
+            }
+        };
+
+        document.getElementById('btn-copiar-log').onclick = async evento => {
+            const boton = evento.currentTarget;
+            const contenidoOriginal = boton.innerHTML;
+            boton.disabled = true;
+            boton.innerHTML = `${iconoSVG('loader', 'spin')}<span>Copiando...</span>`;
+
+            try {
+                if (!window.sistema?.copiarLog) {
+                    throw new Error(
+                        'Los logs solo están disponibles en la aplicación de escritorio.'
+                    );
+                }
+                await window.sistema.copiarLog();
+                toast('Log actual copiado al portapapeles.', 'success');
+            } catch (error) {
+                toast(
+                    error?.message || 'No se pudo copiar el log actual.',
+                    'error'
+                );
+            } finally {
+                boton.disabled = false;
+                boton.innerHTML = contenidoOriginal;
+            }
+        };
+
+        document.getElementById('btn-eliminar-log').onclick = async evento => {
+            const boton = evento.currentTarget;
+            const confirmado = await solicitarConfirmacion({
+                titulo: 'Eliminar log actual',
+                mensaje: 'Solo se eliminará el archivo activo. Los demás logs se conservarán y ZeroOne iniciará uno nuevo inmediatamente.',
+                textoConfirmar: 'Eliminar log',
+                icono: 'trash'
+            });
+            if (!confirmado) return;
+
+            const contenidoOriginal = boton.innerHTML;
+            boton.disabled = true;
+            boton.innerHTML = `${iconoSVG('loader', 'spin')}<span>Eliminando...</span>`;
+
+            try {
+                if (!window.sistema?.eliminarLog) {
+                    throw new Error(
+                        'Los logs solo están disponibles en la aplicación de escritorio.'
+                    );
+                }
+                await window.sistema.eliminarLog();
+                toast('Log eliminado. Se inició un registro nuevo.', 'success');
+            } catch (error) {
+                toast(
+                    error?.message || 'No se pudo eliminar el log actual.',
+                    'error'
+                );
+            } finally {
+                boton.disabled = false;
+                boton.innerHTML = contenidoOriginal;
+            }
+        };
+
         document.getElementById('btn-alto-total').onclick = async () => {
             if (!publicacionActivaActual || altoTotalSolicitado) return;
 

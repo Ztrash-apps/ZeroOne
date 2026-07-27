@@ -38,17 +38,39 @@ function cargarBackendAislado(rutaDatos, opciones = {}) {
     try {
         const fuente = original.slice(0, corte) + `
             module.exports = {
+                app,
                 resincronizarAudienciaEstados,
                 cancelarReintentoAudiencia,
                 finalizarAudienciaConfirmadaLocalmente,
+                cargarAudienciaEstados,
+                guardarAudienciaEstados,
                 obtenerEstadoPublicoAudiencia,
+                puedeReaplicarPrivacidadMisContactos,
+                reaplicarPrivacidadEstadosMisContactos,
                 seleccionarMejorAudiencia,
                 registrarVisualizacionesEstadosActivos,
                 obtenerVistaEstadosActivos,
                 estadosActivos,
                 lineas,
+                encolarPublicacion,
                 servicioAgendamiento,
-                runtimeIALocal
+                runtimeIALocal,
+                establecerPublicacionActivaParaPrueba: activa => {
+                    progresoPublicacion = {
+                        ...crearProgresoVacio(),
+                        activo: activa === true
+                    };
+                    publicacionesPendientes = 0;
+                },
+                establecerAnalisisIAParaPrueba: lineaId => {
+                    tareaAnalisisIA = lineaId
+                        ? {
+                            lineaId,
+                            controlador: new AbortController(),
+                            progreso: {}
+                        }
+                        : null;
+                }
             };
         `;
         const modulo = new Module(archivo, module);
@@ -77,11 +99,19 @@ function cargarBackendAislado(rutaDatos, opciones = {}) {
     }
 }
 
-function crearErrorCdn() {
+function crearErrorCdn(statusCode = 403) {
     const error = new Error(
         'Failed to fetch stream from https://mmg.whatsapp.net/referencia.enc'
     );
-    error.output = { statusCode: 403 };
+    error.output = { statusCode };
+    return error;
+}
+
+function crearErrorCdnEnResponse(statusCode = 403) {
+    const error = new Error(
+        'Failed to fetch stream from https://mmg.whatsapp.net/referencia.enc'
+    );
+    error.response = { status: statusCode };
     return error;
 }
 
@@ -242,6 +272,53 @@ function crearDiferida() {
         resolver = resolve;
     });
     return { promesa, resolver };
+}
+
+async function abrirServidorPrueba(app) {
+    const servidor = await new Promise((resolve, reject) => {
+        const instancia = app.listen(0, '127.0.0.1', () => {
+            resolve(instancia);
+        });
+        instancia.once('error', reject);
+    });
+    const direccion = servidor.address();
+
+    return {
+        servidor,
+        baseUrl: `http://127.0.0.1:${direccion.port}`
+    };
+}
+
+async function cerrarServidorPrueba(servidor) {
+    await new Promise((resolve, reject) => {
+        servidor.close(error => {
+            if (error) reject(error);
+            else resolve();
+        });
+    });
+}
+
+function prepararLineaParaRepararPrivacidad(linea, socket) {
+    const contacto = '595987654321@s.whatsapp.net';
+    linea.socket = socket;
+    linea.contactosEstado = new Set([contacto]);
+    linea.contactosEstadoGoogle = new Set([contacto]);
+    linea.contactosEstadoWhatsApp = new Set();
+    linea.origenAudiencia = 'google';
+    linea.contactosAudienciaConfirmados = true;
+    linea.socketValidacionAudiencia = socket;
+    linea.privacidadEstados = {
+        modo: 1,
+        usuarios: ['595900000001@s.whatsapp.net'],
+        usuariosInvalidos: 0
+    };
+    linea.privacidadAudienciaConfirmada = false;
+    linea.audienciaResincronizada = false;
+    linea.fallosPrivacidadPersonalizada = 2;
+    linea.modoPrivacidadEstadosInformado = 'contact_blacklist';
+    linea.reparacionPrivacidadDisponible = true;
+    linea.reparandoPrivacidadAudiencia = false;
+    return linea;
 }
 
 test('la audiencia aísla colecciones y conserva una recuperación parcial', async () => {
@@ -1037,7 +1114,7 @@ test('una lista personalizada sin detalle termina bloqueada y accionable', async
                     linea.contactosEstado.add(contacto);
                     return;
                 }
-                throw crearErrorCdn();
+                throw crearErrorCdnEnResponse();
             },
             fetchPrivacySettings: async () => ({
                 status: 'contact_blacklist'
@@ -1068,6 +1145,7 @@ test('una lista personalizada sin detalle termina bloqueada y accionable', async
         ]);
         assert.equal(linea.audienciaResincronizada, false);
         assert.equal(linea.fallosPrivacidadPersonalizada, 2);
+        assert.equal(linea.reparacionPrivacidadDisponible, true);
         assert.equal(linea.temporizadorAudiencia, null);
         assert.equal(
             backend.obtenerEstadoPublicoAudiencia(linea),
@@ -1075,6 +1153,402 @@ test('una lista personalizada sin detalle termina bloqueada y accionable', async
         );
         assert.match(linea.ultimoErrorAudiencia, /personalizada/u);
     } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un fallo de CDN distinto de 403 no ofrece cambiar la privacidad', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-custom-non-403-')
+    );
+    let backend = null;
+    let linea = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        const contacto = '595984444444@s.whatsapp.net';
+        const socket = {
+            ev: { isBuffering: () => false },
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    linea.contactosEstado.add(contacto);
+                    return;
+                }
+                throw crearErrorCdn(500);
+            },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            })
+        };
+        linea = crearLinea(socket);
+        linea.privacidadEstados = {
+            modo: 1,
+            usuarios: ['595985555555@s.whatsapp.net'],
+            usuariosInvalidos: 0
+        };
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.equal(linea.audienciaResincronizada, false);
+        assert.equal(linea.reparacionPrivacidadDisponible, false);
+        assert.equal(
+            backend.puedeReaplicarPrivacidadMisContactos(linea),
+            false
+        );
+    } finally {
+        backend?.cancelarReintentoAudiencia(linea);
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('reaplicar Mis contactos exige confirmación literal y verifica el cambio', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-privacy-repair-route-')
+    );
+    let backend = null;
+    let servidor = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            privacyIqTimeoutMs: 500
+        });
+        const llamadasActualizacion = [];
+        const llamadasConsulta = [];
+        const socket = {
+            updateStatusPrivacy: async modo => {
+                llamadasActualizacion.push(modo);
+            },
+            fetchPrivacySettings: async forzar => {
+                llamadasConsulta.push(forzar);
+                return { status: 'contacts' };
+            },
+            resyncAppState: async () => {}
+        };
+        const linea = prepararLineaParaRepararPrivacidad(
+            crearLinea(socket),
+            socket
+        );
+        backend.lineas.set(linea.id, linea);
+        assert.equal(
+            backend.puedeReaplicarPrivacidadMisContactos(linea),
+            true
+        );
+
+        const instancia = await abrirServidorPrueba(backend.app);
+        servidor = instancia.servidor;
+
+        const sinConfirmacion = await fetch(
+            `${instancia.baseUrl}/lineas/${linea.id}/reaplicar-privacidad-contactos`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ confirmar: true })
+            }
+        );
+        assert.equal(sinConfirmacion.status, 400);
+        assert.equal(llamadasActualizacion.length, 0);
+
+        const respuesta = await fetch(
+            `${instancia.baseUrl}/lineas/${linea.id}/reaplicar-privacidad-contactos`,
+            {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    confirmacion: 'REAPLICAR_MIS_CONTACTOS'
+                })
+            }
+        );
+        const cuerpo = await respuesta.json();
+
+        assert.equal(respuesta.status, 202);
+        assert.equal(cuerpo.codigo, 'PRIVACIDAD_REAPLICADA');
+        assert.equal(cuerpo.audienciaEstadosLista, false);
+        assert.deepEqual(llamadasActualizacion, ['contacts']);
+        assert.deepEqual(llamadasConsulta, [true]);
+        assert.equal(linea.privacidadEstados.modo, 2);
+        assert.equal(linea.reparacionPrivacidadDisponible, false);
+        assert.equal(
+            linea.verificacionPrivacidadForzadaPendiente,
+            false
+        );
+    } finally {
+        backend?.cancelarReintentoAudiencia(
+            backend?.lineas?.get(ID_LINEA)
+        );
+        if (servidor) await cerrarServidorPrueba(servidor);
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un SET sin GET confirmado mantiene la privacidad pendiente', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-privacy-repair-unconfirmed-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            privacyIqTimeoutMs: 100
+        });
+        let linea;
+        const socket = {
+            updateStatusPrivacy: async () => {
+                // Simula un evento local tardío del SET: sin un GET forzado
+                // confirmado, estos indicadores nunca deben sobrevivir.
+                linea.audienciaResincronizada = true;
+                linea.privacidadAudienciaConfirmada = true;
+            },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            })
+        };
+        linea = prepararLineaParaRepararPrivacidad(
+            crearLinea(socket),
+            socket
+        );
+        backend.lineas.set(linea.id, linea);
+
+        await assert.rejects(
+            backend.reaplicarPrivacidadEstadosMisContactos(linea),
+            error => error?.codigo === 'PRIVACIDAD_NO_CONFIRMADA'
+        );
+
+        assert.equal(linea.privacidadEstados.modo, 1);
+        assert.equal(linea.privacidadAudienciaConfirmada, false);
+        assert.equal(linea.audienciaResincronizada, false);
+        assert.equal(
+            linea.verificacionPrivacidadForzadaPendiente,
+            true
+        );
+        assert.equal(linea.reparacionPrivacidadDisponible, true);
+
+        const recargada = crearLinea(socket);
+        recargada.audienciaEstadosCargada = false;
+        backend.cargarAudienciaEstados(recargada);
+        assert.equal(
+            recargada.verificacionPrivacidadForzadaPendiente,
+            true
+        );
+    } finally {
+        backend?.cancelarReintentoAudiencia(
+            backend?.lineas?.get(ID_LINEA)
+        );
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('la reparación rechaza campañas activas y dobles solicitudes', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-privacy-repair-lock-')
+    );
+    let backend = null;
+    const bloqueo = crearDiferida();
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            privacyIqTimeoutMs: 20
+        });
+        let actualizaciones = 0;
+        const socket = {
+            updateStatusPrivacy: async () => {
+                actualizaciones += 1;
+                await bloqueo.promesa;
+            },
+            fetchPrivacySettings: async () => ({ status: 'contacts' }),
+            resyncAppState: async () => {}
+        };
+        const linea = prepararLineaParaRepararPrivacidad(
+            crearLinea(socket),
+            socket
+        );
+        backend.lineas.set(linea.id, linea);
+
+        backend.establecerAnalisisIAParaPrueba(linea.id);
+        assert.equal(
+            backend.puedeReaplicarPrivacidadMisContactos(linea),
+            false
+        );
+        await assert.rejects(
+            backend.reaplicarPrivacidadEstadosMisContactos(linea),
+            error => error?.codigo === 'LINEA_OCUPADA'
+        );
+        backend.establecerAnalisisIAParaPrueba(null);
+
+        backend.establecerPublicacionActivaParaPrueba(true);
+        await assert.rejects(
+            backend.reaplicarPrivacidadEstadosMisContactos(linea),
+            error => error?.codigo === 'PUBLICACION_ACTIVA'
+        );
+        assert.equal(actualizaciones, 0);
+
+        backend.establecerPublicacionActivaParaPrueba(false);
+        const primera =
+            backend.reaplicarPrivacidadEstadosMisContactos(linea);
+        await new Promise(resolve => setTimeout(resolve, 40));
+        await assert.rejects(
+            backend.reaplicarPrivacidadEstadosMisContactos(linea),
+            error => error?.codigo === 'REPARACION_EN_CURSO'
+        );
+        assert.equal(actualizaciones, 1);
+
+        bloqueo.resolver();
+        await primera;
+        assert.equal(actualizaciones, 1);
+    } finally {
+        bloqueo.resolver();
+        backend?.establecerAnalisisIAParaPrueba(null);
+        backend?.cancelarReintentoAudiencia(
+            backend?.lineas?.get(ID_LINEA)
+        );
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una reparación activa bloquea acciones concurrentes sobre la línea', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-privacy-repair-routes-')
+    );
+    let backend = null;
+    let servidor = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        const socket = {
+            updateStatusPrivacy: async () => {},
+            fetchPrivacySettings: async () => ({ status: 'contacts' })
+        };
+        const linea = prepararLineaParaRepararPrivacidad(
+            crearLinea(socket),
+            socket
+        );
+        linea.reparandoPrivacidadAudiencia = true;
+        backend.lineas.set(linea.id, linea);
+
+        await assert.rejects(
+            backend.encolarPublicacion({
+                idsLineas: [linea.id],
+                rutaImagen: 'no-debe-usarse.jpg',
+                texto: ''
+            }),
+            error => error?.codigo === 'REPARACION_PRIVACIDAD_ACTIVA'
+        );
+
+        const instancia = await abrirServidorPrueba(backend.app);
+        servidor = instancia.servidor;
+        const solicitudes = [
+            {
+                ruta: `/agendamiento/lineas/${linea.id}/ia/analizar`,
+                metodo: 'POST'
+            },
+            {
+                ruta: `/agendamiento/lineas/${linea.id}/iniciar`,
+                metodo: 'POST'
+            },
+            {
+                ruta: `/agendamiento/lineas/${linea.id}/cuenta`,
+                metodo: 'PUT',
+                cuerpo: { cuentaId: 'cuenta-prueba' }
+            },
+            {
+                ruta: `/lineas/${linea.id}/reconectar`,
+                metodo: 'POST'
+            },
+            {
+                ruta: `/lineas/${linea.id}`,
+                metodo: 'DELETE'
+            }
+        ];
+
+        for (const solicitud of solicitudes) {
+            const respuesta = await fetch(
+                `${instancia.baseUrl}${solicitud.ruta}`,
+                {
+                    method: solicitud.metodo,
+                    headers: { 'content-type': 'application/json' },
+                    body: solicitud.cuerpo
+                        ? JSON.stringify(solicitud.cuerpo)
+                        : undefined
+                }
+            );
+            const cuerpo = await respuesta.json();
+
+            assert.equal(respuesta.status, 409);
+            assert.equal(cuerpo.codigo, 'REPARACION_PRIVACIDAD_ACTIVA');
+        }
+
+        assert.equal(backend.lineas.has(linea.id), true);
+        assert.equal(linea.socket, socket);
+    } finally {
+        if (servidor) await cerrarServidorPrueba(servidor);
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un socket reemplazado cancela la reparación sin tocar la sesión', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-privacy-repair-socket-')
+    );
+    let backend = null;
+    const bloqueo = crearDiferida();
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            privacyIqTimeoutMs: 500
+        });
+        let consultas = 0;
+        let cierres = 0;
+        const socket = {
+            updateStatusPrivacy: async () => {
+                await bloqueo.promesa;
+            },
+            fetchPrivacySettings: async () => {
+                consultas += 1;
+                return { status: 'contacts' };
+            },
+            end: () => {
+                cierres += 1;
+            },
+            logout: () => {
+                cierres += 1;
+            }
+        };
+        const linea = prepararLineaParaRepararPrivacidad(
+            crearLinea(socket),
+            socket
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const reparacion =
+            backend.reaplicarPrivacidadEstadosMisContactos(linea);
+        await new Promise(resolve => setImmediate(resolve));
+        linea.socket = {
+            updateStatusPrivacy: async () => {},
+            fetchPrivacySettings: async () => ({ status: 'contacts' })
+        };
+        bloqueo.resolver();
+
+        await assert.rejects(
+            reparacion,
+            error => error?.codigo === 'SOCKET_REEMPLAZADO'
+        );
+        assert.equal(consultas, 0);
+        assert.equal(cierres, 0);
+        assert.equal(linea.audienciaResincronizada, false);
+    } finally {
+        bloqueo.resolver();
         backend?.servicioAgendamiento?.cerrar();
         backend?.runtimeIALocal?.detener();
         fs.rmSync(rutaDatos, { recursive: true, force: true });
