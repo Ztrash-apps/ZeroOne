@@ -289,6 +289,8 @@
         function cerrarPickerAgendamiento(picker) {
             if (!picker) return;
             picker.classList.remove('open');
+            picker.closest('.agenda-panel')
+                ?.classList.remove('picker-layer-open');
             picker.querySelector('.agenda-picker-button')?.setAttribute('aria-expanded', 'false');
         }
 
@@ -303,14 +305,33 @@
             const abrir = !picker.classList.contains('open');
             cerrarSelectoresAgendamiento(picker);
             picker.classList.toggle('open', abrir);
+            picker.closest('.agenda-panel')
+                ?.classList.toggle('picker-layer-open', abrir);
             picker.querySelector('.agenda-picker-button')?.setAttribute('aria-expanded', String(abrir));
+            if (abrir && picker.id === 'agenda-line-picker') {
+                requestAnimationFrame(() => {
+                    document.getElementById('buscar-lineas-agendamiento')
+                        ?.focus({ preventScroll: true });
+                });
+            }
+        }
+
+        function normalizarBusquedaAgenda(valor = '') {
+            return String(valor || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLocaleLowerCase('es')
+                .trim();
         }
 
         function renderizarSelectorLineasAgendamiento({ forzar = false } = {}) {
             const picker = document.getElementById('agenda-line-picker');
-            const menu = document.getElementById('agenda-line-menu');
+            const opciones = document.getElementById('agenda-line-options');
+            const resultado = document.getElementById(
+                'resultado-lineas-agendamiento'
+            );
             const etiqueta = document.getElementById('agenda-line-label');
-            if (!picker || !menu || !etiqueta) return;
+            if (!picker || !opciones || !resultado || !etiqueta) return;
 
             if (
                 !agendaLineaId &&
@@ -327,10 +348,11 @@
                     ? 'Línea no disponible'
                     : 'Seleccionar línea';
             document.getElementById('agenda-name-example').textContent =
-                `${prefijoAgendaLinea(linea || {})} usuario 🟣`;
+                `${prefijoAgendaLinea(linea || {})} usuario🟣`;
 
             const firma = JSON.stringify({
                 seleccionada: String(agendaLineaId || ''),
+                busqueda: agendaBusquedaLineas,
                 lineas: cacheLineasAgendamiento.map(item => [
                     String(item.id),
                     item.nombre || '',
@@ -343,11 +365,28 @@
             agendaFirmaLineas = firma;
 
             if (!cacheLineasAgendamiento.length) {
-                menu.innerHTML = '<div class="agenda-empty" style="min-height:90px;padding:14px;">No hay líneas disponibles.</div>';
+                opciones.innerHTML =
+                    '<div class="agenda-picker-empty">No hay líneas disponibles.</div>';
+                resultado.textContent = '0 líneas';
                 return;
             }
 
-            menu.innerHTML = cacheLineasAgendamiento.map(item => {
+            const busqueda = normalizarBusquedaAgenda(agendaBusquedaLineas);
+            const visibles = cacheLineasAgendamiento.filter(item => {
+                if (!busqueda) return true;
+                return [
+                    item.nombre,
+                    item.numero,
+                    item.id,
+                    item.ordenConexion,
+                    item.ordenOriginal
+                ].some(valor =>
+                    normalizarBusquedaAgenda(valor).includes(busqueda)
+                );
+            });
+
+            opciones.innerHTML = visibles.length
+                ? visibles.map(item => {
                 const activa = String(item.id) === String(agendaLineaId);
                 return `
                     <button
@@ -367,7 +406,10 @@
                         ${activa ? iconoSVG('check') : '<span></span>'}
                     </button>
                 `;
-            }).join('');
+                }).join('')
+                : '<div class="agenda-picker-empty">No se encontraron líneas con esa búsqueda.</div>';
+            resultado.textContent =
+                `${visibles.length} de ${cacheLineasAgendamiento.length} línea(s)`;
         }
 
         function renderizarSelectorCuentasAgendamiento(cuentas = [], { forzar = false } = {}) {
@@ -745,9 +787,9 @@
             const prefijo = prefijoAgendaLinea(lineaAgendaSeleccionada() || {});
             contenedor.innerHTML = lista.map(candidato => {
                 const usuario = String(candidato.usuario || '').trim();
-                const nombreGenerado = `${prefijo} ${usuario || 'usuario'}${candidato.mutuo ? ' 🟣' : ''}`;
+                const nombreGenerado = `${prefijo} ${usuario || 'usuario'}${candidato.mutuo ? '🟣' : ''}`;
                 let nombre = String(candidato.nombre || nombreGenerado).trim();
-                if (candidato.mutuo && !nombre.includes('🟣')) nombre += ' 🟣';
+                if (candidato.mutuo && !nombre.includes('🟣')) nombre += '🟣';
                 const telefono = String(candidato.telefono || '').trim();
                 const fuentes = Array.isArray(candidato.fuentes)
                     ? candidato.fuentes.map(describirFuenteAgenda).filter(Boolean)

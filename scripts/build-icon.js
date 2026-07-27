@@ -19,7 +19,7 @@ const pngAplicacion = path.join(
 );
 const carpetaBuild = path.join(raiz, 'build');
 const icoWindows = path.join(carpetaBuild, 'icon.ico');
-const tamanosIco = [16, 24, 32, 48, 64, 128, 256];
+const tamanosIco = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 
 async function renderizarPng(tamano) {
     return sharp(pngAplicacion)
@@ -60,12 +60,10 @@ function crearIco(imagenes) {
 async function main() {
     fs.mkdirSync(carpetaBuild, { recursive: true });
 
-    if (!fs.existsSync(pngAplicacion)) {
-        await sharp(fuenteVector, { density: 384 })
-            .resize(1024, 1024, { fit: 'contain' })
-            .png({ compressionLevel: 9 })
-            .toFile(pngAplicacion);
-    }
+    await sharp(fuenteVector, { density: 384 })
+        .resize(1024, 1024, { fit: 'contain' })
+        .png({ compressionLevel: 9 })
+        .toFile(pngAplicacion);
 
     const imagenes = await Promise.all(
         tamanosIco.map(async tamano => ({

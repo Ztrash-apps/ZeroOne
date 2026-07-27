@@ -364,6 +364,86 @@
             contexto.hidden = !linea && !causa;
         }
 
+        function actualizarConfirmacionEnvioIncierto(progreso) {
+            const panel = document.getElementById('confirmacion-envio-progreso');
+            const pendiente = progreso?.confirmacionEnvioPendiente;
+            const solicitudId = String(pendiente?.solicitudId || '').trim();
+            const visible = Boolean(
+                progreso?.activo &&
+                pendiente &&
+                solicitudId &&
+                progreso?.altoTotalSolicitado !== true
+            );
+
+            panel.hidden = !visible;
+            panel.classList.toggle('visible', visible);
+
+            if (!visible) {
+                panel.removeAttribute('data-solicitud-id');
+                panel.classList.remove('is-simulated');
+                document.getElementById('confirmacion-envio-linea').textContent = '';
+                return;
+            }
+
+            const linea = pendiente.linea && typeof pendiente.linea === 'object'
+                ? pendiente.linea
+                : {};
+            const nombre = String(
+                pendiente.nombre ??
+                pendiente.lineaNombre ??
+                linea.nombre ??
+                ''
+            ).trim();
+            const numero = String(
+                pendiente.numero ??
+                pendiente.lineaNumero ??
+                linea.numero ??
+                ''
+            ).trim();
+            const identificacion = [nombre, numero].filter(Boolean).join(' · ');
+            const simulada = pendiente.simulada === true;
+
+            panel.dataset.solicitudId = solicitudId;
+            panel.classList.toggle('is-simulated', simulada);
+            document.getElementById('confirmacion-envio-linea').textContent =
+                simulada
+                    ? `${identificacion || 'Línea de prueba'} · SIMULACRO`
+                    : identificacion || 'Línea pendiente de confirmación';
+            document.getElementById('confirmacion-envio-advertencia').textContent =
+                simulada
+                    ? 'No se envió nada a WhatsApp. Elegí cualquiera de las dos respuestas para observar cómo continúa la campaña.'
+                    : 'Revisá WhatsApp antes de responder para evitar duplicados. ' +
+                        'Si confirmás manualmente, la eliminación y las vistas estarán disponibles cuando llegue el ID.';
+        }
+
+        function actualizarBotonSimulacroEnvio(progreso) {
+            const boton = document.getElementById('btn-simulacro-envio');
+            if (!boton) return;
+
+            const ocupada = Boolean(
+                progreso?.ocupada ||
+                progreso?.activo ||
+                Number(progreso?.publicacionesPendientes) > 0
+            );
+            const visible = progreso?.simulacroDisponible === true && !ocupada;
+            const finalizada = progreso?.simulada === true && [
+                'completado',
+                'completado_con_errores',
+                'detenido_alto_total'
+            ].includes(String(progreso?.estado || ''));
+            const procesando = boton.getAttribute('aria-busy') === 'true';
+            const textoAccion = finalizada
+                ? 'Repetir simulacro'
+                : 'Simular espera';
+
+            boton.hidden = !visible;
+            boton.disabled = !visible || procesando;
+            boton.querySelector('.publication-simulation-action').textContent =
+                textoAccion;
+            boton.title = `Modo de prueba: ${textoAccion.toLocaleLowerCase('es')}`;
+            boton.setAttribute('aria-label', boton.title);
+        }
+
         async function actualizarProgresoPublicacion() {
             try {
                 const respuesta = await fetch('/progreso');
@@ -404,10 +484,14 @@
                 document.getElementById('progreso-grupo').textContent =
                     `${unidadActual} de ${totalUnidades}`;
                 actualizarContextoProgreso(progreso);
+                actualizarConfirmacionEnvioIncierto(progreso);
+                actualizarBotonSimulacroEnvio(progreso);
 
                 const proximo = document.getElementById('progreso-proximo');
 
-                if (['esperando_siguiente_grupo', 'esperando_siguiente_linea', 'esperando_siguiente_envio'].includes(progreso.estado)) {
+                if (progreso.confirmacionEnvioPendiente?.solicitudId) {
+                    proximo.textContent = 'Esperando tu confirmación';
+                } else if (['esperando_siguiente_grupo', 'esperando_siguiente_linea', 'esperando_siguiente_envio'].includes(progreso.estado)) {
                     const segundosRestantes = progreso.proximoEnvioSegundos ?? (
                         secuencial
                             ? (progreso.proximaLineaSegundos ?? progreso.proximoGrupoSegundos ?? 0)

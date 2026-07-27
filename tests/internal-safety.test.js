@@ -355,6 +355,30 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(datos.pendientesCanceladas, 0);
         });
 
+        await t.test('rechaza confirmaciones de envío obsoletas', async () => {
+            const { respuesta, datos } = await solicitarJSON(
+                servidor.baseURL,
+                '/progreso/confirmar-envio',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        solicitudId:
+                            '11111111-1111-4111-8111-111111111111',
+                        resultado: 'publicado'
+                    })
+                }
+            );
+
+            assert.equal(respuesta.status, 409);
+            assert.equal(
+                datos.codigo,
+                'SOLICITUD_CONFIRMACION_OBSOLETA'
+            );
+        });
+
         await t.test('mantiene los valores seguros predeterminados', async () => {
             const { respuesta, datos } = await solicitarJSON(
                 servidor.baseURL,
@@ -460,13 +484,13 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
                         maximoDestinatariosPorEstado: 500,
                         limiteFallosSeguridad: 1,
                         notificaciones: true,
-                        temaVisual: 'rei'
+                        temaVisual: 'eva-05'
                     })
                 }
             );
 
             assert.equal(guardado.respuesta.status, 200);
-            assert.equal(guardado.datos.configuracion.temaVisual, 'rei');
+            assert.equal(guardado.datos.configuracion.temaVisual, 'eva-05');
 
             const invalido = await solicitarJSON(
                 servidor.baseURL,
@@ -648,7 +672,7 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
 
             assert.equal(respuesta.status, 200);
             assert.equal(datos.maximoDestinatariosPorEstado, 500);
-            assert.equal(datos.temaVisual, 'rei');
+            assert.equal(datos.temaVisual, 'eva-05');
             assert.equal(datos.agendarMutuosSinUsuario, true);
         });
     } finally {

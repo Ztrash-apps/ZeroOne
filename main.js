@@ -13,8 +13,20 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
+const {
+    abrirDirectorioLogsSeguro,
+    crearRegistradorLocal,
+    instalarCapturaConsola
+} = require('./src/desktop-logs');
 
 const NOMBRE_APLICACION = 'ZeroOne';
+// La versión instalada conserva el ID histórico para no romper accesos directos
+// ni actualizaciones. Desarrollo usa otro ID para que Windows no tome el icono
+// de una instalación antigua al ejecutar `npm start`.
+const ID_APLICACION_WINDOWS_INSTALADA = 'com.zabo.autostatues';
+const ID_APLICACION_WINDOWS = app.isPackaged
+    ? ID_APLICACION_WINDOWS_INSTALADA
+    : `${ID_APLICACION_WINDOWS_INSTALADA}.development`;
 const URL_APLICACION = 'http://127.0.0.1:3000';
 const ORIGEN_APLICACION = new URL(URL_APLICACION).origin;
 const INTERVALO_ACTUALIZACIONES = 5 * 60 * 60 * 1000;
@@ -24,17 +36,32 @@ const RUTA_ICONO = path.join(
     'assets',
     'zeroone-icon.png'
 );
+const RUTA_ICONO_ICO = path.join(__dirname, 'build', 'icon.ico');
+const RUTA_ICONO_WINDOWS = app.isPackaged
+    ? process.execPath
+    : fs.existsSync(RUTA_ICONO_ICO)
+        ? RUTA_ICONO_ICO
+        : RUTA_ICONO;
+const RUTA_ICONO_VENTANA = process.platform === 'win32' && !app.isPackaged
+    ? RUTA_ICONO_WINDOWS
+    : RUTA_ICONO;
 const MODO_DESARROLLO_WEB = !app.isPackaged &&
     process.env.ZEROONE_ENABLE_DEVTOOLS === '1';
 const TOKEN_SESION_ESCRITORIO = MODO_DESARROLLO_WEB
     ? ''
     : crypto.randomBytes(32).toString('base64url');
 const ARGUMENTO_INICIO_AUTOMATICO = '--zeroone-inicio-automatico';
+const ARGUMENTO_FIXTURES_UI = '--zeroone-ui-fixtures';
 const INICIO_AUTOMATICO_SOLICITADO = process.argv.includes(
     ARGUMENTO_INICIO_AUTOMATICO
 );
+const MODO_FIXTURES_UI = !app.isPackaged &&
+    process.argv.includes(ARGUMENTO_FIXTURES_UI);
 
 app.setName(NOMBRE_APLICACION);
+if (process.platform === 'win32') {
+    app.setAppUserModelId(ID_APLICACION_WINDOWS);
+}
 process.env.ZEROONE_DESKTOP_TOKEN = TOKEN_SESION_ESCRITORIO;
 
 let ventanaPrincipal = null;
@@ -44,6 +71,9 @@ let busquedaEnCurso = false;
 let descargaEnCurso = false;
 let cierreAplicacionEnCurso = false;
 let cierreAplicacionCompletado = false;
+let rutaCarpetaLogs = null;
+let registradorLocal = null;
+let restaurarCapturaConsola = null;
 let preferenciasEscritorio = {
     mantenerEnSegundoPlano: true,
     iniciarConWindows: true
@@ -421,6 +451,26 @@ async function abrirEnlaceExterno(valor) {
     return { correcto: true };
 }
 
+function eventoProvieneDeVentanaPrincipal(evento) {
+    if (
+        !ventanaPrincipal ||
+        ventanaPrincipal.isDestroyed() ||
+        evento?.sender !== ventanaPrincipal.webContents
+    ) {
+        return false;
+    }
+
+    const url = evento?.senderFrame?.url || evento.sender.getURL();
+    return urlPerteneceALaAplicacion(url);
+}
+
+async function abrirCarpetaLogs() {
+    return abrirDirectorioLogsSeguro({
+        directorio: rutaCarpetaLogs,
+        abrirRuta: ruta => shell.openPath(ruta)
+    });
+}
+
 function cifrarDatoLocal(valor) {
     if (!safeStorage.isEncryptionAvailable()) {
         throw new Error('El cifrado seguro de Windows no está disponible.');
@@ -459,6 +509,13 @@ function configurarIPC() {
     });
 
     ipcMain.handle('sistema:obtener-version', () => app.getVersion());
+
+    ipcMain.handle('sistema:abrir-carpeta-logs', evento => {
+        if (!eventoProvieneDeVentanaPrincipal(evento)) {
+            throw new Error('La solicitud para abrir los logs no es válida.');
+        }
+        return abrirCarpetaLogs();
+    });
 }
 
 function exponerActualizadorAlServidor() {
@@ -594,7 +651,7 @@ function crearVentana(mostrarAlCargar = true) {
         show: false,
         autoHideMenuBar: true,
         title: NOMBRE_APLICACION,
-        icon: RUTA_ICONO,
+        icon: RUTA_ICONO_VENTANA,
         backgroundColor: '#09060f',
 
         webPreferences: {
@@ -609,6 +666,19 @@ function crearVentana(mostrarAlCargar = true) {
             webviewTag: false
         }
     });
+
+    if (process.platform === 'win32') {
+        ventanaPrincipal.setIcon(RUTA_ICONO_VENTANA);
+        ventanaPrincipal.setAppDetails({
+            appId: ID_APLICACION_WINDOWS,
+            appIconPath: RUTA_ICONO_WINDOWS,
+            appIconIndex: 0,
+            relaunchCommand: app.isPackaged
+                ? `"${process.execPath}"`
+                : `"${process.execPath}" "${__dirname}"`,
+            relaunchDisplayName: NOMBRE_APLICACION
+        });
+    }
 
     if (!MODO_DESARROLLO_WEB) {
         ventanaPrincipal.setMenu(null);
@@ -706,27 +776,61 @@ if (!bloqueoObtenido) {
             'userData',
             path.join(app.getPath('appData'), 'autostatues')
         );
-        app.setAppUserModelId('com.zabo.autostatues');
 
         if (!MODO_DESARROLLO_WEB) {
             Menu.setApplicationMenu(null);
         }
 
-        const carpetaDatos = path.join(
-            app.getPath('userData'),
-            'datos'
+        const carpetaFixtures = path.join(
+            app.getPath('temp'),
+            'zeroone-ui-fixtures',
+            String(process.pid)
         );
+        const carpetaDatos = MODO_FIXTURES_UI
+            ? carpetaFixtures
+            : path.join(
+                app.getPath('userData'),
+                'datos'
+            );
+        const carpetaLogs = MODO_FIXTURES_UI
+            ? path.join(carpetaFixtures, 'logs')
+            : path.join(app.getPath('userData'), 'logs');
+
+        app.setAppLogsPath(carpetaLogs);
+        rutaCarpetaLogs = app.getPath('logs');
+        try {
+            registradorLocal = crearRegistradorLocal({
+                directorio: rutaCarpetaLogs,
+                version: app.getVersion()
+            });
+            restaurarCapturaConsola = instalarCapturaConsola(
+                registradorLocal
+            );
+        } catch (error) {
+            console.error(
+                'No se pudo iniciar el registro local de diagnóstico:',
+                error.message
+            );
+        }
 
         fs.mkdirSync(carpetaDatos, {
             recursive: true
         });
 
         process.env.ZEROONE_DATA_DIR = carpetaDatos;
-        process.env.ZEROONE_AI_DIR = path.join(
-            process.env.LOCALAPPDATA || app.getPath('userData'),
-            'AutoStatues',
-            'ia'
-        );
+        process.env.ZEROONE_AI_DIR = MODO_FIXTURES_UI
+            ? path.join(carpetaDatos, 'ia')
+            : path.join(
+                process.env.LOCALAPPDATA || app.getPath('userData'),
+                'AutoStatues',
+                'ia'
+            );
+        if (MODO_FIXTURES_UI) {
+            process.env.ZEROONE_UI_FIXTURES = '1';
+            console.log(
+                'ZeroOne inició con datos visuales simulados; las sesiones reales están aisladas.'
+            );
+        }
 
         cargarPreferenciasEscritorio(
             path.join(carpetaDatos, 'configuracion.json')
@@ -786,6 +890,10 @@ app.on('before-quit', evento => {
             iconoBandeja.destroy();
         }
         iconoBandeja = null;
+        console.log('ZeroOne cerró su registro de diagnóstico.');
+        restaurarCapturaConsola?.();
+        restaurarCapturaConsola = null;
+        registradorLocal = null;
         cierreAplicacionCompletado = true;
         app.quit();
     });

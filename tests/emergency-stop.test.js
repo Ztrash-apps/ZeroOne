@@ -9,7 +9,13 @@ const RAIZ_PROYECTO = path.resolve(__dirname, '..');
 const ID_LINEA = '22222222-2222-4222-8222-222222222222';
 const ID_LINEA_SIGUIENTE = '33333333-3333-4333-8333-333333333333';
 
-function cargarBackendAislado(rutaDatos) {
+function cargarBackendAislado(
+    rutaDatos,
+    {
+        tiempoMaximoEnvioMs = null,
+        fixturesUi = false
+    } = {}
+) {
     for (const carpeta of ['sesiones', 'programados', 'uploads', 'historial']) {
         const ruta = path.join(rutaDatos, carpeta);
         fs.mkdirSync(ruta, { recursive: true });
@@ -23,19 +29,35 @@ function cargarBackendAislado(rutaDatos) {
 
     const nombreVariable = 'AUTOSTATUES_DATA_DIR';
     const valorAnterior = process.env[nombreVariable];
+    const nombreVariableTimeout = 'ZEROONE_SEND_TIMEOUT_MS';
+    const valorAnteriorTimeout = process.env[nombreVariableTimeout];
+    const nombreVariableFixtures = 'ZEROONE_UI_FIXTURES';
+    const valorAnteriorFixtures = process.env[nombreVariableFixtures];
     process.env[nombreVariable] = rutaDatos;
+    if (tiempoMaximoEnvioMs !== null) {
+        process.env[nombreVariableTimeout] = String(tiempoMaximoEnvioMs);
+    }
+    if (fixturesUi) {
+        process.env[nombreVariableFixtures] = '1';
+    } else {
+        delete process.env[nombreVariableFixtures];
+    }
 
     try {
         const fuente = original.slice(0, corte) + `
             module.exports = {
+                app,
                 ejecutarPublicacion,
                 encolarPublicacion,
+                iniciarSimulacroEnvioIncierto,
                 solicitarAltoTotalPublicacion,
+                resolverConfirmacionEnvioPendiente,
                 registrarCorteDesconexion,
                 solicitarReconexionManual,
                 solicitarEliminacionEstado,
                 lineas,
                 estadosActivos,
+                historialPublicaciones,
                 obtenerProgreso: () => progresoPublicacion,
                 establecerCola: valor => { colaPublicaciones = valor; },
                 archivoEstadosActivos
@@ -51,6 +73,18 @@ function cargarBackendAislado(rutaDatos) {
             delete process.env[nombreVariable];
         } else {
             process.env[nombreVariable] = valorAnterior;
+        }
+
+        if (valorAnteriorTimeout === undefined) {
+            delete process.env[nombreVariableTimeout];
+        } else {
+            process.env[nombreVariableTimeout] = valorAnteriorTimeout;
+        }
+
+        if (valorAnteriorFixtures === undefined) {
+            delete process.env[nombreVariableFixtures];
+        } else {
+            process.env[nombreVariableFixtures] = valorAnteriorFixtures;
         }
     }
 }
@@ -107,6 +141,88 @@ function crearLinea(
         ultimaSeleccionAudienciaEstado: null,
         revisionPriorizacionAudiencia: 0,
         cacheResumenPriorizacionAudiencia: null
+    };
+}
+
+async function esperarHasta(
+    condicion,
+    {
+        timeoutMs = 1500,
+        mensaje = 'La condición esperada no se cumplió a tiempo.'
+    } = {}
+) {
+    const inicio = Date.now();
+    let ultimoResultado = null;
+
+    while (Date.now() - inicio < timeoutMs) {
+        ultimoResultado = condicion();
+        if (ultimoResultado) return ultimoResultado;
+        await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    assert.fail(mensaje);
+}
+
+async function abrirServidorPrueba(app) {
+    const servidor = await new Promise((resolve, reject) => {
+        const instancia = app.listen(0, '127.0.0.1', () => {
+            resolve(instancia);
+        });
+        instancia.once('error', reject);
+    });
+    const direccion = servidor.address();
+
+    return {
+        servidor,
+        baseUrl: `http://127.0.0.1:${direccion.port}`
+    };
+}
+
+async function cerrarServidorPrueba(servidor) {
+    await new Promise((resolve, reject) => {
+        servidor.close(error => {
+            if (error) reject(error);
+            else resolve();
+        });
+    });
+}
+
+async function solicitarJson(baseUrl, ruta, opciones = {}) {
+    const respuesta = await fetch(`${baseUrl}${ruta}`, {
+        ...opciones,
+        headers: {
+            ...(opciones.body ? { 'content-type': 'application/json' } : {}),
+            ...(opciones.headers || {})
+        }
+    });
+    const cuerpo = await respuesta.json();
+    return { respuesta, cuerpo };
+}
+
+function crearImagenPrueba(rutaDatos, nombre) {
+    const rutaImagen = path.join(rutaDatos, nombre);
+    fs.writeFileSync(
+        rutaImagen,
+        Buffer.from([
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a,
+            0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00
+        ])
+    );
+    return rutaImagen;
+}
+
+function crearParametrosPublicacion(idsLineas, rutaImagen, texto) {
+    return {
+        idsLineas,
+        rutaImagen,
+        texto,
+        modoRitmo: 'grupos',
+        intervaloSegundos: 10,
+        variacionSegundos: 0,
+        lineasPorGrupo: idsLineas.length,
+        intervaloMinutos: 0,
+        maximoDestinatariosPorEstado: 1000,
+        origen: 'prueba interna'
     };
 }
 
@@ -618,6 +734,612 @@ test('una reconexión manual tardía no corta una publicación activa', async ()
         assert.equal(backend.obtenerProgreso().codigoErrorCorte, null);
         assert.equal(backend.obtenerProgreso().noProcesadas, 0);
     } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un envío incierto confirmado como publicado continúa sin poner la línea en cuarentena', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-confirmacion-publicado-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoEnvioMs: 25
+        });
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(() => {
+            enviosPrimeraLinea += 1;
+            return new Promise(() => {});
+        });
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-SEGUNDA-LINEA-CONFIRMACION-MANUAL'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Segunda línea después de confirmar',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'confirmacion-publicado.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Confirmación manual positiva'
+            )
+        );
+
+        const solicitud = await esperarHasta(
+            () => {
+                const progreso = backend.obtenerProgreso();
+                return progreso.estado === 'esperando_confirmacion_envio'
+                    ? progreso.confirmacionEnvioPendiente
+                    : null;
+            },
+            {
+                mensaje:
+                    'La publicación no entró en espera de confirmación.'
+            }
+        );
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 0);
+
+        const confirmacion = backend.resolverConfirmacionEnvioPendiente(
+            solicitud.solicitudId,
+            'publicado'
+        );
+        assert.equal(confirmacion.resuelta, true);
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 2, fallidas: 0 });
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 1);
+        assert.equal(backend.obtenerProgreso().estado, 'completado');
+        assert.equal(
+            backend.obtenerProgreso().confirmacionEnvioPendiente,
+            null
+        );
+
+        const primeraCorrecta = backend.obtenerProgreso().lineasCorrectas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(primeraCorrecta.confirmacionManual, true);
+        assert.equal(primeraCorrecta.estadoId, null);
+        assert.equal(primeraLinea.requiereRevisionEnvio, false);
+        assert.equal(primeraLinea.reconexionBloqueada, false);
+        assert.equal(primeraLinea.estado, 'conectado');
+        assert.equal(primeraLinea.etiqueta, 'activa');
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un envío confirmado como no publicado se omite sin reenviar y continúa', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-confirmacion-omitido-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoEnvioMs: 25
+        });
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(() => {
+            enviosPrimeraLinea += 1;
+            return new Promise(() => {});
+        });
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-SEGUNDA-LINEA-DESPUES-DE-OMITIR'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Segunda línea después de omitir',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'confirmacion-no-publicado.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Confirmación manual negativa'
+            )
+        );
+
+        const solicitud = await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'esperando_confirmacion_envio'
+                ? progreso.confirmacionEnvioPendiente
+                : null;
+        });
+        const confirmacion = backend.resolverConfirmacionEnvioPendiente(
+            solicitud.solicitudId,
+            'no_publicado'
+        );
+        assert.equal(confirmacion.resuelta, true);
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 1 });
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 1);
+        assert.equal(
+            backend.obtenerProgreso().estado,
+            'completado_con_errores'
+        );
+        assert.notEqual(
+            backend.obtenerProgreso().estado,
+            'detenido_seguridad'
+        );
+
+        const fallo = backend.obtenerProgreso().lineasFallidas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(fallo.tipoError, 'envio_omitido_manual');
+        assert.equal(fallo.codigoError, 'ENVIO_OMITIDO_MANUAL');
+        assert.equal(fallo.confirmacionManual, 'no_publicado');
+        assert.equal(fallo.reintentoSeguro, false);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un ID tardío resuelve la espera automáticamente y vuelve obsoleta la decisión manual', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-confirmacion-id-tardio-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoEnvioMs: 25
+        });
+        let resolverPrimerEnvio;
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primerEnvio = new Promise(resolve => {
+            resolverPrimerEnvio = resolve;
+        });
+        const primeraLinea = crearLinea(() => {
+            enviosPrimeraLinea += 1;
+            return primerEnvio;
+        });
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-SEGUNDA-LINEA-ID-TARDIO'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Segunda línea tras ID tardío',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'confirmacion-id-tardio.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Resolución automática por ID tardío'
+            )
+        );
+
+        const solicitud = await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'esperando_confirmacion_envio'
+                ? progreso.confirmacionEnvioPendiente
+                : null;
+        });
+        const idTardio = 'ID-PRIMERA-LINEA-TARDIO';
+        resolverPrimerEnvio({
+            key: {
+                remoteJid: 'status@broadcast',
+                fromMe: true,
+                id: idTardio
+            },
+            messageTimestamp: Math.floor(Date.now() / 1000)
+        });
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 2, fallidas: 0 });
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 1);
+
+        const primeraCorrecta = backend.obtenerProgreso().lineasCorrectas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(primeraCorrecta.estadoId, idTardio);
+        assert.equal(primeraCorrecta.confirmacionManual, false);
+
+        const decisionObsoleta =
+            backend.resolverConfirmacionEnvioPendiente(
+                solicitud.solicitudId,
+                'publicado'
+            );
+        assert.equal(decisionObsoleta.resuelta, false);
+        assert.equal(
+            decisionObsoleta.codigo,
+            'SOLICITUD_CONFIRMACION_OBSOLETA'
+        );
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('Alto total durante la confirmación incierta impide iniciar la siguiente línea', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-confirmacion-alto-total-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoEnvioMs: 25
+        });
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(() => {
+            enviosPrimeraLinea += 1;
+            return new Promise(() => {});
+        });
+        const segundaLinea = crearLinea(
+            () => {
+                enviosSegundaLinea += 1;
+                throw new Error('Alto total debió impedir este envío.');
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Línea bloqueada por Alto total',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'confirmacion-alto-total.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Alto total durante confirmación'
+            )
+        );
+
+        await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'esperando_confirmacion_envio' &&
+                progreso.confirmacionEnvioPendiente;
+        });
+        const alto = backend.solicitarAltoTotalPublicacion();
+        assert.equal(alto.habiaTrabajo, true);
+        assert.equal(alto.activa, true);
+
+        await assert.rejects(
+            tarea,
+            error => error?.codigo === 'DETENIDA_ALTO_TOTAL'
+        );
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 0);
+        assert.equal(
+            backend.obtenerProgreso().estado,
+            'detenido_alto_total'
+        );
+        assert.equal(
+            backend.obtenerProgreso().confirmacionEnvioPendiente,
+            null
+        );
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('el simulacro visual usa la confirmación real y puede repetirse sin tocar datos', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-simulacro-envio-')
+    );
+    let servidor = null;
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            fixturesUi: true
+        });
+        const cantidadesIniciales = {
+            lineas: backend.lineas.size,
+            estados: backend.estadosActivos.size,
+            historial: backend.historialPublicaciones.length
+        };
+        const servidorPrueba = await abrirServidorPrueba(backend.app);
+        servidor = servidorPrueba.servidor;
+
+        const inicio = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/simulacro-envio',
+            { method: 'POST' }
+        );
+        assert.equal(inicio.respuesta.status, 202);
+        assert.equal(inicio.cuerpo.iniciado, true);
+        assert.equal(inicio.cuerpo.total, 5);
+
+        const ocupado = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/simulacro-envio',
+            { method: 'POST' }
+        );
+        assert.equal(ocupado.respuesta.status, 409);
+        assert.equal(ocupado.cuerpo.codigo, 'PUBLICACION_EN_CURSO');
+
+        const primeraSolicitud = await esperarHasta(
+            () => {
+                const progreso = backend.obtenerProgreso();
+                return progreso.estado === 'esperando_confirmacion_envio'
+                    ? progreso.confirmacionEnvioPendiente
+                    : null;
+            },
+            {
+                timeoutMs: 3000,
+                mensaje:
+                    'El simulacro no llegó a la confirmación de la segunda línea.'
+            }
+        );
+        assert.match(
+            primeraSolicitud.solicitudId,
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+        );
+        assert.equal(primeraSolicitud.lineaNombre, 'L02');
+        assert.equal(primeraSolicitud.simulada, true);
+        assert.equal(backend.obtenerProgreso().correctas, 1);
+        assert.equal(backend.obtenerProgreso().procesadas, 1);
+
+        const vista = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso'
+        );
+        assert.equal(vista.respuesta.status, 200);
+        assert.equal(vista.cuerpo.simulada, true);
+        assert.equal(vista.cuerpo.simulacroDisponible, true);
+        assert.equal(
+            vista.cuerpo.confirmacionEnvioPendiente.solicitudId,
+            primeraSolicitud.solicitudId
+        );
+
+        const confirmacion = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/confirmar-envio',
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    solicitudId: primeraSolicitud.solicitudId,
+                    resultado: 'publicado'
+                })
+            }
+        );
+        assert.equal(confirmacion.respuesta.status, 200);
+        assert.equal(confirmacion.cuerpo.resuelta, true);
+
+        await esperarHasta(
+            () => backend.obtenerProgreso().estado === 'completado',
+            {
+                timeoutMs: 6000,
+                mensaje: 'El primer simulacro no terminó correctamente.'
+            }
+        );
+        assert.equal(backend.obtenerProgreso().correctas, 5);
+        assert.equal(backend.obtenerProgreso().fallidas, 0);
+        assert.equal(backend.obtenerProgreso().procesadas, 5);
+        assert.equal(backend.obtenerProgreso().lineasCorrectas.length, 5);
+
+        const repeticion = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/simulacro-envio',
+            { method: 'POST' }
+        );
+        assert.equal(repeticion.respuesta.status, 202);
+        assert.ok(
+            repeticion.cuerpo.generacion > inicio.cuerpo.generacion,
+            'La repetición debe invalidar cualquier temporizador anterior.'
+        );
+
+        const segundaSolicitud = await esperarHasta(
+            () => {
+                const progreso = backend.obtenerProgreso();
+                return progreso.estado === 'esperando_confirmacion_envio'
+                    ? progreso.confirmacionEnvioPendiente
+                    : null;
+            },
+            {
+                timeoutMs: 3000,
+                mensaje:
+                    'La repetición no llegó a la confirmación de la segunda línea.'
+            }
+        );
+        assert.notEqual(
+            segundaSolicitud.solicitudId,
+            primeraSolicitud.solicitudId
+        );
+
+        const omision = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/confirmar-envio',
+            {
+                method: 'POST',
+                body: JSON.stringify({
+                    solicitudId: segundaSolicitud.solicitudId,
+                    resultado: 'no_publicado'
+                })
+            }
+        );
+        assert.equal(omision.respuesta.status, 200);
+
+        await esperarHasta(
+            () =>
+                backend.obtenerProgreso().estado ===
+                'completado_con_errores',
+            {
+                timeoutMs: 6000,
+                mensaje: 'La repetición con omisión no terminó correctamente.'
+            }
+        );
+        assert.equal(backend.obtenerProgreso().correctas, 4);
+        assert.equal(backend.obtenerProgreso().fallidas, 1);
+        assert.equal(backend.obtenerProgreso().procesadas, 5);
+        assert.equal(
+            backend.obtenerProgreso().lineasFallidas[0].tipoError,
+            'envio_omitido_manual'
+        );
+
+        assert.deepEqual(
+            {
+                lineas: backend.lineas.size,
+                estados: backend.estadosActivos.size,
+                historial: backend.historialPublicaciones.length
+            },
+            cantidadesIniciales,
+            'El simulacro no debe crear líneas, estados ni historial reales.'
+        );
+    } finally {
+        if (servidor) await cerrarServidorPrueba(servidor);
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('Alto total detiene el simulacro mientras espera confirmación', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-simulacro-alto-total-')
+    );
+    let servidor = null;
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            fixturesUi: true
+        });
+        const servidorPrueba = await abrirServidorPrueba(backend.app);
+        servidor = servidorPrueba.servidor;
+
+        const inicio = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/simulacro-envio',
+            { method: 'POST' }
+        );
+        assert.equal(inicio.respuesta.status, 202);
+
+        await esperarHasta(
+            () => {
+                const progreso = backend.obtenerProgreso();
+                return progreso.estado === 'esperando_confirmacion_envio' &&
+                    progreso.confirmacionEnvioPendiente;
+            },
+            {
+                timeoutMs: 3000,
+                mensaje:
+                    'El simulacro no quedó esperando confirmación antes del Alto total.'
+            }
+        );
+
+        const alto = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/alto-total',
+            { method: 'POST' }
+        );
+        assert.equal(alto.respuesta.status, 200);
+        assert.equal(alto.cuerpo.habiaTrabajo, true);
+
+        await esperarHasta(
+            () =>
+                backend.obtenerProgreso().estado ===
+                'detenido_alto_total',
+            {
+                timeoutMs: 1000,
+                mensaje: 'Alto total no detuvo el simulacro.'
+            }
+        );
+        assert.equal(backend.obtenerProgreso().correctas, 1);
+        assert.equal(backend.obtenerProgreso().procesadas, 1);
+        assert.equal(backend.obtenerProgreso().noProcesadas, 4);
+        assert.equal(
+            backend.obtenerProgreso().confirmacionEnvioPendiente,
+            null
+        );
+    } finally {
+        if (servidor) await cerrarServidorPrueba(servidor);
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('la ruta del simulacro no existe fuera de la vista interna', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-simulacro-bloqueado-')
+    );
+    let servidor = null;
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        const progresoAntes = structuredClone(backend.obtenerProgreso());
+        const servidorPrueba = await abrirServidorPrueba(backend.app);
+        servidor = servidorPrueba.servidor;
+
+        const intento = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/simulacro-envio',
+            { method: 'POST' }
+        );
+        assert.equal(intento.respuesta.status, 404);
+        assert.equal(intento.cuerpo.codigo, 'SIMULACRO_NO_DISPONIBLE');
+        assert.deepEqual(backend.obtenerProgreso(), progresoAntes);
+        assert.equal(backend.lineas.size, 0);
+        assert.equal(backend.estadosActivos.size, 0);
+        assert.equal(backend.historialPublicaciones.length, 0);
+    } finally {
+        if (servidor) await cerrarServidorPrueba(servidor);
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }
 });

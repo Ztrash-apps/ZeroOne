@@ -41,6 +41,8 @@
         let qrCuentasCargando = false;
         let qrBusquedaCuenta = '';
         let qrSolicitudCuentas = 0;
+        let qrFaseModal = 'cerrado';
+        let qrNombreLineaModal = 'la línea';
         let agendaLineaId = null;
         let agendaCuentaId = null;
         let agendaEstado = null;
@@ -51,6 +53,7 @@
         let agendaSecuencia = 0;
         let agendaFirmaLineas = '';
         let agendaFirmaCuentas = '';
+        let agendaBusquedaLineas = '';
         let agendaOperacionIA = false;
         let cuentasGoogleDisponibles = [];
         let cuentasGoogleCargando = false;
@@ -64,6 +67,7 @@
                 'eva-01',
                 'eva-00',
                 'eva-02',
+                'eva-05',
                 'eva-13',
                 'rei'
             ]
@@ -522,6 +526,97 @@
             qrDescartadosPorLinea.delete(idNormalizado);
         }
 
+        function actualizarEstadoVisualQr(fase = 'esperando', linea = {}) {
+            const modal = document.getElementById('modal-qr-linea');
+            const panel = modal?.querySelector('.qr-code-panel');
+            const resultado = document.getElementById('qr-linea-resultado');
+            const etiqueta = document.getElementById('qr-linea-etiqueta');
+            const titulo = document.getElementById('qr-linea-resultado-titulo');
+            const detalle = document.getElementById('qr-linea-resultado-detalle');
+            const estado = document.getElementById('qr-linea-estado');
+            const iconoSvg = resultado?.querySelector('.qr-scan-check .icon');
+            const icono = iconoSvg?.querySelector('use');
+            const confirmar = document.getElementById('btn-qr-confirmar');
+            if (
+                !modal ||
+                !panel ||
+                !resultado ||
+                !etiqueta ||
+                !titulo ||
+                !detalle ||
+                !estado ||
+                !confirmar
+            ) return;
+
+            const permitidas = new Set([
+                'cerrado',
+                'esperando',
+                'escaneado',
+                'conectado',
+                'fallido'
+            ]);
+            const normalizada = permitidas.has(fase) ? fase : 'esperando';
+            const faseAnterior = qrFaseModal;
+            const nombre = String(linea?.nombre || qrNombreLineaModal || 'la línea');
+            const error = String(
+                linea?.ultimoError ||
+                linea?.ultimoErrorAudiencia ||
+                'La vinculación no pudo completarse.'
+            );
+
+            qrFaseModal = normalizada;
+            qrNombreLineaModal = nombre;
+            modal.dataset.qrState = normalizada;
+            panel.classList.toggle(
+                'is-scanned',
+                ['escaneado', 'conectado', 'fallido'].includes(normalizada)
+            );
+            panel.classList.toggle('is-confirming', normalizada === 'escaneado');
+            panel.classList.toggle('is-connected', normalizada === 'conectado');
+            panel.classList.toggle('is-failed', normalizada === 'fallido');
+            resultado.setAttribute(
+                'aria-hidden',
+                String(!['escaneado', 'conectado', 'fallido'].includes(normalizada))
+            );
+            confirmar.disabled = normalizada !== 'conectado';
+
+            if (normalizada === 'escaneado') {
+                etiqueta.textContent = 'QR escaneado';
+                titulo.textContent = 'Código reconocido';
+                detalle.textContent = 'WhatsApp está completando la vinculación.';
+                estado.textContent = 'Esperá la confirmación de conexión para continuar.';
+                icono?.setAttribute('href', '#i-loader');
+            } else if (normalizada === 'conectado') {
+                etiqueta.textContent = 'Vinculación completada';
+                titulo.textContent = 'Línea conectada';
+                detalle.textContent = `${nombre} quedó vinculada correctamente.`;
+                estado.textContent = 'Confirmá para cerrar esta pantalla y continuar.';
+                icono?.setAttribute('href', '#i-check');
+            } else if (normalizada === 'fallido') {
+                etiqueta.textContent = 'Vinculación pendiente';
+                titulo.textContent = 'No se completó la conexión';
+                detalle.textContent = error;
+                estado.textContent = 'Cancelá esta pantalla y usá Reconectar para intentarlo otra vez.';
+                icono?.setAttribute('href', '#i-x');
+            } else {
+                etiqueta.textContent = 'Escaneá para vincular';
+                titulo.textContent = 'QR escaneado';
+                detalle.textContent = 'Completando la conexión...';
+                estado.textContent = 'Abrí WhatsApp y escaneá este código.';
+                icono?.setAttribute('href', '#i-check');
+            }
+            iconoSvg?.classList.toggle('spin', normalizada === 'escaneado');
+
+            return faseAnterior;
+        }
+
+        function cancelarModalQr() {
+            const escaneado = ['escaneado', 'conectado', 'fallido'].includes(
+                qrFaseModal
+            );
+            cerrarQrDeLinea({ manual: !escaneado });
+        }
+
         function puedeAbrirQrAutomaticamente() {
             const hayOtroModal = Array.from(
                 document.querySelectorAll('.modal.open')
@@ -715,16 +810,24 @@
             const tarjeta = modal.querySelector('.qr-line-modal-card');
             const imagen = document.getElementById('qr-linea-imagen');
             const cambioLinea = lineaQrModalId !== id;
+            const cambioQr = qrModalActual !== qr;
 
             lineaQrModalId = id;
             lineaQrObjetivoId = id;
-            if (qrModalActual !== qr) {
+            if (cambioQr) {
                 qrModalActual = qr;
                 imagen.src = qr;
             }
             imagen.alt = `Código QR para vincular ${linea.nombre || 'la línea'}`;
             document.getElementById('qr-linea-nombre').textContent =
                 linea.nombre || 'Vincular línea';
+            if (
+                cambioLinea ||
+                cambioQr ||
+                !['cerrado', 'esperando'].includes(qrFaseModal)
+            ) {
+                actualizarEstadoVisualQr('esperando', linea);
+            }
 
             if (cambioLinea) {
                 qrCuentaId = null;
@@ -760,13 +863,18 @@
             qrBusquedaCuenta = '';
             qrSolicitudCuentas += 1;
             if (!conservarObjetivo) lineaQrObjetivoId = null;
+            qrFaseModal = 'cerrado';
+            qrNombreLineaModal = 'la línea';
 
             if (document.getElementById('modal-qr-linea').classList.contains('open')) {
                 cerrarModal('modal-qr-linea');
             }
 
             setTimeout(() => {
-                if (!lineaQrModalId) imagen.removeAttribute('src');
+                if (!lineaQrModalId) {
+                    imagen.removeAttribute('src');
+                    actualizarEstadoVisualQr('cerrado');
+                }
             }, 230);
         }
 
@@ -794,22 +902,34 @@
                     cacheLineasPendientes.find(linea => String(linea.id) === idAnterior)?.nombre ||
                     'La línea';
                 const conectada = lineaVisible?.estado === 'conectado';
-                const esperandoNuevoQr = ['iniciando', 'reconectando'].includes(
+                const confirmandoConexion = ['iniciando', 'reconectando'].includes(
                     String(lineaVisible?.estado || '')
                 );
-
-                cerrarQrDeLinea({
-                    manual: false,
-                    conservarObjetivo: esperandoNuevoQr
-                });
 
                 if (conectada) {
                     qrDescartadosPorLinea.delete(idAnterior);
                     lineaQrObjetivoId = null;
-                    toast(`${nombreAnterior} quedó conectada.`, 'success');
+                    const faseAnterior = actualizarEstadoVisualQr(
+                        'conectado',
+                        lineaVisible
+                    );
+                    if (faseAnterior !== 'conectado') {
+                        toast(`${nombreAnterior} quedó conectada.`, 'success');
+                    }
+                    return;
                 }
 
-                if (esperandoNuevoQr) return;
+                if (confirmandoConexion) {
+                    actualizarEstadoVisualQr('escaneado', lineaVisible);
+                    return;
+                }
+
+                if (lineaVisible) {
+                    actualizarEstadoVisualQr('fallido', lineaVisible);
+                    return;
+                }
+
+                cerrarQrDeLinea({ manual: false });
             }
 
             if (lineaQrObjetivoId) {
@@ -846,9 +966,20 @@
             seleccionarCuentaGoogleQr(opcion.dataset.qrAccountId);
         });
 
+        document.getElementById('btn-qr-confirmar').addEventListener('click', () => {
+            if (qrFaseModal !== 'conectado') return;
+            const nombre = qrNombreLineaModal;
+            cerrarQrDeLinea({ manual: false });
+            toast(`${nombre} quedó confirmada.`, 'success');
+        });
+
+        document.getElementById('btn-qr-cancelar').addEventListener('click', () => {
+            cancelarModalQr();
+        });
+
         document.getElementById('btn-qr-manage-google').addEventListener('click', () => {
             const lineaId = String(lineaQrModalId || '');
-            cerrarQrDeLinea({ manual: true });
+            cancelarModalQr();
             agendaLineaId = lineaId || agendaLineaId;
             agendaCuentaId = null;
             agendaFirmaLineas = '';
@@ -859,7 +990,7 @@
 
         document.getElementById('modal-qr-linea').addEventListener('click', evento => {
             if (evento.target.id === 'modal-qr-linea') {
-                cerrarQrDeLinea({ manual: true });
+                cancelarModalQr();
             }
         });
 
@@ -870,7 +1001,7 @@
 
             if (evento.key === 'Escape') {
                 evento.preventDefault();
-                cerrarQrDeLinea({ manual: true });
+                cancelarModalQr();
                 return;
             }
 

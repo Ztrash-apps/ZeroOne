@@ -686,10 +686,215 @@
     background: rgba(255, 255, 255, .025);
 }
 
+.qr-code-stage {
+    position: relative;
+    width: min(100%, 430px);
+    overflow: hidden;
+    border-radius: 17px;
+    background: #fff;
+    isolation: isolate;
+}
+
 .qr-line-modal-image {
-    width: min(100%, 430px) !important;
+    box-sizing: border-box;
+    width: 100% !important;
+    display: block;
     border: 12px solid #fff;
     border-radius: 17px;
+    transition:
+        filter .28s ease,
+        opacity .28s ease,
+        transform .32s cubic-bezier(.2, .8, .2, 1);
+}
+
+.qr-scan-result {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 10px;
+    padding: 24px;
+    visibility: hidden;
+    border: 1px solid rgba(var(--signal-rgb), .28);
+    border-radius: inherit;
+    background:
+        radial-gradient(circle at 50% 38%, rgba(var(--signal-rgb), .18), transparent 42%),
+        rgba(5, 7, 13, .88);
+    color: var(--text);
+    opacity: 0;
+    text-align: center;
+    transform: scale(.96);
+    transition:
+        opacity .24s ease,
+        transform .32s cubic-bezier(.2, .8, .2, 1),
+        visibility 0s linear .32s;
+}
+
+.qr-scan-result strong {
+    font-size: 18px;
+    line-height: 1.2;
+}
+
+.qr-scan-result > span:last-child {
+    max-width: 260px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.qr-scan-check {
+    position: relative;
+    width: 68px;
+    height: 68px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(var(--signal-rgb), .46);
+    border-radius: 50%;
+    background:
+        linear-gradient(145deg, rgba(var(--signal-rgb), .22), rgba(var(--accent-rgb), .20));
+    color: var(--signal);
+    box-shadow:
+        0 0 0 9px rgba(var(--signal-rgb), .06),
+        0 18px 45px rgba(0, 0, 0, .28);
+}
+
+.qr-scan-check::after {
+    position: absolute;
+    inset: -9px;
+    content: "";
+    border: 1px solid rgba(var(--signal-rgb), .24);
+    border-radius: inherit;
+}
+
+.qr-scan-check .icon {
+    width: 30px;
+    height: 30px;
+    stroke-width: 2.35;
+}
+
+.qr-code-panel.is-scanned .qr-line-modal-image {
+    filter: blur(3px) brightness(.34) saturate(.72);
+    opacity: .62;
+    transform: scale(.985);
+}
+
+.qr-code-panel.is-scanned .qr-scan-result {
+    visibility: visible;
+    opacity: 1;
+    transform: scale(1);
+    transition-delay: 0s;
+}
+
+.qr-code-panel.is-connected .qr-scan-check {
+    animation: qr-check-pop .52s cubic-bezier(.2, .9, .25, 1.25) both;
+}
+
+.qr-code-panel.is-connected .qr-scan-check::after {
+    animation: qr-check-ring 1.35s ease-out infinite;
+}
+
+.qr-code-panel.is-connected .qr-scan-result {
+    border-color: rgba(var(--signal-rgb), .48);
+    background:
+        radial-gradient(circle at 50% 38%, rgba(var(--signal-rgb), .24), transparent 45%),
+        rgba(5, 7, 13, .90);
+}
+
+.qr-code-panel.is-failed .qr-scan-result {
+    border-color: color-mix(in srgb, var(--danger) 52%, transparent);
+    background:
+        radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--danger) 19%, transparent), transparent 45%),
+        rgba(5, 7, 13, .91);
+}
+
+.qr-code-panel.is-failed .qr-scan-check {
+    border-color: color-mix(in srgb, var(--danger) 52%, transparent);
+    background: color-mix(in srgb, var(--danger) 16%, rgba(5, 7, 13, .82));
+    color: var(--danger);
+}
+
+.qr-code-panel.is-failed .qr-scan-check::after {
+    border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.qr-line-status {
+    width: min(100%, 430px);
+    min-height: 17px;
+    margin: -2px 0 0;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.45;
+    text-align: center;
+}
+
+.qr-code-panel.is-scanned .qr-line-status {
+    color: var(--text);
+}
+
+.qr-line-actions {
+    width: min(100%, 430px);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+}
+
+.qr-line-actions > button {
+    min-height: 42px;
+    justify-content: center;
+}
+
+.qr-line-actions > button .icon {
+    width: 15px;
+    height: 15px;
+}
+
+.qr-line-actions .primary-button:disabled {
+    cursor: not-allowed;
+    filter: saturate(.35);
+    opacity: .42;
+    transform: none !important;
+}
+
+@keyframes qr-check-pop {
+    0% {
+        opacity: 0;
+        transform: scale(.45) rotate(-12deg);
+    }
+    68% {
+        opacity: 1;
+        transform: scale(1.08) rotate(2deg);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1) rotate(0);
+    }
+}
+
+@keyframes qr-check-ring {
+    0% {
+        opacity: .72;
+        transform: scale(.78);
+    }
+    75%,
+    100% {
+        opacity: 0;
+        transform: scale(1.28);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .qr-line-modal-image,
+    .qr-scan-result {
+        transition: none;
+    }
+
+    .qr-code-panel.is-connected .qr-scan-check,
+    .qr-code-panel.is-connected .qr-scan-check::after,
+    .qr-code-panel.is-confirming .qr-scan-check .icon {
+        animation: none;
+    }
 }
 
 @media (max-width: 760px) {
@@ -962,6 +1167,65 @@
 
 .settings-keywords-card .secondary-button {
     flex: 0 0 auto;
+}
+
+.settings-action-card {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings-action-icon {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(var(--border-rgb), .24);
+    border-radius: 13px;
+    background:
+        linear-gradient(145deg, rgba(var(--accent-rgb), .24), rgba(var(--signal-rgb), .08));
+    color: var(--signal);
+}
+
+.settings-action-icon .icon {
+    width: 19px;
+    height: 19px;
+}
+
+.settings-action-copy {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+}
+
+.settings-action-copy strong {
+    color: var(--text);
+    font-size: 12px;
+}
+
+.settings-action-copy small {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+.settings-action-card .secondary-button {
+    min-height: 40px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+    .settings-action-card {
+        grid-template-columns: 42px minmax(0, 1fr);
+    }
+
+    .settings-action-card .secondary-button {
+        grid-column: 1 / -1;
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 .settings-info-banner,

@@ -1233,6 +1233,39 @@
     --info: #ff8a4c;
 }
 
+:root[data-theme="eva-05"] {
+    --bg: #080d09;
+    --bg-rgb: 8, 13, 9;
+    --bg-mid: #101912;
+    --bg-end: #050806;
+    --sidebar-solid: #0d1510;
+    --sidebar-top: #142018;
+    --sidebar-bottom: #080c09;
+    --surface: #152019;
+    --surface-2: #1c2a20;
+    --surface-3: #29392c;
+    --panel-top: #1d2c21;
+    --panel-bottom: #0d160f;
+    --input-bg: rgba(7, 12, 8, .88);
+    --border-rgb: 151, 174, 139;
+    --text: #f6f7ee;
+    --muted: #acb7a7;
+    --accent: #587a47;
+    --accent-rgb: 88, 122, 71;
+    --accent-bright: #91b873;
+    --accent-deep: #2b4228;
+    --signal: #e4ead5;
+    --signal-rgb: 228, 234, 213;
+    --signal-dark: #afc09a;
+    --on-signal: #11170f;
+    --detail: #f06a32;
+    --detail-rgb: 240, 106, 50;
+    --success: #81d39a;
+    --danger: #ef5b46;
+    --warning: #f0a34a;
+    --info: #98b88b;
+}
+
 :root[data-theme="eva-13"] {
     --bg: #050812;
     --bg-rgb: 5, 8, 18;
@@ -1666,6 +1699,13 @@
     --preview-panel: #c82e3d;
     --preview-signal: #ffc54a;
     --preview-detail: #ff782d;
+}
+
+[data-theme-preview="eva-05"] .theme-preview {
+    --preview-bg: #101912;
+    --preview-panel: #587a47;
+    --preview-signal: #e4ead5;
+    --preview-detail: #f06a32;
 }
 
 [data-theme-preview="eva-13"] .theme-preview {
@@ -2248,5 +2288,20 @@
         border-right: 0 !important;
         border-bottom: 1px solid var(--border-soft) !important;
     }
+}
+
+/* EVA-05: blindaje verde, estructura marfil y señalización naranja. */
+:root[data-theme="eva-05"] {
+    --theme-body:
+        radial-gradient(circle at 15% 10%, rgba(var(--accent-rgb), .25), transparent 28%),
+        radial-gradient(circle at 88% 14%, rgba(var(--signal-rgb), .055), transparent 23%),
+        radial-gradient(circle at 72% 94%, rgba(var(--detail-rgb), .10), transparent 25%),
+        linear-gradient(150deg, var(--bg), var(--bg-mid) 48%, var(--bg-end));
+    --theme-progress:
+        linear-gradient(90deg, var(--accent-deep), var(--accent-bright) 62%, var(--detail));
+}
+
+:root[data-theme="eva-05"] .nav-button.active {
+    box-shadow: inset 2px 0 var(--detail) !important;
 }
 

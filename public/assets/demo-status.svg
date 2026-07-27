@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" role="img" aria-labelledby="title desc">
+  <title id="title">Estado simulado de ZeroOne</title>
+  <desc id="desc">Composición de prueba en tonos violeta, verde y negro.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#120923"/>
+      <stop offset=".52" stop-color="#211142"/>
+      <stop offset="1" stop-color="#071d19"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".42" r=".6">
+      <stop offset="0" stop-color="#9b78ff" stop-opacity=".58"/>
+      <stop offset="1" stop-color="#9b78ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1080" height="1920" fill="url(#bg)"/>
+  <rect width="1080" height="1920" fill="url(#glow)"/>
+  <path d="M96 252h888M96 1668h888" fill="none" stroke="#73f5cc" stroke-opacity=".45" stroke-width="4"/>
+  <circle cx="540" cy="820" r="260" fill="none" stroke="#8f72ff" stroke-width="18"/>
+  <circle cx="540" cy="820" r="216" fill="#090712" stroke="#73f5cc" stroke-opacity=".65" stroke-width="4"/>
+  <text x="540" y="875" fill="#f7f4ff" font-family="Arial, sans-serif" font-size="190" font-weight="800" text-anchor="middle">01</text>
+  <text x="540" y="1190" fill="#f7f4ff" font-family="Arial, sans-serif" font-size="72" font-weight="700" text-anchor="middle">ESTADO SIMULADO</text>
+  <text x="540" y="1275" fill="#a8b6c7" font-family="Arial, sans-serif" font-size="38" text-anchor="middle">20 líneas · 500 visualizaciones</text>
+  <text x="540" y="1745" fill="#73f5cc" font-family="Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="8" text-anchor="middle">ZEROONE INTERNAL VIEW</text>
+</svg>

@@ -830,8 +830,8 @@ test('normaliza teléfonos y genera nombres idempotentes desde el último númer
     assert.equal(obtenerPrefijoLinea('L1 2.0'), 'L1');
     assert.equal(obtenerPrefijoLinea('Caja · L 0028 · secundaria 7'), 'L28');
     assert.equal(crearNombreGestionado('TT 28', 'cliente_77'), 'L28 cliente_77');
-    assert.equal(crearNombreGestionado('TT 28', 'cliente_77', true), 'L28 cliente_77 🟣');
-    assert.equal(agregarMarcadorMutuo('María 🟣'), 'María 🟣');
+    assert.equal(crearNombreGestionado('TT 28', 'cliente_77', true), 'L28 cliente_77🟣');
+    assert.equal(agregarMarcadorMutuo('María 🟣'), 'María🟣');
     assert.equal(esNombreGestionado('L28 cliente_77 🟣'), true);
     assert.equal(esNombreGestionado('María 🟣'), false);
 });
@@ -839,7 +839,7 @@ test('normaliza teléfonos y genera nombres idempotentes desde el último númer
 test('agenda contactos mutuos sin usuario solo cuando la preferencia está activa', async t => {
     assert.equal(
         crearNombreTemporalMutuo('TT L21', '+595983730123'),
-        'L21 Contacto 0123 🟣'
+        'L21 usuario🟣'
     );
     assert.deepEqual(crearMarcasAutostatues('L21', null), [
         { key: 'autostatues_line', value: 'L21' }
@@ -892,10 +892,30 @@ test('agenda contactos mutuos sin usuario solo cuando la preferencia está activ
     );
     assert.equal(creado.tipo, 'creado');
     assert.equal(creado.temporal, true);
-    assert.equal(creado.nombre, 'L21 Contacto 0123 🟣');
+    assert.equal(creado.nombre, 'L21 usuario🟣');
     assert.deepEqual(cuerpoCreado.clientData, [
         { key: 'autostatues_line', value: 'L21' }
     ]);
+
+    const repetido = await servicio.procesarCandidato(
+        'token',
+        linea,
+        candidato,
+        new Map([[
+            candidato.telefono,
+            [{
+                resourceName: 'people/contacto-temporal',
+                names: [{ unstructuredName: 'L21 usuario🟣' }],
+                phoneNumbers: [{ value: candidato.telefono }],
+                clientData: [{ key: 'autostatues_line', value: 'L21' }]
+            }]
+        ]]),
+        new Set(),
+        signal,
+        { agendarMutuosSinUsuario: true }
+    );
+    assert.equal(repetido.tipo, 'sin_cambios');
+    assert.equal(repetido.nombre, 'L21 usuario🟣');
 
     candidato.ultimoResultado = {
         tipo: 'creado',
@@ -927,7 +947,7 @@ test('conserva una señal que llega antes que el usuario y persiste sin texto ni
     );
     vista = servicio.obtenerVista(linea);
     assert.equal(vista.candidatos.length, 1);
-    assert.equal(vista.candidatos[0].nombreObjetivo, 'L28 jugador_1 🟣');
+    assert.equal(vista.candidatos[0].nombreObjetivo, 'L28 jugador_1🟣');
 
     servicio.cerrar();
     const persistido = fs.readFileSync(rutaDatos, 'utf8');
@@ -1351,7 +1371,7 @@ test('la cola crea y actualiza secuencialmente, preserva puntos y manda conflict
     assert.equal(maximoSimultaneo, 1, 'las mutaciones deben ejecutarse una por una');
 
     const creacion = escrituras.find(item => item.url.includes(':createContact'));
-    assert.equal(creacion.cuerpo.names[0].unstructuredName, 'L28 nuevousuario77 🟣');
+    assert.equal(creacion.cuerpo.names[0].unstructuredName, 'L28 nuevousuario77🟣');
     assert.equal(creacion.cuerpo.phoneNumbers[0].value, '+595981000001');
     assert.deepEqual(creacion.cuerpo.clientData, [
         { key: 'autostatues_line', value: 'L28' },
@@ -1366,7 +1386,7 @@ test('la cola crea y actualiza secuencialmente, preserva puntos y manda conflict
     );
     assert.equal(
         actualizacionPersonal.cuerpo.names[0].unstructuredName,
-        'L28 maria_casino 🟣'
+        'L28 maria_casino🟣'
     );
     assert.deepEqual(actualizacionPersonal.cuerpo.clientData, [
         { key: 'autostatues_line', value: 'L28' },
@@ -1378,7 +1398,7 @@ test('la cola crea y actualiza secuencialmente, preserva puntos y manda conflict
     );
     assert.equal(
         actualizacionConPuntoPrevio.cuerpo.names[0].unstructuredName,
-        'L28 proveedor_casino 🟣',
+        'L28 proveedor_casino🟣',
         'un punto previo se conserva aunque todavía no haya una señal mutua local'
     );
     assert.equal(
@@ -1394,7 +1414,7 @@ test('la cola crea y actualiza secuencialmente, preserva puntos y manda conflict
     );
     assert.equal(
         actualizacionGestionada.cuerpo.names[0].unstructuredName,
-        'L28 jugador_nuevo 🟣',
+        'L28 jugador_nuevo🟣',
         'un punto existente nunca se debe quitar'
     );
     assert.deepEqual(actualizacionGestionada.cuerpo.clientData, [
@@ -1464,7 +1484,7 @@ test('la cola crea y actualiza secuencialmente, preserva puntos y manda conflict
     assert.equal(vistaRenombrada.linea.prefijo, 'L42');
     assert.equal(
         vistaRenombrada.candidatos.find(item => item.usuario === 'nuevousuario77').nombreObjetivo,
-        'L42 nuevousuario77 🟣'
+        'L42 nuevousuario77🟣'
     );
 
     const persistido = fs.readFileSync(rutaDatos, 'utf8');
@@ -2085,5 +2105,35 @@ test('cancelar durante create deja terminar y persistir esa única mutación', a
         ['+595981100001', '+595981100002'],
         'al reanudar no vuelve a crear el primer contacto'
     );
+    servicio.cerrar();
+});
+
+test('la lectura de Google limita páginas y corta tokens repetidos', async t => {
+    const rutaDatos = crearTemporal(t);
+    let llamadas = 0;
+    const servicio = crearServicioAgendamiento({
+        rutaDatos,
+        fetch: async url => {
+            llamadas += 1;
+            const pagina = new URL(String(url)).searchParams.get('pageToken');
+            return respuestaJson({
+                connections: [
+                    { resourceName: `people/${llamadas}-1` },
+                    { resourceName: `people/${llamadas}-2` },
+                    { resourceName: `people/${llamadas}-3` }
+                ],
+                nextPageToken: pagina || 'token-repetido'
+            });
+        }
+    });
+
+    const conexiones = await servicio.listarConexionesGoogle(
+        'token-local',
+        undefined,
+        { limite: 4, maxPaginas: 10 }
+    );
+
+    assert.equal(conexiones.length, 4);
+    assert.equal(llamadas, 2);
     servicio.cerrar();
 });

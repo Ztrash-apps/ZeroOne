@@ -117,6 +117,8 @@
 
             agendaLineaId = id;
             agendaCuentaId = null;
+            agendaBusquedaLineas = '';
+            document.getElementById('buscar-lineas-agendamiento').value = '';
             agendaSecuencia += 1;
             agendaFirmaLineas = '';
             agendaFirmaCuentas = '';
@@ -134,6 +136,13 @@
             });
             actualizarAgendamiento(true);
         });
+
+        document.getElementById('buscar-lineas-agendamiento')
+            .addEventListener('input', evento => {
+                agendaBusquedaLineas = evento.target.value;
+                agendaFirmaLineas = '';
+                renderizarSelectorLineasAgendamiento({ forzar: true });
+            });
 
         document.getElementById('agenda-account-menu').addEventListener('click', evento => {
             const opcion = evento.target.closest('[data-agenda-cuenta-id]');
@@ -887,6 +896,54 @@
             }
         }
 
+        async function confirmarResultadoEnvioIncierto(resultado) {
+            const panel = document.getElementById('confirmacion-envio-progreso');
+            const botonPublicado = document.getElementById('btn-confirmar-envio-publicado');
+            const botonOmitir = document.getElementById('btn-omitir-envio-no-publicado');
+            const solicitudId = String(panel.dataset.solicitudId || '').trim();
+
+            if (!solicitudId) {
+                toast(
+                    'Esta confirmación ya no está disponible. Se actualizará el progreso.',
+                    'warning'
+                );
+                await actualizarProgresoPublicacion();
+                return;
+            }
+
+            botonPublicado.disabled = true;
+            botonOmitir.disabled = true;
+            panel.setAttribute('aria-busy', 'true');
+
+            try {
+                const respuesta = await fetch('/progreso/confirmar-envio', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ solicitudId, resultado })
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo guardar la confirmación del envío.'
+                );
+
+                toast(
+                    data.mensaje || (
+                        resultado === 'publicado'
+                            ? 'Envío confirmado. La publicación continuará.'
+                            : 'Línea omitida. La publicación continuará.'
+                    ),
+                    resultado === 'publicado' ? 'success' : 'info'
+                );
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                await actualizarProgresoPublicacion();
+                panel.removeAttribute('aria-busy');
+                botonPublicado.disabled = false;
+                botonOmitir.disabled = false;
+            }
+        }
+
         document.getElementById('btn-reconectar-todas').onclick = async () => {
             if (publicacionActivaActual) {
                 toast(
@@ -1087,6 +1144,31 @@
             }
         };
 
+        document.getElementById('btn-abrir-carpeta-logs').onclick = async evento => {
+            const boton = evento.currentTarget;
+            const contenidoOriginal = boton.innerHTML;
+            boton.disabled = true;
+            boton.innerHTML = `${iconoSVG('loader', 'spin')}<span>Abriendo...</span>`;
+
+            try {
+                if (!window.sistema?.abrirCarpetaLogs) {
+                    throw new Error(
+                        'La carpeta de logs solo está disponible en la aplicación de escritorio.'
+                    );
+                }
+                await window.sistema.abrirCarpetaLogs();
+                toast('Carpeta de logs abierta.', 'success');
+            } catch (error) {
+                toast(
+                    error?.message || 'No se pudo abrir la carpeta de logs.',
+                    'error'
+                );
+            } finally {
+                boton.disabled = false;
+                boton.innerHTML = contenidoOriginal;
+            }
+        };
+
         document.getElementById('btn-alto-total').onclick = async () => {
             if (!publicacionActivaActual || altoTotalSolicitado) return;
 
@@ -1125,8 +1207,51 @@
             }
         };
 
+        document.getElementById('btn-simulacro-envio').onclick = async event => {
+            const boton = event.currentTarget;
+            if (
+                boton.disabled ||
+                boton.hidden ||
+                publicacionActivaActual
+            ) return;
+
+            boton.disabled = true;
+            boton.setAttribute('aria-busy', 'true');
+
+            try {
+                const respuesta = await fetch('/progreso/simulacro-envio', {
+                    method: 'POST'
+                });
+                const data = await exigirRespuesta(
+                    respuesta,
+                    'No se pudo iniciar el simulacro de confirmación.'
+                );
+
+                toast(
+                    data.mensaje ||
+                    'Simulacro iniciado. Podés probar la confirmación sin publicar un estado real.',
+                    'info'
+                );
+                iniciarSeguimientoProgreso();
+            } catch (error) {
+                toast(error.message, tipoToastErrorHTTP(error));
+            } finally {
+                boton.removeAttribute('aria-busy');
+                boton.disabled = false;
+                await actualizarProgresoPublicacion();
+            }
+        };
+
         document.getElementById('btn-reanudar-seguridad').onclick = () => {
             ejecutarAccionSeguridad('reanudar');
+        };
+
+        document.getElementById('btn-confirmar-envio-publicado').onclick = () => {
+            confirmarResultadoEnvioIncierto('publicado');
+        };
+
+        document.getElementById('btn-omitir-envio-no-publicado').onclick = () => {
+            confirmarResultadoEnvioIncierto('no_publicado');
         };
 
         document.getElementById('btn-cancelar-seguridad').onclick = async () => {

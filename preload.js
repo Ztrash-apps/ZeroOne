@@ -47,5 +47,9 @@ contextBridge.exposeInMainWorld('sistema', {
 
     obtenerVersion() {
         return ipcRenderer.invoke('sistema:obtener-version');
+    },
+
+    abrirCarpetaLogs() {
+        return ipcRenderer.invoke('sistema:abrir-carpeta-logs');
     }
 });

@@ -447,7 +447,7 @@ function quitarMarcadoresMutuos(nombre) {
 
 function agregarMarcadorMutuo(nombre) {
     const base = quitarMarcadoresMutuos(nombre);
-    return base ? `${base} ${MARCADOR_MUTUO}` : MARCADOR_MUTUO;
+    return base ? `${base}${MARCADOR_MUTUO}` : MARCADOR_MUTUO;
 }
 
 function crearNombreGestionado(nombreLinea, usuario, mutuo = false, conservarMarcador = false) {
@@ -462,8 +462,13 @@ function crearNombreTemporalMutuo(nombreLinea, telefono) {
     const prefijo = obtenerPrefijoLinea(nombreLinea);
     const numero = normalizarTelefono(telefono, '');
     if (!prefijo || !numero) return null;
-    const referencia = numero.replace(/\D/gu, '').slice(-4).padStart(4, '0');
-    return agregarMarcadorMutuo(`${prefijo} Contacto ${referencia}`);
+    return agregarMarcadorMutuo(`${prefijo} usuario`);
+}
+
+function esNombreTemporalMutuo(nombre, nombreLinea) {
+    const prefijo = obtenerPrefijoLinea(nombreLinea);
+    if (!prefijo || !tieneMarcadorMutuo(nombre)) return false;
+    return quitarMarcadoresMutuos(nombre) === `${prefijo} usuario`;
 }
 
 function extraerUsuarioContactoWhatsApp(nombreContacto, nombreLinea) {
@@ -2724,19 +2729,41 @@ class ServicioAgendamiento extends EventEmitter {
         return leerRespuestaJson(respuesta, 'GOOGLE_PEOPLE');
     }
 
-    async listarConexionesGoogle(token, signal) {
+    async listarConexionesGoogle(token, signal, opciones = {}) {
         const conexiones = [];
+        const tokensVistos = new Set();
+        const limiteSolicitado = Number(opciones.limite);
+        const limite = Number.isFinite(limiteSolicitado) && limiteSolicitado > 0
+            ? Math.max(1, Math.floor(limiteSolicitado))
+            : Number.POSITIVE_INFINITY;
+        const paginasSolicitadas = Number(opciones.maxPaginas);
+        const maxPaginas = Number.isFinite(paginasSolicitadas) &&
+            paginasSolicitadas > 0
+            ? Math.min(1000, Math.max(1, Math.floor(paginasSolicitadas)))
+            : 1000;
         let pageToken = '';
+        let paginas = 0;
         do {
+            if (pageToken && tokensVistos.has(pageToken)) break;
+            if (pageToken) tokensVistos.add(pageToken);
+
             const url = new URL(`${GOOGLE_PEOPLE_BASE}/people/me/connections`);
             url.searchParams.set('personFields', 'names,phoneNumbers,clientData,metadata');
             url.searchParams.set('pageSize', '1000');
             url.searchParams.append('sources', 'READ_SOURCE_TYPE_CONTACT');
             if (pageToken) url.searchParams.set('pageToken', pageToken);
             const pagina = await this.solicitudGoogle(url.toString(), token, { signal });
-            conexiones.push(...(Array.isArray(pagina.connections) ? pagina.connections : []));
+            const nuevas = Array.isArray(pagina.connections)
+                ? pagina.connections
+                : [];
+            conexiones.push(...nuevas.slice(0, Math.max(0, limite - conexiones.length)));
             pageToken = textoSeguro(pagina.nextPageToken, 500);
-        } while (pageToken);
+            paginas += 1;
+        } while (
+            pageToken &&
+            conexiones.length < limite &&
+            paginas < maxPaginas
+        );
         return conexiones;
     }
 
@@ -3144,6 +3171,10 @@ class ServicioAgendamiento extends EventEmitter {
         const yaTienePunto = tieneMarcadorMutuo(nombreActual);
         const marcasActuales = obtenerMarcasAutostatues(persona);
         const prefijoLegacy = obtenerPrefijoNombreGestionado(nombreActual);
+        const nombreTemporalActual = esNombreTemporalMutuo(
+            nombreActual,
+            linea.nombre
+        );
         const marcaEstable = /^L\d+$/u.test(marcasActuales.lineaId || '');
         const marcaAnteriorAdoptable = Boolean(
             marcasActuales.lineaId
@@ -3167,6 +3198,7 @@ class ServicioAgendamiento extends EventEmitter {
                 || (
                     prefijoLegacy === linea.prefijo
                     && esNombreGestionado(nombreActual)
+                    && !nombreTemporalActual
                 )
             )
         ) {

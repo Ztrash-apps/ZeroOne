@@ -70,6 +70,7 @@
         <symbol id="i-loader" viewBox="0 0 24 24"><path d="M20.75 12a8.75 8.75 0 1 1-6-8.3"/></symbol>
         <symbol id="i-phone-call" viewBox="0 0 24 24"><path d="M7.1 3.5H4.8A1.8 1.8 0 0 0 3 5.3c0 8.7 7 15.7 15.7 15.7a1.8 1.8 0 0 0 1.8-1.8v-2.3a1.8 1.8 0 0 0-1.55-1.78l-2.25-.32a1.8 1.8 0 0 0-1.65.62l-1.35 1.65a14.3 14.3 0 0 1-6.77-6.77l1.65-1.35A1.8 1.8 0 0 0 9.2 7.3l-.32-2.25A1.8 1.8 0 0 0 7.1 3.5zM15 4.25h4.75V9M14.25 9.75l5.5-5.5"/></symbol>
         <symbol id="i-history" viewBox="0 0 24 24"><path d="M4.25 8.25A8.75 8.75 0 1 1 3.5 12M3.25 4.5v4.25H7.5M12 7.25V12l3 1.75"/></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.25 7.25v10.5A2.25 2.25 0 0 0 5.5 20h13a2.25 2.25 0 0 0 2.25-2.25v-8.5A2.25 2.25 0 0 0 18.5 7h-6l-2-2H5.5a2.25 2.25 0 0 0-2.25 2.25z"/><path d="M3.75 10.25h16.5"/></symbol>
         <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.25a8.75 8.75 0 0 0 0 17.5h1.5a1.75 1.75 0 0 0 0-3.5H12a2.25 2.25 0 0 1 0-4.5h3a5.75 5.75 0 0 0 0-11.5z"/><circle cx="7.25" cy="10.5" r=".8" fill="currentColor" stroke="none"/><circle cx="9.25" cy="6.75" r=".8" fill="currentColor" stroke="none"/><circle cx="13.75" cy="6.25" r=".8" fill="currentColor" stroke="none"/><circle cx="17" cy="8.75" r=".8" fill="currentColor" stroke="none"/></symbol>
         <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.25 14.75a1.7 1.7 0 0 0 .35 1.85l.15.15-3 3-.15-.15a1.7 1.7 0 0 0-1.85-.35 1.7 1.7 0 0 0-1 1.55V21h-3.5v-.25a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.85.35l-.15.15-3-3 .15-.15a1.7 1.7 0 0 0 .35-1.85 1.7 1.7 0 0 0-1.55-1H3v-3.5h.25a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.35-1.85L4.3 7.2l3-3 .15.15A1.7 1.7 0 0 0 9.3 4.7a1.7 1.7 0 0 0 1-1.55V3h3.5v.25a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.85-.35l.15-.15 3 3-.15.15a1.7 1.7 0 0 0-.35 1.85 1.7 1.7 0 0 0 1.55 1H21v3.5h-.2a1.7 1.7 0 0 0-1.55.95z"/></symbol>
         <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18.25 9a6.25 6.25 0 0 0-12.5 0c0 6.25-2.5 6.75-2.5 8.75h17.5c0-2-2.5-2.5-2.5-8.75zM9.5 20.75h5"/></symbol>
@@ -266,7 +267,24 @@
                 </div>
 
                 <div id="panel-progreso" class="panel">
-                    <h2 class="title-with-icon"><svg class="icon"><use href="#i-upload"></use></svg><span>Progreso de publicación</span></h2>
+                    <div class="publication-progress-heading">
+                        <h2 class="title-with-icon"><svg class="icon"><use href="#i-upload"></use></svg><span>Progreso de publicación</span></h2>
+                        <button
+                            type="button"
+                            id="btn-simulacro-envio"
+                            class="publication-simulation-button"
+                            title="Modo de prueba: simular una espera de confirmación"
+                            aria-label="Modo de prueba: simular una espera de confirmación"
+                            hidden
+                        >
+                            <span class="publication-simulation-mode">
+                                <span class="publication-simulation-dot" aria-hidden="true"></span>
+                                Modo de prueba
+                            </span>
+                            <span class="publication-simulation-action">Simular espera</span>
+                            <svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>
+                        </button>
+                    </div>
 
                     <div class="line-summary">
                         <span>
@@ -296,6 +314,45 @@
                             <svg class="icon"><use href="#i-alert"></use></svg>
                             <span id="progreso-causa"></span>
                         </span>
+                    </div>
+
+                    <div
+                        id="confirmacion-envio-progreso"
+                        class="security-alert uncertain-send-confirmation"
+                        role="alert"
+                        aria-live="assertive"
+                        hidden
+                    >
+                        <div class="uncertain-send-copy">
+                            <span class="uncertain-send-icon" aria-hidden="true">
+                                <svg class="icon"><use href="#i-eye"></use></svg>
+                            </span>
+                            <div>
+                                <strong>Confirmá qué ocurrió en esta línea</strong>
+                                <span id="confirmacion-envio-linea" class="uncertain-send-line"></span>
+                                <p id="confirmacion-envio-advertencia">
+                                    Revisá WhatsApp antes de responder para evitar publicar el mismo estado dos veces.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="security-actions uncertain-send-actions">
+                            <button
+                                type="button"
+                                id="btn-confirmar-envio-publicado"
+                                class="uncertain-send-button confirmed"
+                            >
+                                <svg class="icon"><use href="#i-check-circle"></use></svg>
+                                <span>Sí, se publicó</span>
+                            </button>
+                            <button
+                                type="button"
+                                id="btn-omitir-envio-no-publicado"
+                                class="uncertain-send-button omitted"
+                            >
+                                <svg class="icon"><use href="#i-x-circle"></use></svg>
+                                <span>No se publicó, omitir</span>
+                            </button>
+                        </div>
                     </div>
 
                     <div
@@ -643,7 +700,24 @@
                                         <svg class="icon"><use href="#i-chevron-down"></use></svg>
                                     </span>
                                 </button>
-                                <div id="agenda-line-menu" class="agenda-picker-menu" role="listbox"></div>
+                                <div id="agenda-line-menu" class="agenda-picker-menu">
+                                    <label class="agenda-picker-search" for="buscar-lineas-agendamiento">
+                                        <svg class="icon"><use href="#i-search"></use></svg>
+                                        <input
+                                            type="search"
+                                            id="buscar-lineas-agendamiento"
+                                            placeholder="Buscar línea o número"
+                                            autocomplete="off"
+                                        >
+                                    </label>
+                                    <div
+                                        id="agenda-line-options"
+                                        class="agenda-picker-options"
+                                        role="listbox"
+                                        aria-label="Líneas disponibles"
+                                    ></div>
+                                    <p id="resultado-lineas-agendamiento" class="agenda-picker-result"></p>
+                                </div>
                             </div>
 
                             <div class="agenda-history-state agenda-keywords-state">
@@ -944,6 +1018,19 @@
                                         <small>Abrir automáticamente al encender la PC. Si el segundo plano está activo, iniciará oculto en la bandeja.</small>
                                     </span>
                                 </label>
+                                <div class="settings-control-card settings-action-card">
+                                    <span class="settings-action-icon">
+                                        <svg class="icon"><use href="#i-folder"></use></svg>
+                                    </span>
+                                    <span class="settings-action-copy">
+                                        <strong>Registros de diagnóstico</strong>
+                                        <small>Abre la carpeta con los logs protegidos de ZeroOne para enviarlos a soporte.</small>
+                                    </span>
+                                    <button type="button" id="btn-abrir-carpeta-logs" class="secondary-button">
+                                        <svg class="icon"><use href="#i-folder"></use></svg>
+                                        <span>Abrir carpeta de logs</span>
+                                    </button>
+                                </div>
                             </div>
                         </section>
 
@@ -1070,7 +1157,7 @@
                                     <span class="settings-contact-preview-avatar">L21</span>
                                     <span>
                                         <small>Nombre temporal de ejemplo</small>
-                                        <strong>L21 Contacto 1234 🟣</strong>
+                                        <strong>L21 usuario🟣</strong>
                                         <em>Cuando se detecte el usuario real, se reemplazará automáticamente.</em>
                                     </span>
                                 </div>
@@ -1122,6 +1209,14 @@
                                     <span class="theme-option-card">
                                         <span class="theme-preview" aria-hidden="true"><span class="theme-preview-sidebar"></span><span class="theme-preview-panel"></span><span class="theme-preview-signal"></span><span class="theme-preview-detail"></span></span>
                                         <span class="theme-option-copy"><strong>EVA-02</strong><small>Carmesí · naranja · blanco</small></span>
+                                        <span class="theme-option-check"><svg class="icon"><use href="#i-check"></use></svg></span>
+                                    </span>
+                                </label>
+                                <label class="theme-option" data-theme-preview="eva-05">
+                                    <input type="radio" name="config-tema-visual" value="eva-05">
+                                    <span class="theme-option-card">
+                                        <span class="theme-preview" aria-hidden="true"><span class="theme-preview-sidebar"></span><span class="theme-preview-panel"></span><span class="theme-preview-signal"></span><span class="theme-preview-detail"></span></span>
+                                        <span class="theme-option-copy"><strong>EVA-05</strong><small>Verde militar · marfil · naranja</small></span>
                                         <span class="theme-option-check"><svg class="icon"><use href="#i-check"></use></svg></span>
                                     </span>
                                 </label>
@@ -1622,12 +1717,38 @@
     >
         <div class="modal-card qr-line-modal-card" tabindex="-1">
             <div class="qr-code-panel">
-                <span class="qr-code-label">Escaneá para vincular</span>
-                <img
-                    id="qr-linea-imagen"
-                    class="qr-line-modal-image"
-                    alt="Código QR para vincular la línea"
-                >
+                <span id="qr-linea-etiqueta" class="qr-code-label">Escaneá para vincular</span>
+                <div id="qr-linea-stage" class="qr-code-stage">
+                    <img
+                        id="qr-linea-imagen"
+                        class="qr-line-modal-image"
+                        alt="Código QR para vincular la línea"
+                    >
+                    <div
+                        id="qr-linea-resultado"
+                        class="qr-scan-result"
+                        aria-hidden="true"
+                    >
+                        <span class="qr-scan-check" aria-hidden="true">
+                            <svg class="icon"><use href="#i-check"></use></svg>
+                        </span>
+                        <strong id="qr-linea-resultado-titulo">QR escaneado</strong>
+                        <span id="qr-linea-resultado-detalle">Completando la conexión...</span>
+                    </div>
+                </div>
+                <p id="qr-linea-estado" class="qr-line-status" aria-live="polite">
+                    Abrí WhatsApp y escaneá este código.
+                </p>
+                <div class="qr-line-actions">
+                    <button type="button" id="btn-qr-cancelar" class="secondary-button">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                        <span>Cancelar</span>
+                    </button>
+                    <button type="button" id="btn-qr-confirmar" class="primary-button" disabled>
+                        <svg class="icon"><use href="#i-check"></use></svg>
+                        <span>Confirmar</span>
+                    </button>
+                </div>
             </div>
 
             <aside class="qr-account-panel">

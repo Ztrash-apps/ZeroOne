@@ -8,7 +8,7 @@ const Module = require('node:module');
 const RAIZ_PROYECTO = path.resolve(__dirname, '..');
 const ID_LINEA = '77777777-7777-4777-8777-777777777777';
 
-function cargarBackendAislado(rutaDatos) {
+function cargarBackendAislado(rutaDatos, opciones = {}) {
     for (const carpeta of ['sesiones', 'programados', 'uploads', 'historial']) {
         const ruta = path.join(rutaDatos, carpeta);
         fs.mkdirSync(ruta, { recursive: true });
@@ -21,7 +21,13 @@ function cargarBackendAislado(rutaDatos) {
     assert.ok(corte > 0, 'No se encontró el inicio del servidor');
 
     const valorAnterior = process.env.AUTOSTATUES_DATA_DIR;
+    const timeoutAudienciaAnterior =
+        process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS;
     process.env.AUTOSTATUES_DATA_DIR = rutaDatos;
+    if (opciones.audienceTimeoutMs !== undefined) {
+        process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS =
+            String(opciones.audienceTimeoutMs);
+    }
 
     try {
         const fuente = original.slice(0, corte) + `
@@ -29,6 +35,7 @@ function cargarBackendAislado(rutaDatos) {
                 resincronizarAudienciaEstados,
                 cancelarReintentoAudiencia,
                 finalizarAudienciaConfirmadaLocalmente,
+                obtenerEstadoPublicoAudiencia,
                 seleccionarMejorAudiencia,
                 registrarVisualizacionesEstadosActivos,
                 obtenerVistaEstadosActivos,
@@ -48,6 +55,12 @@ function cargarBackendAislado(rutaDatos) {
             delete process.env.AUTOSTATUES_DATA_DIR;
         } else {
             process.env.AUTOSTATUES_DATA_DIR = valorAnterior;
+        }
+        if (timeoutAudienciaAnterior === undefined) {
+            delete process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS;
+        } else {
+            process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS =
+                timeoutAudienciaAnterior;
         }
     }
 }
@@ -516,6 +529,56 @@ test('un socket anterior no confirma ni libera el trabajo del socket nuevo', asy
         assert.equal(linea.contactosAudienciaConfirmados, true);
         assert.equal(linea.audienciaResincronizada, true);
         assert.equal(linea.resincronizandoAudiencia, false);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una operación de Baileys colgada libera la sincronización por timeout', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-timeout-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 30
+        });
+        const nuncaTermina = new Promise(() => {});
+        const socket = {
+            ev: { isBuffering: () => false },
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    return nuncaTermina;
+                }
+            },
+            fetchPrivacySettings: async () => ({ status: 'contacts' })
+        };
+        const linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+        const inicio = Date.now();
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.ok(
+            Date.now() - inicio < 1000,
+            'el ciclo debe terminar y liberar el turno'
+        );
+        assert.equal(linea.resincronizandoAudiencia, false);
+        assert.equal(
+            backend.obtenerEstadoPublicoAudiencia(linea),
+            'esperando_reintento'
+        );
+        assert.match(linea.ultimoErrorAudiencia, /sincronizar/u);
+
+        backend.cancelarReintentoAudiencia(linea);
+        linea.intentosResincronizacionAudiencia = 4;
+        assert.equal(
+            backend.obtenerEstadoPublicoAudiencia(linea),
+            'requiere_reintento'
+        );
     } finally {
         backend?.servicioAgendamiento?.cerrar();
         backend?.runtimeIALocal?.detener();

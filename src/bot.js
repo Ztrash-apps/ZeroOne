@@ -38,6 +38,11 @@ const {
 const { crearRuntimeIALocal } = require('./local-ai-runtime');
 const { crearAlmacenMensajesRecientes } = require('./recent-message-store');
 const {
+    crearEstadosActivosSimulados,
+    crearLineasSimuladas,
+    esLineaSimulada
+} = require('./ui-fixtures');
+const {
     registrarRutasConfiguracion
 } = require('./routes/configuration');
 
@@ -88,6 +93,8 @@ const CARPETA_IA_LOCAL = path.resolve(
     process.env.AUTOSTATUES_AI_DIR ||
     path.join(CARPETA_DATOS, 'ia-local')
 );
+const MODO_FIXTURES_UI = process.env.ZEROONE_UI_FIXTURES === '1';
+const FECHA_BASE_FIXTURES_UI = new Date();
 
 function carpetaTieneContenido(ruta) {
     try {
@@ -377,13 +384,11 @@ servicioAgendamiento.on('progreso', progreso => {
     const linea = lineas.get(progreso.lineaId);
     if (!linea || linea.eliminando || !linea.socket) return;
 
-    refrescarAudienciaDesdeGoogle(linea, linea.socket, 'agendamiento')
-        .catch(error => {
-            console.warn(
-                `[Audiencia] ${linea.nombre}: no se pudo actualizar desde Google ` +
-                `después del agendamiento (${error?.message || error}).`
-            );
-        });
+    reiniciarCicloSincronizacionAudiencia(
+        linea,
+        linea.socket,
+        'agendamiento completado'
+    );
 });
 
 function obtenerProcesoAgendamientoActivo() {
@@ -490,6 +495,7 @@ function seleccionarMejorAudiencia(linea, opciones = {}) {
 let colaPublicaciones = Promise.resolve();
 let publicacionesPendientes = 0;
 let generacionColaPublicaciones = 0;
+let generacionSimulacroPublicacion = 0;
 const trabajosPendientesPublicacion = new Set();
 let progresoPublicacion = crearProgresoVacio();
 const estadosActivos = new Map();
@@ -502,6 +508,8 @@ const DURACION_ESTADO_MS = 24 * 60 * 60 * 1000;
 const MINIMO_DESTINATARIOS_ESTADO = 1;
 const MAXIMO_DESTINATARIOS_ESTADO = 1000;
 const LINEAS_POR_LOTE_ELIMINACION = 3;
+const PAUSA_ENTRE_LINEAS_SIMULACRO_MS = 450;
+const DURACION_ENVIO_SIMULACRO_MS = 350;
 const RETRASOS_REINTENTO_AUDIENCIA_CDN_MS = [
     2 * 60 * 1000,
     10 * 60 * 1000,
@@ -510,6 +518,14 @@ const RETRASOS_REINTENTO_AUDIENCIA_CDN_MS = [
 const MAXIMAS_SINCRONIZACIONES_AUDIENCIA_SIMULTANEAS = 3;
 const MAXIMOS_INTENTOS_AUDIENCIA =
     RETRASOS_REINTENTO_AUDIENCIA_CDN_MS.length + 1;
+const tiempoMaximoAudienciaConfigurado = Number(
+    process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS
+);
+const TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS =
+    Number.isFinite(tiempoMaximoAudienciaConfigurado) &&
+    tiempoMaximoAudienciaConfigurado >= 20
+        ? Math.min(120000, Math.floor(tiempoMaximoAudienciaConfigurado))
+        : 60000;
 const MAXIMOS_INTENTOS_RECONEXION = 5;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
@@ -523,7 +539,14 @@ const TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS =
     30000;
 const TIEMPO_ESPERA_SINCRONIZACION_AUDIENCIA_MS = 60 * 1000;
 const TIEMPO_MAXIMO_AUDIENCIA_MS = 75 * 1000;
-const TIEMPO_MAXIMO_ENVIO_MS = 90000;
+const tiempoMaximoEnvioConfigurado = Number(
+    process.env.ZEROONE_SEND_TIMEOUT_MS
+);
+const TIEMPO_MAXIMO_ENVIO_MS =
+    Number.isFinite(tiempoMaximoEnvioConfigurado) &&
+    tiempoMaximoEnvioConfigurado >= 20
+        ? Math.min(5 * 60 * 1000, Math.floor(tiempoMaximoEnvioConfigurado))
+        : 90000;
 const ENFRIAMIENTO_DESCONEXION_MS = 5 * 60 * 1000;
 const ENFRIAMIENTO_LIMITE_TEMPORAL_MS = 30 * 60 * 1000;
 const ENFRIAMIENTO_ENVIO_INCIERTO_MS = 10 * 60 * 1000;
@@ -551,6 +574,7 @@ const TEMAS_VISUALES = new Set([
     'eva-01',
     'eva-00',
     'eva-02',
+    'eva-05',
     'eva-13',
     'rei'
 ]);
@@ -662,6 +686,7 @@ function crearProgresoVacio() {
         altoTotalSolicitado: false,
         altoTotalSolicitadoEn: null,
         envioEnCurso: false,
+        confirmacionEnvioPendiente: null,
         mensaje: ''
     };
 }
@@ -1984,7 +2009,482 @@ function crearControlSeguridadPublicacion(idsLineas = []) {
         resolverCorte,
         altoTotal: null,
         promesaAltoTotal,
-        resolverAltoTotal
+        resolverAltoTotal,
+        confirmacionEnvioPendiente: null
+    };
+}
+
+function completarConfirmacionEnvioPendiente(solicitud, decision) {
+    if (
+        !solicitud ||
+        solicitud.resuelta ||
+        controlSeguridadPublicacion.confirmacionEnvioPendiente !== solicitud
+    ) {
+        return false;
+    }
+
+    solicitud.resuelta = true;
+    controlSeguridadPublicacion.confirmacionEnvioPendiente = null;
+    if (
+        progresoPublicacion.confirmacionEnvioPendiente?.solicitudId ===
+        solicitud.solicitudId
+    ) {
+        progresoPublicacion.confirmacionEnvioPendiente = null;
+    }
+
+    solicitud.resolver({
+        solicitudId: solicitud.solicitudId,
+        resueltaEn: new Date().toISOString(),
+        ...decision
+    });
+    return true;
+}
+
+function resolverConfirmacionEnvioPendiente(solicitudId, resultado) {
+    const resultadoNormalizado = String(resultado || '').trim().toLowerCase();
+    if (!['publicado', 'no_publicado'].includes(resultadoNormalizado)) {
+        return {
+            resuelta: false,
+            codigo: 'RESULTADO_CONFIRMACION_INVALIDO'
+        };
+    }
+
+    const solicitud = controlSeguridadPublicacion.confirmacionEnvioPendiente;
+    if (
+        !solicitud ||
+        solicitud.resuelta ||
+        solicitud.solicitudId !== String(solicitudId || '')
+    ) {
+        return {
+            resuelta: false,
+            codigo: 'SOLICITUD_CONFIRMACION_OBSOLETA'
+        };
+    }
+
+    const resuelta = completarConfirmacionEnvioPendiente(solicitud, {
+        resultado: resultadoNormalizado,
+        origen: 'usuario'
+    });
+
+    return {
+        resuelta,
+        codigo: resuelta
+            ? 'CONFIRMACION_ENVIO_REGISTRADA'
+            : 'SOLICITUD_CONFIRMACION_OBSOLETA',
+        solicitudId: solicitud.solicitudId,
+        resultado: resultadoNormalizado
+    };
+}
+
+async function esperarConfirmacionEnvioIncierto({
+    promesaEnvio,
+    registroHistorial,
+    linea,
+    numero
+}) {
+    if (controlSeguridadPublicacion.confirmacionEnvioPendiente) {
+        throw crearErrorPublicacion(
+            'CONFIRMACION_ENVIO_YA_PENDIENTE',
+            'seguridad',
+            'Ya existe otro envío esperando confirmación manual.',
+            { reintentable: false }
+        );
+    }
+
+    let resolver;
+    const solicitudId = crypto.randomUUID();
+    const creadaEn = new Date().toISOString();
+    const simulada =
+        progresoPublicacion.simulada === true || linea.simulada === true;
+    const promesaDecision = new Promise(resolve => {
+        resolver = resolve;
+    });
+    const solicitud = {
+        solicitudId,
+        publicacionId: registroHistorial?.id || null,
+        lineaId: linea.id,
+        lineaNombre: linea.nombre,
+        numero: numero || null,
+        creadaEn,
+        simulada,
+        resuelta: false,
+        resolver,
+        promesaDecision
+    };
+
+    controlSeguridadPublicacion.confirmacionEnvioPendiente = solicitud;
+    progresoPublicacion.estado = 'esperando_confirmacion_envio';
+    progresoPublicacion.confirmacionEnvioPendiente = {
+        solicitudId,
+        publicacionId: solicitud.publicacionId,
+        lineaId: linea.id,
+        lineaNombre: linea.nombre,
+        numero: numero || null,
+        creadaEn,
+        simulada,
+        mensaje: simulada
+            ? 'Elegí una respuesta para comprobar cómo continúa la campaña de prueba.'
+            : 'Revisá esta línea en WhatsApp y confirmá si el estado aparece publicado.'
+    };
+    progresoPublicacion.proximoGrupoSegundos = 0;
+    progresoPublicacion.proximaLineaSegundos = 0;
+    progresoPublicacion.mensaje = simulada
+        ? `Simulacro pausado en ${linea.nombre}: elegí si el estado se publicó o no.`
+        : `WhatsApp todavía no devolvió el ID del estado en ${linea.nombre}. ` +
+            'La campaña esperará tu confirmación antes de continuar.';
+    if (progresoPublicacion.simulada !== true) {
+        notificarEscritorio(
+            'Confirmación de estado requerida',
+            `Revisá ${linea.nombre} en WhatsApp para continuar la campaña.`
+        );
+    }
+
+    Promise.resolve(promesaEnvio).then(
+        mensajeEstado => {
+            completarConfirmacionEnvioPendiente(solicitud, {
+                resultado: 'id_recibido',
+                origen: 'whatsapp',
+                mensajeEstado
+            });
+        },
+        error => {
+            completarConfirmacionEnvioPendiente(solicitud, {
+                resultado: 'rechazo_tardio',
+                origen: 'whatsapp',
+                error
+            });
+        }
+    );
+
+    if (controlSeguridadPublicacion.altoTotal) {
+        completarConfirmacionEnvioPendiente(solicitud, {
+            resultado: 'alto_total',
+            origen: 'alto_total'
+        });
+    }
+
+    const decision = await promesaDecision;
+    if (
+        progresoPublicacion.activo &&
+        !controlSeguridadPublicacion.altoTotal
+    ) {
+        progresoPublicacion.estado = 'publicando';
+    }
+
+    return decision;
+}
+
+function simulacroPublicacionVigente(generacion) {
+    return MODO_FIXTURES_UI &&
+        generacion === generacionSimulacroPublicacion &&
+        progresoPublicacion.simulada === true;
+}
+
+async function esperarPasoSimulacro(generacion, milisegundos) {
+    await esperar(milisegundos);
+    return simulacroPublicacionVigente(generacion);
+}
+
+function establecerLineaActualSimulacro(linea, indice, total) {
+    progresoPublicacion.lineaActual = {
+        id: linea.id,
+        nombre: linea.nombre,
+        numero: linea.numero || null,
+        indice,
+        total,
+        simulada: true
+    };
+    progresoPublicacion.grupoActual = indice;
+    progresoPublicacion.estado = 'publicando';
+    progresoPublicacion.proximaLineaSegundos = 0;
+    progresoPublicacion.mensaje =
+        `Simulando el envío en ${linea.nombre} (${indice} de ${total}).`;
+}
+
+function registrarLineaCorrectaSimulacro(
+    linea,
+    {
+        confirmacionManual = false,
+        confirmacionManualEn = null
+    } = {}
+) {
+    progresoPublicacion.correctas += 1;
+    progresoPublicacion.procesadas += 1;
+    progresoPublicacion.lineasCorrectas.push({
+        id: linea.id,
+        nombre: linea.nombre,
+        numero: linea.numero || null,
+        estadoId: confirmacionManual
+            ? null
+            : `SIMULACRO-${String(progresoPublicacion.procesadas).padStart(2, '0')}`,
+        confirmacionManual,
+        confirmacionManualEn,
+        destinatarios: 1000,
+        audienciaTotal: 1000,
+        audienciaBase: 1000,
+        limiteDestinatarios: 1000,
+        destinatariosOmitidos: 0,
+        destinatariosOmitidosPorLimite: 0,
+        destinatariosFueraBase: 0,
+        priorizacionAudiencia: null,
+        simulada: true
+    });
+}
+
+function registrarLineaOmitidaSimulacro(linea) {
+    progresoPublicacion.fallidas += 1;
+    progresoPublicacion.procesadas += 1;
+    progresoPublicacion.lineasFallidas.push({
+        id: linea.id,
+        nombre: linea.nombre,
+        numero: linea.numero || null,
+        error:
+            'Confirmaste que el estado no se publicó. La línea se omitió sin reenviar.',
+        tipoError: 'envio_omitido_manual',
+        codigoError: 'ENVIO_OMITIDO_MANUAL',
+        fase: 'confirmacion_envio',
+        reintentable: false,
+        envioConfirmado: false,
+        envioIncierto: false,
+        reintentoSeguro: false,
+        confirmacionManual: 'no_publicado',
+        simulada: true
+    });
+}
+
+function finalizarSimulacroPorAltoTotal(generacion) {
+    if (!simulacroPublicacionVigente(generacion)) return false;
+
+    progresoPublicacion.activo = false;
+    progresoPublicacion.estado = 'detenido_alto_total';
+    progresoPublicacion.envioEnCurso = false;
+    progresoPublicacion.confirmacionEnvioPendiente = null;
+    progresoPublicacion.lineaActual = null;
+    progresoPublicacion.proximaLineaSegundos = 0;
+    progresoPublicacion.proximoGrupoSegundos = 0;
+    progresoPublicacion.noProcesadas = Math.max(
+        0,
+        progresoPublicacion.total - progresoPublicacion.procesadas
+    );
+    progresoPublicacion.mensaje =
+        `Simulacro detenido: ${progresoPublicacion.correctas} línea(s) ` +
+        `completadas y ${progresoPublicacion.noProcesadas} sin iniciar.`;
+    return true;
+}
+
+async function simularLineaCorrecta(generacion, linea, indice, total) {
+    establecerLineaActualSimulacro(linea, indice, total);
+    progresoPublicacion.envioEnCurso = true;
+
+    const vigente = await esperarPasoSimulacro(
+        generacion,
+        DURACION_ENVIO_SIMULACRO_MS
+    );
+    if (!vigente) return false;
+    if (controlSeguridadPublicacion.altoTotal) {
+        finalizarSimulacroPorAltoTotal(generacion);
+        return false;
+    }
+
+    progresoPublicacion.envioEnCurso = false;
+    registrarLineaCorrectaSimulacro(linea);
+    return true;
+}
+
+async function pausarAntesDeLineaSimulada(generacion, linea) {
+    progresoPublicacion.estado = 'esperando_siguiente_linea';
+    progresoPublicacion.lineaActual = null;
+    progresoPublicacion.proximaLineaSegundos = 1;
+    progresoPublicacion.mensaje =
+        `Pausa breve del simulacro antes de continuar con ${linea.nombre}.`;
+
+    const vigente = await esperarPasoSimulacro(
+        generacion,
+        PAUSA_ENTRE_LINEAS_SIMULACRO_MS
+    );
+    if (!vigente) return false;
+
+    progresoPublicacion.proximaLineaSegundos = 0;
+    if (controlSeguridadPublicacion.altoTotal) {
+        finalizarSimulacroPorAltoTotal(generacion);
+        return false;
+    }
+    return true;
+}
+
+async function ejecutarSimulacroEnvioIncierto(generacion, lineasSimuladas) {
+    const total = lineasSimuladas.length;
+
+    try {
+        if (
+            !await simularLineaCorrecta(
+                generacion,
+                lineasSimuladas[0],
+                1,
+                total
+            )
+        ) {
+            return;
+        }
+
+        if (
+            !await pausarAntesDeLineaSimulada(
+                generacion,
+                lineasSimuladas[1]
+            )
+        ) {
+            return;
+        }
+
+        const lineaIncierta = lineasSimuladas[1];
+        establecerLineaActualSimulacro(lineaIncierta, 2, total);
+        progresoPublicacion.envioEnCurso = true;
+        if (
+            !await esperarPasoSimulacro(
+                generacion,
+                DURACION_ENVIO_SIMULACRO_MS
+            )
+        ) {
+            return;
+        }
+        if (controlSeguridadPublicacion.altoTotal) {
+            finalizarSimulacroPorAltoTotal(generacion);
+            return;
+        }
+
+        const decision = await esperarConfirmacionEnvioIncierto({
+            promesaEnvio: new Promise(() => {}),
+            registroHistorial: {
+                id: `simulacro-envio-${generacion}`
+            },
+            linea: lineaIncierta,
+            numero: lineaIncierta.numero || null
+        });
+        if (!simulacroPublicacionVigente(generacion)) return;
+
+        progresoPublicacion.envioEnCurso = false;
+        if (
+            decision.resultado === 'alto_total' ||
+            controlSeguridadPublicacion.altoTotal
+        ) {
+            finalizarSimulacroPorAltoTotal(generacion);
+            return;
+        }
+
+        if (decision.resultado === 'publicado') {
+            registrarLineaCorrectaSimulacro(lineaIncierta, {
+                confirmacionManual: true,
+                confirmacionManualEn: decision.resueltaEn
+            });
+            progresoPublicacion.mensaje =
+                'Publicación simulada confirmada. Continuando con las demás líneas.';
+        } else if (decision.resultado === 'no_publicado') {
+            registrarLineaOmitidaSimulacro(lineaIncierta);
+            progresoPublicacion.mensaje =
+                'Línea simulada omitida sin reenviar. Continuando con las demás.';
+        } else {
+            throw new Error(
+                `El simulacro recibió una decisión inesperada: ${decision.resultado}.`
+            );
+        }
+
+        for (let indice = 2; indice < total; indice += 1) {
+            const linea = lineasSimuladas[indice];
+            if (!await pausarAntesDeLineaSimulada(generacion, linea)) return;
+            if (
+                !await simularLineaCorrecta(
+                    generacion,
+                    linea,
+                    indice + 1,
+                    total
+                )
+            ) {
+                return;
+            }
+        }
+
+        if (!simulacroPublicacionVigente(generacion)) return;
+        progresoPublicacion.activo = false;
+        progresoPublicacion.estado = progresoPublicacion.fallidas > 0
+            ? 'completado_con_errores'
+            : 'completado';
+        progresoPublicacion.envioEnCurso = false;
+        progresoPublicacion.confirmacionEnvioPendiente = null;
+        progresoPublicacion.lineaActual = null;
+        progresoPublicacion.proximaLineaSegundos = 0;
+        progresoPublicacion.proximoGrupoSegundos = 0;
+        progresoPublicacion.mensaje =
+            `Simulacro completado: ${progresoPublicacion.correctas} correctas ` +
+            `y ${progresoPublicacion.fallidas} fallidas.`;
+    } catch (error) {
+        if (!simulacroPublicacionVigente(generacion)) return;
+        if (controlSeguridadPublicacion.altoTotal) {
+            finalizarSimulacroPorAltoTotal(generacion);
+            return;
+        }
+
+        progresoPublicacion.activo = false;
+        progresoPublicacion.estado = 'error';
+        progresoPublicacion.envioEnCurso = false;
+        progresoPublicacion.confirmacionEnvioPendiente = null;
+        progresoPublicacion.lineaActual = null;
+        progresoPublicacion.tipoErrorCorte = 'simulacro';
+        progresoPublicacion.codigoErrorCorte = 'SIMULACRO_INTERRUMPIDO';
+        progresoPublicacion.mensajeErrorCorte = error.message;
+        progresoPublicacion.mensaje =
+            `El simulacro se interrumpió: ${error.message}`;
+    }
+}
+
+function iniciarSimulacroEnvioIncierto() {
+    if (!MODO_FIXTURES_UI) {
+        return {
+            iniciado: false,
+            codigo: 'SIMULACRO_NO_DISPONIBLE'
+        };
+    }
+
+    if (progresoPublicacion.activo || publicacionesPendientes > 0) {
+        return {
+            iniciado: false,
+            codigo: 'PUBLICACION_EN_CURSO'
+        };
+    }
+
+    const lineasSimuladas = crearLineasSimuladas(
+        new Date()
+    ).slice(0, 5);
+    const generacion = ++generacionSimulacroPublicacion;
+    controlSeguridadPublicacion = crearControlSeguridadPublicacion(
+        lineasSimuladas.map(linea => linea.id)
+    );
+    progresoPublicacion = {
+        ...crearProgresoVacio(),
+        activo: true,
+        estado: 'preparando',
+        origen: 'simulacro_envio_incierto',
+        total: lineasSimuladas.length,
+        totalGrupos: lineasSimuladas.length,
+        modoRitmo: 'secuencial',
+        maximoDestinatariosPorEstado: 1000,
+        limiteFallosSeguridad: configuracion.limiteFallosSeguridad,
+        simulada: true,
+        simulacroDisponible: true,
+        generacionSimulacro: generacion,
+        mensaje:
+            'Iniciando simulacro local. No se enviará nada a WhatsApp.'
+    };
+
+    void ejecutarSimulacroEnvioIncierto(
+        generacion,
+        lineasSimuladas
+    );
+
+    return {
+        iniciado: true,
+        codigo: 'SIMULACRO_INICIADO',
+        generacion,
+        total: lineasSimuladas.length
     };
 }
 
@@ -2044,6 +2544,19 @@ function solicitarAltoTotalPublicacion() {
             resolverAltoTotal(controlSeguridadPublicacion.altoTotal);
         }
 
+    }
+
+    if (
+        activa &&
+        controlSeguridadPublicacion.confirmacionEnvioPendiente
+    ) {
+        completarConfirmacionEnvioPendiente(
+            controlSeguridadPublicacion.confirmacionEnvioPendiente,
+            {
+                resultado: 'alto_total',
+                origen: 'alto_total'
+            }
+        );
     }
 
     if (
@@ -3108,6 +3621,19 @@ function audienciaEstadosLista(linea) {
         linea.audienciaResincronizada === true &&
         privacidadEstadosEsSegura(linea.privacidadEstados)
     );
+}
+
+function obtenerEstadoPublicoAudiencia(linea) {
+    if (audienciaEstadosLista(linea)) return 'lista';
+    if (linea.resincronizandoAudiencia) return 'sincronizando';
+    if (linea.temporizadorAudiencia) return 'esperando_reintento';
+    if (
+        (Number(linea.intentosResincronizacionAudiencia) || 0) >=
+        MAXIMOS_INTENTOS_AUDIENCIA
+    ) {
+        return 'requiere_reintento';
+    }
+    return linea.ultimoErrorAudiencia ? 'pendiente' : 'esperando';
 }
 
 function cargarAudienciaEstados(linea) {
@@ -4468,7 +4994,59 @@ function cancelarReintentoAudiencia(linea) {
     linea.temporizadorAudiencia = null;
 }
 
-async function cargarContactosAudienciaDesdeGoogle(linea) {
+function crearErrorTiempoAudiencia(detalle) {
+    const error = new Error(
+        `${detalle} superó el límite de ${Math.ceil(
+            TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS / 1000
+        )} segundos. La cola continuará con las demás líneas.`
+    );
+    error.codigo = 'AUDIENCIA_TIMEOUT';
+    return error;
+}
+
+function tiempoRestanteCicloAudiencia(control) {
+    const limite = Number(control?.limiteEn);
+    if (!Number.isFinite(limite)) return TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS;
+    return Math.max(0, limite - Date.now());
+}
+
+async function ejecutarOperacionAudienciaConLimite(
+    control,
+    detalle,
+    operacion
+) {
+    const restante = tiempoRestanteCicloAudiencia(control);
+    if (restante < 1) throw crearErrorTiempoAudiencia(detalle);
+
+    const controlador = new AbortController();
+    let temporizador = null;
+    let vencida = false;
+    const timeout = new Promise((_resolve, reject) => {
+        temporizador = setTimeout(() => {
+            vencida = true;
+            controlador.abort();
+            reject(crearErrorTiempoAudiencia(detalle));
+        }, restante);
+        temporizador.unref?.();
+    });
+
+    try {
+        return await Promise.race([
+            Promise.resolve().then(() => operacion(controlador.signal)),
+            timeout
+        ]);
+    } catch (error) {
+        if (vencida) throw crearErrorTiempoAudiencia(detalle);
+        throw error;
+    } finally {
+        if (temporizador) clearTimeout(temporizador);
+    }
+}
+
+async function cargarContactosAudienciaDesdeGoogle(
+    linea,
+    { signal } = {}
+) {
     const cuentaId = (() => {
         try {
             const vista = servicioAgendamiento.obtenerVista(
@@ -4490,7 +5068,17 @@ async function cargarContactosAudienciaDesdeGoogle(linea) {
     }
 
     const token = await servicioAgendamiento.obtenerTokenAcceso(cuentaId);
-    const conexiones = await servicioAgendamiento.listarConexionesGoogle(token);
+    const conexiones = await servicioAgendamiento.listarConexionesGoogle(
+        token,
+        signal,
+        {
+            // La audiencia efectiva nunca supera 1.000 destinatarios. Se leen
+            // hasta cinco páginas para tolerar contactos sin teléfono sin
+            // recorrer indefinidamente una cuenta muy grande.
+            limite: MAXIMO_DESTINATARIOS_ESTADO * 5,
+            maxPaginas: 5
+        }
+    );
     const indiceConexiones = indexarConexiones(conexiones, '595');
     const contactos = new Set();
     const jidPropio = jidNormalizedUser(linea.jid || '');
@@ -4518,53 +5106,6 @@ async function cargarContactosAudienciaDesdeGoogle(linea) {
         motivo: contactos.size > 0
             ? 'CONTACTOS_CARGADOS'
             : 'SIN_CONTACTOS'
-    };
-}
-
-async function refrescarAudienciaDesdeGoogle(
-    linea,
-    socket = linea?.socket,
-    origen = 'google'
-) {
-    const resultado = await cargarContactosAudienciaDesdeGoogle(linea);
-    if (!resultado.ok || Number(resultado.total || 0) < 1) return resultado;
-
-    if (
-        !linea ||
-        lineas.get(linea.id) !== linea ||
-        linea.eliminando ||
-        (socket && linea.socket !== socket)
-    ) {
-        return { ok: false, motivo: 'CONEXION_CAMBIO', total: 0 };
-    }
-
-    asegurarFuentesAudiencia(linea);
-    linea.contactosEstadoGoogle = new Set(resultado.contactos);
-    linea.audienciaGoogleConfirmadaEnConexion = true;
-    const seleccion = seleccionarMejorAudiencia(linea);
-    linea.contactosAudienciaConfirmados = true;
-    linea.audienciaResincronizada = false;
-    linea.ultimoErrorAudiencia = null;
-    invalidarResumenPriorizacionAudiencia(linea);
-    guardarAudienciaEstados(linea);
-
-    const completada = socket
-        ? finalizarAudienciaConfirmadaLocalmente(linea, socket)
-        : false;
-
-    if (!completada && socket) {
-        programarResincronizacionAudiencia(linea, socket, 250);
-    }
-
-    console.log(
-        `[Audiencia] ${linea.nombre}: ${resultado.total} contacto(s) ` +
-        `disponibles desde Google Contacts (${origen}); ` +
-        `se eligió ${seleccion.origen || 'ninguna fuente'} (${seleccion.total}).`
-    );
-
-    return {
-        ...resultado,
-        completada
     };
 }
 
@@ -4663,20 +5204,33 @@ async function esperarEventosAudiencia(linea, socket) {
     await (linea.promesaContactosEstado || Promise.resolve());
 }
 
-async function sincronizarColeccionAudiencia(linea, socket, coleccion) {
+async function sincronizarColeccionAudiencia(
+    linea,
+    socket,
+    coleccion,
+    control
+) {
     let error = null;
 
     try {
         // Cada colección se solicita por separado. Baileys descarga los blobs
         // externos de una llamada combinada con Promise.all; una sola URL 403
         // cancelaba también la colección que sí estaba disponible.
-        await socket.resyncAppState([coleccion], false);
+        await ejecutarOperacionAudienciaConLimite(
+            control,
+            `La sincronización ${coleccion} de WhatsApp`,
+            () => socket.resyncAppState([coleccion], false)
+        );
     } catch (errorSincronizacion) {
         error = errorSincronizacion;
     }
 
     try {
-        await esperarEventosAudiencia(linea, socket);
+        await ejecutarOperacionAudienciaConLimite(
+            control,
+            `El procesamiento de ${coleccion}`,
+            () => esperarEventosAudiencia(linea, socket)
+        );
     } catch (errorEventos) {
         if (!error) error = errorEventos;
     }
@@ -4688,7 +5242,7 @@ async function sincronizarColeccionAudiencia(linea, socket, coleccion) {
     };
 }
 
-async function recuperarPrivacidadEstadosPorIq(linea, socket) {
+async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
     if (typeof socket?.fetchPrivacySettings !== 'function') {
         return {
             validada: false,
@@ -4699,7 +5253,11 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket) {
     }
 
     try {
-        const ajustes = await socket.fetchPrivacySettings(true);
+        const ajustes = await ejecutarOperacionAudienciaConLimite(
+            control,
+            'La consulta de privacidad de estados',
+            () => socket.fetchPrivacySettings(true)
+        );
 
         // El IQ de privacidad no incluye listas personalizadas. Solamente el
         // modo "contacts" es suficiente para reconstruir una regla completa
@@ -4785,6 +5343,48 @@ function programarResincronizacionAudiencia(linea, socket, retrasoMs) {
             );
         });
     }, Math.max(esperaSolicitada, esperaProtegida));
+}
+
+function reiniciarCicloSincronizacionAudiencia(
+    linea,
+    socket = linea?.socket,
+    motivo = 'actualización solicitada'
+) {
+    if (
+        !linea ||
+        !socket ||
+        linea.socket !== socket ||
+        linea.estado !== 'conectado' ||
+        linea.eliminando
+    ) {
+        return false;
+    }
+
+    if (linea.resincronizandoAudiencia) {
+        linea.reinicioAudienciaPendiente = {
+            socket,
+            motivo
+        };
+        linea.ultimoErrorAudiencia =
+            `Se repetirá la comprobación por ${motivo} al terminar el ciclo actual.`;
+        guardarLineas();
+        return true;
+    }
+
+    linea.reinicioAudienciaPendiente = null;
+    cancelarReintentoAudiencia(linea);
+    linea.intentosResincronizacionAudiencia = 0;
+    linea.noReintentarAudienciaAntes = 0;
+    linea.audienciaResincronizada = false;
+    linea.ultimoErrorAudiencia =
+        `Comprobando WhatsApp y Google Contacts por ${motivo}.`;
+    linea.contactosAudienciaConfirmados = false;
+    linea.privacidadAudienciaConfirmada = false;
+    linea.audienciaGoogleConfirmadaEnConexion = false;
+    invalidarResumenPriorizacionAudiencia(linea);
+    programarResincronizacionAudiencia(linea, socket, 0);
+    guardarLineas();
+    return true;
 }
 
 function prepararSincronizacionAudienciasPublicacion(lineasPublicacion) {
@@ -4912,7 +5512,11 @@ async function resincronizarAudienciaEstados(linea, socket) {
         return;
     }
 
-    const control = { socket, creadoEn: Date.now() };
+    const control = {
+        socket,
+        creadoEn: Date.now(),
+        limiteEn: Date.now() + TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS
+    };
     linea.controlSincronizacionAudiencia = control;
     linea.resincronizandoAudiencia = true;
     let liberarTurno = null;
@@ -4964,7 +5568,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
             resultadoContactos = await sincronizarColeccionAudiencia(
                 linea,
                 socket,
-                'critical_unblock_low'
+                'critical_unblock_low',
+                control
             );
 
             if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
@@ -5001,8 +5606,14 @@ async function resincronizarAudienciaEstados(linea, socket) {
             // comparar ambas listas; la mayor gana y WhatsApp gana los empates.
             let resultadoGoogle = null;
             try {
-                resultadoGoogle =
-                    await cargarContactosAudienciaDesdeGoogle(linea);
+                resultadoGoogle = await ejecutarOperacionAudienciaConLimite(
+                    control,
+                    'La lectura de Google Contacts',
+                    signal => cargarContactosAudienciaDesdeGoogle(
+                        linea,
+                        { signal }
+                    )
+                );
 
                 if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
                     return;
@@ -5096,7 +5707,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
             resultadoPrivacidad = await sincronizarColeccionAudiencia(
                 linea,
                 socket,
-                'regular_high'
+                'regular_high',
+                control
             );
 
             if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
@@ -5126,7 +5738,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
         if (!privacidadValidada) {
             resultadoPrivacidadIq = await recuperarPrivacidadEstadosPorIq(
                 linea,
-                socket
+                socket,
+                control
             );
 
             if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
@@ -5264,6 +5877,19 @@ async function resincronizarAudienciaEstados(linea, socket) {
         if (linea.controlSincronizacionAudiencia === control) {
             linea.controlSincronizacionAudiencia = null;
             linea.resincronizandoAudiencia = false;
+            const reinicioPendiente = linea.reinicioAudienciaPendiente;
+            linea.reinicioAudienciaPendiente = null;
+            if (
+                reinicioPendiente?.socket === socket &&
+                linea.socket === socket &&
+                !linea.eliminando
+            ) {
+                reiniciarCicloSincronizacionAudiencia(
+                    linea,
+                    socket,
+                    reinicioPendiente.motivo
+                );
+            }
         }
     }
 }
@@ -5844,6 +6470,7 @@ function cargarLineasGuardadas() {
                 resincronizandoAudiencia: false,
                 intentosResincronizacionAudiencia: 0,
                 controlSincronizacionAudiencia: null,
+                reinicioAudienciaPendiente: null,
                 noReintentarAudienciaAntes: 0,
                 socketValidacionAudiencia: null,
                 contactosAudienciaConfirmados: false,
@@ -7595,6 +8222,7 @@ async function iniciarWhatsApp(lineaId) {
                 linea.ultimoCodigoDesconexion = null;
                 linea.proximoIntentoReconexion = null;
                 linea.controlSincronizacionAudiencia = null;
+                linea.reinicioAudienciaPendiente = null;
                 linea.resincronizandoAudiencia = false;
                 linea.intentosResincronizacionAudiencia = 0;
                 linea.noReintentarAudienciaAntes = 0;
@@ -8160,6 +8788,7 @@ async function ejecutarPublicacion({
         altoTotalSolicitado: false,
         altoTotalSolicitadoEn: null,
         envioEnCurso: false,
+        confirmacionEnvioPendiente: null,
         mensaje: 'Preparando publicación...'
     };
 
@@ -8381,20 +9010,80 @@ async function ejecutarPublicacion({
                         return mensajeEstado;
                     });
 
+                    let mensajeEstadoConfirmado = null;
+                    let confirmacionManual = false;
+                    let confirmacionManualEn = null;
                     progresoPublicacion.envioEnCurso = true;
                     try {
-                        await esperarOperacionPublicacion(
-                            promesaEnvioRegistrado,
-                            {
-                                timeoutMs: TIEMPO_MAXIMO_ENVIO_MS,
-                                codigoTimeout: 'TIEMPO_ENVIO_AGOTADO',
-                                tipoTimeout: 'envio_incierto',
-                                mensajeTimeout:
-                                    `La operación no devolvió un ID a tiempo en ${linea.nombre}. ` +
-                                    'No se continuará para evitar publicaciones duplicadas.',
-                                envioEnVuelo: true
+                        try {
+                            mensajeEstadoConfirmado =
+                                await esperarOperacionPublicacion(
+                                    promesaEnvioRegistrado,
+                                    {
+                                        timeoutMs: TIEMPO_MAXIMO_ENVIO_MS,
+                                        codigoTimeout: 'TIEMPO_ENVIO_AGOTADO',
+                                        tipoTimeout: 'envio_incierto',
+                                        mensajeTimeout:
+                                            `La operación no devolvió un ID a tiempo en ${linea.nombre}.`,
+                                        envioEnVuelo: true
+                                    }
+                                );
+                        } catch (errorEnvio) {
+                            if (errorEnvio?.codigo !== 'TIEMPO_ENVIO_AGOTADO') {
+                                throw errorEnvio;
                             }
-                        );
+
+                            const decision =
+                                await esperarConfirmacionEnvioIncierto({
+                                    promesaEnvio: promesaEnvioRegistrado,
+                                    registroHistorial,
+                                    linea,
+                                    numero: numeroUsado
+                                });
+
+                            if (decision.resultado === 'id_recibido') {
+                                mensajeEstadoConfirmado =
+                                    decision.mensajeEstado || null;
+                                progresoPublicacion.mensaje =
+                                    `WhatsApp confirmó el estado de ${linea.nombre}. ` +
+                                    'La campaña continuará normalmente.';
+                            } else if (decision.resultado === 'publicado') {
+                                confirmacionManual = true;
+                                confirmacionManualEn = decision.resueltaEn;
+                                progresoPublicacion.mensaje =
+                                    `Confirmaste que el estado se publicó en ${linea.nombre}. ` +
+                                    'Continuando con la próxima línea.';
+                            } else if (
+                                decision.resultado === 'no_publicado'
+                            ) {
+                                throw crearErrorPublicacion(
+                                    'ENVIO_OMITIDO_MANUAL',
+                                    'envio_omitido_manual',
+                                    `Confirmaste que el estado no se publicó en ${linea.nombre}. ` +
+                                        'La línea se omitió sin volver a enviar.',
+                                    {
+                                        fasePublicacion:
+                                            'confirmacion_envio',
+                                        reintentable: false,
+                                        envioConfirmado: false,
+                                        envioIncierto: false,
+                                        reintentoSeguro: false,
+                                        confirmacionManual: 'no_publicado'
+                                    }
+                                );
+                            } else if (
+                                decision.resultado === 'alto_total'
+                            ) {
+                                verificarCorteDesconexion();
+                            } else if (
+                                decision.resultado === 'rechazo_tardio'
+                            ) {
+                                throw decision.error ||
+                                    new Error(
+                                        `WhatsApp rechazó el envío en ${linea.nombre}.`
+                                    );
+                            }
+                        }
                     } finally {
                         progresoPublicacion.envioEnCurso = false;
                     }
@@ -8405,6 +9094,10 @@ async function ejecutarPublicacion({
                     progresoPublicacion.lineasCorrectas.push({
                         id: linea.id,
                         nombre: linea.nombre,
+                        estadoId:
+                            mensajeEstadoConfirmado?.key?.id || null,
+                        confirmacionManual,
+                        confirmacionManualEn,
                         numero: numeroUsado ||
                             (linea.jid ? linea.jid.split('@')[0] : null),
                         destinatarios:
@@ -8472,7 +9165,11 @@ async function ejecutarPublicacion({
                             )
                         );
                     const puedeRepetirPreparacion =
-                        !['envio', 'registro'].includes(faseFallo) &&
+                        ![
+                            'envio',
+                            'registro',
+                            'confirmacion_envio'
+                        ].includes(faseFallo) &&
                         conexionEnRecuperacion &&
                         reintentosPreparacion <
                             MAXIMOS_REINTENTOS_PREPARACION_CONEXION;
@@ -8505,7 +9202,9 @@ async function ejecutarPublicacion({
                         reintentable: clasificacion.reintentable,
                         envioConfirmado: clasificacion.envioConfirmado,
                         envioIncierto: clasificacion.envioIncierto,
-                        reintentoSeguro: clasificacion.reintentoSeguro
+                        reintentoSeguro: clasificacion.reintentoSeguro,
+                        confirmacionManual:
+                            error?.confirmacionManual || null
                     };
 
                     progresoPublicacion.fallidas += 1;
@@ -8513,7 +9212,13 @@ async function ejecutarPublicacion({
                     fallosTotalesGrupo += 1;
                     linea.ultimoError = fallo.error;
                     linea.fallosRecientes = (Number(linea.fallosRecientes) || 0) + 1;
-                    console.error(`Error publicando en ${linea.nombre}:`, error);
+                    if (clasificacion.tipoError === 'envio_omitido_manual') {
+                        console.info(
+                            `[Publicación] ${linea.nombre}: envío omitido por confirmación manual.`
+                        );
+                    } else {
+                        console.error(`Error publicando en ${linea.nombre}:`, error);
+                    }
 
                     if (clasificacion.tipoError === 'desconexion') {
                         if (clasificacion.envioIncierto) {
@@ -8609,7 +9314,8 @@ async function ejecutarPublicacion({
 
                     if (![
                         'sincronizacion_audiencia',
-                        'limite_audiencia'
+                        'limite_audiencia',
+                        'envio_omitido_manual'
                     ].includes(clasificacion.tipoError)) {
                         fallosEvaluablesDesdeCorte += 1;
 
@@ -8716,6 +9422,7 @@ async function ejecutarPublicacion({
         progresoPublicacion.proximaLineaSegundos = 0;
         progresoPublicacion.sincronizacionAudienciaSegundos = 0;
         progresoPublicacion.lineaActual = null;
+        progresoPublicacion.confirmacionEnvioPendiente = null;
         progresoPublicacion.mensaje =
             `Publicación completada: ${progresoPublicacion.correctas} correctas ` +
             `y ${progresoPublicacion.fallidas} fallidas.`;
@@ -8736,6 +9443,7 @@ async function ejecutarPublicacion({
         progresoPublicacion.proximaLineaSegundos = 0;
         progresoPublicacion.sincronizacionAudienciaSegundos = 0;
         progresoPublicacion.envioEnCurso = false;
+        progresoPublicacion.confirmacionEnvioPendiente = null;
         progresoPublicacion.lineaActual = null;
         registrarLineasOmitidasPorCorte(idsLineas, error);
 
@@ -9529,6 +10237,43 @@ app.get('/agendamiento', (req, res) => {
         });
     }
 
+    if (MODO_FIXTURES_UI && esLineaSimulada(lineaId)) {
+        return res.json({
+            credencialesConfiguradas: false,
+            cuentas: [],
+            busqueda: servicioAgendamiento.obtenerConfiguracionBusqueda(),
+            preferencias: {
+                agendarMutuosSinUsuario:
+                    configuracion.agendarMutuosSinUsuario === true
+            },
+            lineaId,
+            cuentaId: null,
+            resumen: {
+                detectados: 0,
+                pendientes: 0,
+                agendados: 0,
+                mutuos: 0,
+                totalSenales: 0,
+                mostrados: 0,
+                revisionesIA: 0
+            },
+            proceso: null,
+            historial: {
+                estado: 'lista',
+                progreso: 100,
+                mensaje: 'Vista simulada: no se consultan chats ni contactos.'
+            },
+            ia: {
+                modelo: runtimeIALocal.obtenerEstado(),
+                analisis: obtenerEstadoAnalisisIA(),
+                revisiones: [],
+                totalRevisiones: 0
+            },
+            candidatos: [],
+            simulada: true
+        });
+    }
+
     const linea = lineas.get(lineaId);
     if (!linea) {
         return res.status(404).json({ error: 'La línea no existe.' });
@@ -9813,8 +10558,16 @@ app.put('/agendamiento/lineas/:id/cuenta', (req, res) => {
             describirLineaParaAgendamiento(linea),
             String(req.body?.cuentaId || '')
         );
+        const comprobacionIniciada = reiniciarCicloSincronizacionAudiencia(
+            linea,
+            linea.socket,
+            'cambio de cuenta Google'
+        );
         res.json({
-            mensaje: 'La cuenta quedó asignada a esta línea.',
+            mensaje: comprobacionIniciada
+                ? 'La cuenta quedó asignada. Se comprobará primero WhatsApp y luego Google Contacts.'
+                : 'La cuenta quedó asignada a esta línea.',
+            comprobacionAudienciaIniciada: comprobacionIniciada,
             ...asociacion
         });
     } catch (error) {
@@ -10025,6 +10778,7 @@ app.post('/lineas', (req, res) => {
         resincronizandoAudiencia: false,
         intentosResincronizacionAudiencia: 0,
         controlSincronizacionAudiencia: null,
+        reinicioAudienciaPendiente: null,
         noReintentarAudienciaAntes: 0,
         socketValidacionAudiencia: null,
         contactosAudienciaConfirmados: false,
@@ -10105,6 +10859,13 @@ app.post('/lineas', (req, res) => {
 });
 
 app.get('/estado', (req, res) => {
+    if (MODO_FIXTURES_UI) {
+        return res.json({
+            lineas: crearLineasSimuladas(FECHA_BASE_FIXTURES_UI),
+            simulada: true
+        });
+    }
+
     const resultado = Array.from(lineas.values())
         .sort((a, b) =>
             (Number(a.ordenConexion) || 0) - (Number(b.ordenConexion) || 0)
@@ -10137,6 +10898,18 @@ app.get('/estado', (req, res) => {
             ultimaPublicacion: linea.ultimaPublicacion || null,
             ultimoError: linea.ultimoError || null,
             ultimoErrorAudiencia: linea.ultimoErrorAudiencia || null,
+            estadoAudiencia: obtenerEstadoPublicoAudiencia(linea),
+            resincronizandoAudiencia:
+                linea.resincronizandoAudiencia === true,
+            intentosResincronizacionAudiencia:
+                Number(linea.intentosResincronizacionAudiencia) || 0,
+            maximosIntentosAudiencia: MAXIMOS_INTENTOS_AUDIENCIA,
+            proximoIntentoAudiencia:
+                Number(linea.noReintentarAudienciaAntes) > Date.now()
+                    ? new Date(
+                        Number(linea.noReintentarAudienciaAntes)
+                    ).toISOString()
+                    : null,
             fallosRecientes: Number(linea.fallosRecientes) || 0,
             intentosReconexion: Number(linea.intentosReconexion) || 0,
             conexionEnVerificacion: linea.conexionEnVerificacion === true,
@@ -10300,11 +11073,38 @@ app.post('/lineas/:id/habilitar-publicaciones', (req, res) => {
 app.get('/progreso', (req, res) => {
     res.json({
         ...progresoPublicacion,
+        simulada:
+            MODO_FIXTURES_UI || progresoPublicacion.simulada === true,
+        simulacroDisponible: MODO_FIXTURES_UI,
         publicacionesPendientes,
         ocupada:
             progresoPublicacion.activo === true ||
             publicacionesPendientes > 0,
         proteccionMiddleware: obtenerVistaProteccionMiddleware()
+    });
+});
+
+app.post('/progreso/simulacro-envio', (req, res) => {
+    if (!MODO_FIXTURES_UI) {
+        return res.status(404).json({
+            error: 'El simulacro solo está disponible en la vista interna.',
+            codigo: 'SIMULACRO_NO_DISPONIBLE'
+        });
+    }
+
+    const resultado = iniciarSimulacroEnvioIncierto();
+    if (!resultado.iniciado) {
+        return res.status(409).json({
+            error:
+                'Ya existe una publicación activa o pendiente. Detenela o esperá a que termine.',
+            ...resultado
+        });
+    }
+
+    res.status(202).json({
+        mensaje:
+            'Simulacro iniciado. La segunda línea pedirá confirmación manual.',
+        ...resultado
     });
 });
 
@@ -10318,6 +11118,37 @@ app.post('/progreso/alto-total', (req, res) => {
                 : 'La publicación pendiente fue cancelada antes de comenzar.'
             : 'No hay publicaciones activas ni pendientes para detener.',
         ...resultado
+    });
+});
+
+app.post('/progreso/confirmar-envio', (req, res) => {
+    const solicitudId = String(req.body?.solicitudId || '').trim();
+    const resultado = String(req.body?.resultado || '').trim().toLowerCase();
+
+    if (!solicitudId || !['publicado', 'no_publicado'].includes(resultado)) {
+        return res.status(400).json({
+            error:
+                'La confirmación requiere una solicitud vigente y un resultado válido.'
+        });
+    }
+
+    const resolucion = resolverConfirmacionEnvioPendiente(
+        solicitudId,
+        resultado
+    );
+    if (!resolucion.resuelta) {
+        return res.status(409).json({
+            error:
+                'Esta solicitud ya fue resuelta o pertenece a otro envío.',
+            codigo: resolucion.codigo
+        });
+    }
+
+    res.json({
+        mensaje: resultado === 'publicado'
+            ? 'Publicación confirmada. La campaña continuará con la próxima línea.'
+            : 'La línea fue omitida sin reenviar. La campaña continuará con las demás.',
+        ...resolucion
     });
 });
 
@@ -10944,6 +11775,11 @@ app.get('/historial/:id/imagen', (req, res) => {
 });
 
 app.get('/estados-activos', (req, res) => {
+    if (MODO_FIXTURES_UI) {
+        return res.json(
+            crearEstadosActivosSimulados(FECHA_BASE_FIXTURES_UI)
+        );
+    }
     res.json(obtenerVistaEstadosActivos());
 });
 
@@ -11346,26 +12182,35 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     cargarConfiguracion();
     cargarProteccionMiddleware();
     cargarClavesIdempotencia();
-    cargarEstadosActivos();
-    cargarHistorial();
-    cargarLineasGuardadas();
+    if (MODO_FIXTURES_UI) {
+        console.log(
+            'Vista interna activa: 20 líneas y 1 estado simulado con 500 visualizaciones.'
+        );
+    } else {
+        cargarEstadosActivos();
+        cargarHistorial();
+        cargarLineasGuardadas();
 
-    for (const linea of lineas.values()) {
-        if (linea.reconexionBloqueada) continue;
+        for (const linea of lineas.values()) {
+            if (linea.reconexionBloqueada) continue;
 
-        const proximoIntento = Date.parse(linea.proximoIntentoReconexion || '');
-        if (Number.isFinite(proximoIntento)) {
-            programarReconexionAutomatica(
-                linea.id,
-                linea.ultimoError || 'Reconexión pendiente restaurada.',
-                linea.ultimoCodigoDesconexion,
-                Math.max(0, proximoIntento - Date.now())
+            const proximoIntento = Date.parse(
+                linea.proximoIntentoReconexion || ''
             );
-        } else {
-            iniciarWhatsApp(linea.id);
+            if (Number.isFinite(proximoIntento)) {
+                programarReconexionAutomatica(
+                    linea.id,
+                    linea.ultimoError ||
+                        'Reconexión pendiente restaurada.',
+                    linea.ultimoCodigoDesconexion,
+                    Math.max(0, proximoIntento - Date.now())
+                );
+            } else {
+                iniciarWhatsApp(linea.id);
+            }
         }
-    }
 
-    cargarProgramaciones();
+        cargarProgramaciones();
+    }
 });
 

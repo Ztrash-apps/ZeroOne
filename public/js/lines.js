@@ -740,10 +740,13 @@
 
             for (const linea of visibles) {
                 const idLinea = String(linea.id);
+                const simulada = linea.simulada === true;
                 idsVisibles.add(idLinea);
                 const tarjeta = tarjetasExistentes.get(idLinea) ||
                     document.createElement('article');
-                tarjeta.className = 'connected-line-card';
+                tarjeta.className = simulada
+                    ? 'connected-line-card is-simulated'
+                    : 'connected-line-card';
                 tarjeta.classList.toggle(
                     'selected-for-delete',
                     lineasSeleccionadasEliminar.has(idLinea)
@@ -758,11 +761,33 @@
                     linea.destinatariosEstadoBase ??
                     Math.min(audienciaTotal, 1000)
                 ) || 0;
+                const estadoAudiencia = String(
+                    linea.estadoAudiencia || (
+                        audienciaLista ? 'lista' : 'sincronizando'
+                    )
+                );
+                const audienciaSincronizando =
+                    estadoAudiencia === 'sincronizando';
+                const audienciaEsperando =
+                    estadoAudiencia === 'esperando_reintento' ||
+                    estadoAudiencia === 'esperando';
+                const audienciaConError =
+                    !audienciaLista &&
+                    !audienciaSincronizando &&
+                    !audienciaEsperando;
                 const audiencia = audienciaLista
                     ? audienciaBase > audienciaSeleccionada
                         ? `${audienciaSeleccionada.toLocaleString('es')} de ${audienciaBase.toLocaleString('es')} recientes`
                         : `${audienciaSeleccionada.toLocaleString('es')} contacto(s)`
-                    : 'Sincronizando...';
+                    : audienciaSincronizando
+                        ? 'Sincronizando...'
+                        : estadoAudiencia === 'esperando_reintento'
+                            ? 'Reintento programado'
+                            : estadoAudiencia === 'requiere_reintento'
+                                ? 'Requiere reintento'
+                                : linea.ultimoErrorAudiencia
+                                    ? 'Sin sincronizar'
+                                    : 'Esperando audiencia';
                 const origenAudiencia = ['google', 'whatsapp'].includes(
                     linea.origenAudiencia
                 ) ? linea.origenAudiencia : null;
@@ -820,6 +845,7 @@
                     ? `Base reciente: ${audienciaBase.toLocaleString('es')} de ${audienciaTotal.toLocaleString('es')} contactos disponibles`
                     : '';
                 const detalleAudiencia = [
+                    linea.ultimoErrorAudiencia,
                     linea.ultimoError,
                     detalleBase,
                     resumenActividad
@@ -829,14 +855,25 @@
                 const enVerificacion = linea.conexionEnVerificacion === true;
                 const requiereRevision = linea.requiereRevisionEnvio === true;
                 const listaParaPublicar = lineaListaParaPublicar(linea);
-                const estadoPublicacion = requiereRevision
+                const estadoPublicacion = simulada
+                    ? { icono: 'eye', texto: 'Vista simulada', clase: '' }
+                    : requiereRevision
                     ? { icono: 'alert', texto: 'Publicaciones pausadas', clase: 'warning' }
                     : enVerificacion
                         ? { icono: 'loader', texto: 'Verificando conexión', clase: 'warning', iconoClase: 'spin' }
                         : listaParaPublicar
                             ? { icono: 'check-circle', texto: 'Lista para publicar', clase: '' }
                             : { icono: 'pause', texto: 'Publicación no disponible', clase: 'warning' };
-                const avisoPublicacion = !listaParaPublicar
+                const avisoPublicacion = simulada
+                    ? `
+                        <div class="publication-review-notice demo-data-notice">
+                            <span class="publication-review-copy">
+                                ${iconoSVG('info')}
+                                <span>Datos internos aislados. Esta línea no ejecuta acciones reales.</span>
+                            </span>
+                        </div>
+                    `
+                    : !listaParaPublicar
                     ? `
                         <div class="publication-review-notice">
                             <span class="publication-review-copy">
@@ -872,7 +909,7 @@
                                 aria-label="Seleccionar ${escaparHTML(linea.nombre)} para eliminar"
                                 title="Seleccionar para eliminar"
                                 ${lineasSeleccionadasEliminar.has(idLinea) ? 'checked' : ''}
-                                ${eliminandoLineasSeleccionadas ? 'disabled' : ''}
+                                ${eliminandoLineasSeleccionadas || simulada ? 'disabled' : ''}
                             >
                             <span class="connected-line-rank">#${Number(linea.ordenOriginal) || 0}</span>
                         </span>
@@ -899,8 +936,17 @@
 
                     <div class="connected-line-audience" ${detalleAudiencia ? `title="${escaparHTML(detalleAudiencia)}"` : ''}>
                         <span class="audience-pill-row">
-                            <span class="audience-pill ${audienciaLista ? '' : 'audience-syncing'}">
-                                ${iconoSVG(audienciaLista ? 'users' : 'loader', audienciaLista ? '' : 'spin')}
+                            <span class="audience-pill ${audienciaLista ? '' : audienciaConError ? 'audience-error' : 'audience-syncing'}">
+                                ${iconoSVG(
+                                    audienciaLista
+                                        ? 'users'
+                                        : audienciaConError
+                                            ? 'alert'
+                                            : audienciaSincronizando
+                                                ? 'loader'
+                                                : 'clock',
+                                    audienciaSincronizando ? 'spin' : ''
+                                )}
                                 <span>Audiencia: ${escaparHTML(audiencia)}</span>
                             </span>
                             <span
@@ -919,22 +965,26 @@
 
                     ${avisoPublicacion}
 
-                    ${selectorEtiquetaHTML(linea)}
+                    ${simulada ? '' : selectorEtiquetaHTML(linea)}
 
-                    <div class="connected-line-actions">
-                        <button type="button" class="btn-editar-linea" data-id="${linea.id}" title="Editar línea" aria-label="Editar línea">
-                            ${iconoSVG('edit')}
-                            <span>Editar</span>
-                        </button>
-                        <button type="button" class="small-secondary btn-reconectar" data-id="${linea.id}" title="Reconectar línea" aria-label="Reconectar línea">
-                            ${iconoSVG('refresh')}
-                            <span>Reconectar</span>
-                        </button>
-                        <button type="button" class="small-danger btn-eliminar" data-id="${linea.id}" title="Eliminar línea" aria-label="Eliminar línea">
-                            ${iconoSVG('trash')}
-                            <span>Eliminar</span>
-                        </button>
-                    </div>
+                    ${simulada
+                        ? '<div class="demo-data-actions">Sin edición, reconexión ni eliminación</div>'
+                        : `
+                            <div class="connected-line-actions">
+                                <button type="button" class="btn-editar-linea" data-id="${linea.id}" title="Editar línea" aria-label="Editar línea">
+                                    ${iconoSVG('edit')}
+                                    <span>Editar</span>
+                                </button>
+                                <button type="button" class="small-secondary btn-reconectar" data-id="${linea.id}" title="Reconectar línea" aria-label="Reconectar línea">
+                                    ${iconoSVG('refresh')}
+                                    <span>Reconectar</span>
+                                </button>
+                                <button type="button" class="small-danger btn-eliminar" data-id="${linea.id}" title="Eliminar línea" aria-label="Eliminar línea">
+                                    ${iconoSVG('trash')}
+                                    <span>Eliminar</span>
+                                </button>
+                            </div>
+                        `}
                 `;
 
                 if (tarjeta.__contenidoRenderizado !== contenidoTarjeta) {
@@ -1267,6 +1317,7 @@
 
             const contenidoPublicaciones = publicaciones.map(publicacion => {
                 const lineas = Array.isArray(publicacion.lineas) ? publicacion.lineas : [];
+                const simulada = publicacion.simulada === true;
                 const imagen = String(publicacion.imagenUrl || '').trim();
                 const fecha = formatearFechaCompacta(publicacion.fechaInicio, 'Fecha no disponible');
                 const expiracion = formatearFechaCompacta(publicacion.expiraEn, 'Sin vencimiento informado');
@@ -1303,7 +1354,7 @@
 
                 return `
                     <article
-                        class="active-group-card"
+                        class="active-group-card${simulada ? ' is-simulated' : ''}"
                         data-active-publication-id="${escaparHTML(publicacion.id)}"
                         role="button"
                         tabindex="0"
@@ -1330,10 +1381,14 @@
                             ${publicacion.texto ? `<p class="active-group-text">${escaparHTML(publicacion.texto)}</p>` : ''}
                             <div class="active-group-lines">${lineasHTML}</div>
                             <div class="active-group-actions">
-                                <button type="button" class="small-danger btn-eliminar-estado-activo" data-id="${escaparHTML(publicacion.id)}">
-                                    ${iconoSVG('trash')}
-                                    <span>Eliminar grupo</span>
-                                </button>
+                                ${simulada
+                                    ? '<span class="demo-data-actions">Estado interno · sin acciones reales</span>'
+                                    : `
+                                        <button type="button" class="small-danger btn-eliminar-estado-activo" data-id="${escaparHTML(publicacion.id)}">
+                                            ${iconoSVG('trash')}
+                                            <span>Eliminar grupo</span>
+                                        </button>
+                                    `}
                             </div>
                         </div>
                     </article>
