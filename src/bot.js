@@ -5419,11 +5419,14 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
 
         estado = String(ajustes?.status || '').trim() || null;
         const personalizada = estado === 'contact_blacklist';
+        const sinExclusiones =
+            estado === 'contacts' ||
+            estado === 'all';
 
         // El IQ de privacidad no incluye listas personalizadas. Solamente el
-        // modo "contacts" es suficiente para reconstruir una regla completa
-        // sin inventar destinatarios ni ignorar exclusiones configuradas.
-        if (estado !== 'contacts') {
+        // modo "contacts" o "all" es suficiente para reconstruir una regla
+        // completa sin inventar destinatarios ni ignorar exclusiones.
+        if (!sinExclusiones) {
             return {
                 validada: false,
                 estado,

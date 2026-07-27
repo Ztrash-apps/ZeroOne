@@ -821,7 +821,7 @@ test('la espera en cola no consume el minuto asignado a cada línea', async () =
     }
 });
 
-test('el modo all no se confunde con una lista personalizada', async () => {
+test('el modo all valida la audiencia sin pedir una lista personalizada', async () => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zeroone-audience-non-custom-mode-')
     );
@@ -830,11 +830,13 @@ test('el modo all no se confunde con una lista personalizada', async () => {
     try {
         backend = cargarBackendAislado(rutaDatos);
         let linea;
+        const colecciones = [];
         const socket = {
             ev: { isBuffering: () => false },
             fetchPrivacySettings: async () => ({ status: 'all' }),
-            resyncAppState: async colecciones => {
-                if (colecciones[0] === 'critical_unblock_low') {
+            resyncAppState: async solicitadas => {
+                colecciones.push(solicitadas[0]);
+                if (solicitadas[0] === 'critical_unblock_low') {
                     linea.contactosEstado.add(
                         '595988888888@s.whatsapp.net'
                     );
@@ -849,11 +851,13 @@ test('el modo all no se confunde con una lista personalizada', async () => {
         await backend.resincronizarAudienciaEstados(linea, socket);
 
         assert.equal(linea.fallosPrivacidadPersonalizada, 0);
+        assert.equal(linea.audienciaResincronizada, true);
+        assert.equal(linea.privacidadEstados.modo, 2);
         assert.equal(
             backend.obtenerEstadoPublicoAudiencia(linea),
-            'esperando_reintento'
+            'lista'
         );
-        backend.cancelarReintentoAudiencia(linea);
+        assert.deepEqual(colecciones, ['critical_unblock_low']);
     } finally {
         backend?.servicioAgendamiento?.cerrar();
         backend?.runtimeIALocal?.detener();
