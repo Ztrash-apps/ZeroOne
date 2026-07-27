@@ -66,6 +66,57 @@ function descifrarPayload(clave, contenido, aad) {
     ]).toString('utf8'));
 }
 
+function crearErrorClaveIncompatible(errorOriginal) {
+    const error = new Error(
+        'La clave del almacén de mensajes recientes no puede abrirse con el cifrado local actual.'
+    );
+    error.code = 'CLAVE_LOCAL_INCOMPATIBLE';
+    error.cause = errorOriginal;
+    return error;
+}
+
+function calcularHuellaArchivo(ruta) {
+    const descriptor = fs.openSync(ruta, 'r');
+    const hash = crypto.createHash('sha256');
+    const bloque = Buffer.allocUnsafe(64 * 1024);
+    try {
+        let leidos = 0;
+        do {
+            leidos = fs.readSync(
+                descriptor,
+                bloque,
+                0,
+                bloque.length,
+                null
+            );
+            if (leidos > 0) hash.update(bloque.subarray(0, leidos));
+        } while (leidos > 0);
+        return hash.digest('hex');
+    } finally {
+        fs.closeSync(descriptor);
+    }
+}
+
+function verificarCopiaArchivo(origen, destino) {
+    const origenStat = fs.statSync(origen);
+    const destinoStat = fs.statSync(destino);
+    if (
+        !origenStat.isFile() ||
+        !destinoStat.isFile() ||
+        origenStat.size !== destinoStat.size ||
+        calcularHuellaArchivo(origen) !== calcularHuellaArchivo(destino)
+    ) {
+        throw new Error(
+            `El respaldo local no pudo verificarse: ${path.basename(origen)}.`
+        );
+    }
+}
+
+function adjuntarErroresSecundarios(error, propiedad, mensaje, errores) {
+    if (!errores.length) return;
+    error[propiedad] = new AggregateError(errores, mensaje);
+}
+
 class AlmacenMensajesRecientes {
     constructor(opciones = {}) {
         this.ruta = path.resolve(opciones.ruta);
@@ -74,58 +125,332 @@ class AlmacenMensajesRecientes {
         );
         this.cifrarClave = opciones.cifrarClave;
         this.descifrarClave = opciones.descifrarClave;
+        this.cifradoDisponible = opciones.cifradoDisponible;
+        this.recuperarCifradoIncompatible =
+            opciones.recuperarCifradoIncompatible === true;
+        this.recuperacionCifrado = null;
         if (
             typeof this.cifrarClave !== 'function' ||
             typeof this.descifrarClave !== 'function'
         ) throw new Error('El almacén requiere el cifrado seguro del sistema.');
         fs.mkdirSync(path.dirname(this.ruta), { recursive: true });
-        this.clave = this.obtenerClave();
-        this.db = new DatabaseSync(this.ruta);
-        this.db.exec(`
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA secure_delete = ON;
-            PRAGMA cache_size = -${CACHE_SQLITE_KIB};
-            PRAGMA mmap_size = 0;
-            PRAGMA temp_store = FILE;
-            CREATE TABLE IF NOT EXISTS mensajes_recientes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                linea_id TEXT NOT NULL,
-                chat_hash TEXT NOT NULL,
-                mensaje_hash TEXT NOT NULL,
-                timestamp_ms INTEGER NOT NULL,
-                payload BLOB NOT NULL,
-                UNIQUE(linea_id, mensaje_hash)
+        this.clave = null;
+        this.db = null;
+        this.insertar = null;
+        try {
+            this.clave = this.obtenerClave();
+            const crearBaseDatos = typeof opciones.crearBaseDatos === 'function'
+                ? opciones.crearBaseDatos
+                : ruta => new DatabaseSync(ruta);
+            this.db = crearBaseDatos(this.ruta);
+            this.db.exec(`
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = NORMAL;
+                PRAGMA secure_delete = ON;
+                PRAGMA cache_size = -${CACHE_SQLITE_KIB};
+                PRAGMA mmap_size = 0;
+                PRAGMA temp_store = FILE;
+                CREATE TABLE IF NOT EXISTS mensajes_recientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    linea_id TEXT NOT NULL,
+                    chat_hash TEXT NOT NULL,
+                    mensaje_hash TEXT NOT NULL,
+                    timestamp_ms INTEGER NOT NULL,
+                    payload BLOB NOT NULL,
+                    UNIQUE(linea_id, mensaje_hash)
+                );
+                CREATE INDEX IF NOT EXISTS idx_mensajes_linea_fecha
+                    ON mensajes_recientes(linea_id, timestamp_ms DESC, id DESC);
+            `);
+            this.insertar = this.db.prepare(`
+                INSERT INTO mensajes_recientes(
+                    linea_id, chat_hash, mensaje_hash, timestamp_ms, payload
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(linea_id, mensaje_hash) DO UPDATE SET
+                    timestamp_ms = excluded.timestamp_ms,
+                    payload = excluded.payload
+            `);
+            // SQLite cifrado es la única fuente del historial. Esta clase no
+            // conserva arreglos ni mapas de mensajes en RAM entre operaciones.
+            this.proximaLimpiezaMs = 0;
+            this.limpiarVencidos();
+            this.limpiarRespaldosIncompatiblesVencidos();
+        } catch (error) {
+            const erroresLimpieza = [];
+            try {
+                this.db?.close();
+            } catch (errorCierre) {
+                erroresLimpieza.push(errorCierre);
+            }
+            try {
+                this.clave?.fill(0);
+            } catch (errorLimpiezaClave) {
+                erroresLimpieza.push(errorLimpiezaClave);
+            }
+            this.db = null;
+            this.insertar = null;
+            this.clave = null;
+            if (this.recuperacionCifrado?.realizada) {
+                for (const ruta of [
+                    this.ruta,
+                    `${this.ruta}-wal`,
+                    `${this.ruta}-shm`
+                ]) {
+                    try {
+                        fs.rmSync(ruta, { force: true });
+                    } catch (errorLimpieza) {
+                        erroresLimpieza.push(errorLimpieza);
+                    }
+                }
+            }
+            adjuntarErroresSecundarios(
+                error,
+                'cleanupError',
+                'No se pudieron liberar todos los recursos de inicialización.',
+                erroresLimpieza
             );
-            CREATE INDEX IF NOT EXISTS idx_mensajes_linea_fecha
-                ON mensajes_recientes(linea_id, timestamp_ms DESC, id DESC);
-        `);
-        this.insertar = this.db.prepare(`
-            INSERT INTO mensajes_recientes(
-                linea_id, chat_hash, mensaje_hash, timestamp_ms, payload
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(linea_id, mensaje_hash) DO UPDATE SET
-                timestamp_ms = excluded.timestamp_ms,
-                payload = excluded.payload
-        `);
-        // SQLite cifrado es la única fuente del historial. Esta clase no
-        // conserva arreglos ni mapas de mensajes en RAM entre operaciones.
-        this.proximaLimpiezaMs = 0;
-        this.limpiarVencidos();
+            throw error;
+        }
+    }
+
+    comprobarCifradoDisponible() {
+        if (typeof this.cifradoDisponible !== 'function') return;
+
+        let disponible = false;
+        let causa = null;
+        try {
+            disponible = this.cifradoDisponible() === true;
+        } catch (error) {
+            causa = error;
+        }
+
+        if (!disponible) {
+            const error = new Error(
+                'El cifrado local del sistema no está disponible temporalmente.'
+            );
+            error.code = 'CIFRADO_LOCAL_NO_DISPONIBLE';
+            if (causa) error.cause = causa;
+            throw error;
+        }
+    }
+
+    crearClaveProtegidaVerificada() {
+        this.comprobarCifradoDisponible();
+        const clave = crypto.randomBytes(32);
+        let comprobacion = null;
+
+        try {
+            const protegida = this.cifrarClave(clave.toString('base64'));
+            if (typeof protegida !== 'string' || !protegida.trim()) {
+                throw new Error('El cifrado local no devolvió una clave protegida válida.');
+            }
+
+            const abierta = this.descifrarClave(protegida);
+            comprobacion = Buffer.from(String(abierta || ''), 'base64');
+            if (
+                comprobacion.length !== clave.length ||
+                !crypto.timingSafeEqual(comprobacion, clave)
+            ) {
+                throw new Error(
+                    'El cifrado local no pudo verificar una clave nueva.'
+                );
+            }
+
+            comprobacion.fill(0);
+            comprobacion = null;
+            return { clave, protegida };
+        } catch (error) {
+            comprobacion?.fill(0);
+            clave.fill(0);
+            throw error;
+        }
+    }
+
+    rutasRecuperables() {
+        return [
+            this.ruta,
+            `${this.ruta}-wal`,
+            `${this.ruta}-shm`,
+            this.rutaClave
+        ];
+    }
+
+    limpiarRespaldosIncompatiblesVencidos() {
+        const corte = Date.now() - RETENCION_MS;
+        const porCarpeta = new Map();
+
+        for (const rutaOriginal of this.rutasRecuperables()) {
+            const carpeta = path.dirname(rutaOriginal);
+            if (!porCarpeta.has(carpeta)) {
+                porCarpeta.set(carpeta, new Set());
+            }
+            porCarpeta.get(carpeta).add(path.basename(rutaOriginal));
+        }
+
+        for (const [carpeta, nombresOriginales] of porCarpeta) {
+            let entradas = [];
+            try {
+                entradas = fs.readdirSync(carpeta, {
+                    withFileTypes: true
+                });
+            } catch {
+                continue;
+            }
+
+            for (const entrada of entradas) {
+                if (!entrada.isFile()) continue;
+                const pertenece = [...nombresOriginales].some(nombre =>
+                    entrada.name.startsWith(
+                        `${nombre}.incompatible-`
+                    ) &&
+                    entrada.name.endsWith('.bak')
+                );
+                if (!pertenece) continue;
+
+                const rutaRespaldo = path.join(carpeta, entrada.name);
+                try {
+                    if (fs.statSync(rutaRespaldo).mtimeMs < corte) {
+                        fs.rmSync(rutaRespaldo, { force: true });
+                    }
+                } catch {
+                    // Un antivirus o bloqueo temporal no debe impedir que la
+                    // aplicación abra. Se volverá a intentar en otro inicio.
+                }
+            }
+        }
+    }
+
+    respaldarArchivosIncompatibles() {
+        const sufijo = `${new Date().toISOString().replace(/[:.]/gu, '-')}-` +
+            crypto.randomBytes(3).toString('hex');
+        const respaldados = [];
+
+        try {
+            for (const origen of this.rutasRecuperables()) {
+                if (!fs.existsSync(origen)) continue;
+                const destino = `${origen}.incompatible-${sufijo}.bak`;
+                const item = { origen, destino };
+                respaldados.push(item);
+                fs.copyFileSync(
+                    origen,
+                    destino,
+                    fs.constants.COPYFILE_EXCL
+                );
+            }
+            for (const item of respaldados) {
+                verificarCopiaArchivo(item.origen, item.destino);
+            }
+            return respaldados;
+        } catch (error) {
+            const erroresLimpieza = [];
+            for (const item of [...respaldados].reverse()) {
+                try {
+                    fs.rmSync(item.destino, { force: true });
+                } catch (errorLimpieza) {
+                    erroresLimpieza.push(errorLimpieza);
+                }
+            }
+            adjuntarErroresSecundarios(
+                error,
+                'cleanupError',
+                'No se pudieron limpiar todos los respaldos incompletos.',
+                erroresLimpieza
+            );
+            throw error;
+        }
+    }
+
+    retirarArchivosOriginales(respaldados) {
+        for (const item of respaldados) {
+            fs.rmSync(item.origen, { force: true });
+        }
+    }
+
+    restaurarArchivosOriginales(respaldados) {
+        const errores = [];
+        for (const item of respaldados) {
+            try {
+                if (fs.existsSync(item.origen)) {
+                    try {
+                        verificarCopiaArchivo(item.destino, item.origen);
+                        continue;
+                    } catch {
+                        // El original parcial o nuevo se sustituye por la copia.
+                    }
+                }
+                fs.copyFileSync(item.destino, item.origen);
+                verificarCopiaArchivo(item.destino, item.origen);
+            } catch (error) {
+                errores.push(error);
+            }
+        }
+        return errores;
+    }
+
+    recuperarClaveIncompatible() {
+        // Primero comprobamos que el cifrado actual pueda proteger y volver a
+        // abrir una clave nueva. Luego se copia y verifica el conjunto completo
+        // antes de retirar originales; la clave anterior siempre sale al final.
+        const nueva = this.crearClaveProtegidaVerificada();
+        let respaldados = null;
+
+        try {
+            respaldados = this.respaldarArchivosIncompatibles();
+            this.retirarArchivosOriginales(respaldados);
+            escribirAtomico(this.rutaClave, `${nueva.protegida}\n`);
+        } catch (error) {
+            if (respaldados !== null) {
+                const erroresRestauracion =
+                    this.restaurarArchivosOriginales(respaldados);
+                adjuntarErroresSecundarios(
+                    error,
+                    'rollbackError',
+                    'No se pudieron restaurar todos los archivos originales.',
+                    erroresRestauracion
+                );
+            }
+            nueva.clave.fill(0);
+            throw error;
+        }
+
+        this.recuperacionCifrado = Object.freeze({
+            realizada: true,
+            motivo: 'CLAVE_LOCAL_INCOMPATIBLE',
+            archivosRespaldados: Object.freeze(
+                respaldados.map(item => item.destino)
+            )
+        });
+        return nueva.clave;
     }
 
     obtenerClave() {
         if (fs.existsSync(this.rutaClave)) {
             const protegida = fs.readFileSync(this.rutaClave, 'utf8').trim();
-            const abierta = this.descifrarClave(protegida);
-            const clave = Buffer.from(String(abierta || ''), 'base64');
-            if (clave.length !== 32) throw new Error('La clave local no es válida.');
-            return clave;
+            this.comprobarCifradoDisponible();
+            try {
+                const abierta = this.descifrarClave(protegida);
+                const clave = Buffer.from(String(abierta || ''), 'base64');
+                if (clave.length !== 32) {
+                    clave.fill(0);
+                    throw new Error('La clave local no es válida.');
+                }
+                return clave;
+            } catch (error) {
+                if (!this.recuperarCifradoIncompatible) {
+                    throw crearErrorClaveIncompatible(error);
+                }
+                return this.recuperarClaveIncompatible();
+            }
         }
-        const clave = crypto.randomBytes(32);
-        const protegida = this.cifrarClave(clave.toString('base64'));
-        escribirAtomico(this.rutaClave, `${protegida}\n`);
-        return clave;
+
+        const nueva = this.crearClaveProtegidaVerificada();
+        try {
+            escribirAtomico(this.rutaClave, `${nueva.protegida}\n`);
+            return nueva.clave;
+        } catch (error) {
+            nueva.clave.fill(0);
+            throw error;
+        }
     }
 
     hash(valor) {

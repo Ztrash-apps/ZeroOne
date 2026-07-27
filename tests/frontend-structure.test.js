@@ -312,3 +312,47 @@ test('Windows recibe la identidad y el icono nativo de ZeroOne', () => {
         /ventanaPrincipal\.setAppDetails\(\{[\s\S]+appIconPath:\s*RUTA_ICONO_WINDOWS[\s\S]+relaunchDisplayName:\s*NOMBRE_APLICACION/u
     );
 });
+
+test('las tarjetas separan conexión disponible de audiencia validada', () => {
+    const lineas = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'lines.js'),
+        'utf8'
+    );
+
+    assert.match(
+        lineas,
+        /listaParaPublicarAhora\s*=\s*listaParaPublicar\s*&&\s*audienciaLista/u
+    );
+    assert.match(lineas, /texto:\s*'Preparando audiencia'/u);
+    assert.match(lineas, /texto:\s*'Audiencia pendiente'/u);
+    assert.match(lineas, /texto:\s*'Audiencia no disponible'/u);
+    assert.match(
+        lineas,
+        /contactosAudienciaConocidos[\s\S]+validando privacidad[\s\S]+privacidad sin validar/u
+    );
+    assert.match(
+        lineas,
+        /contactosAudienciaConocidos[\s\S]+linea\.contactosEstado[\s\S]+linea\.contactosEstadoWhatsApp[\s\S]+linea\.contactosEstadoGoogle/u
+    );
+    assert.match(
+        lineas,
+        /cacheLineasSeccion\.filter\([\s\S]+lineaListaParaPublicar\(linea\)\s*&&[\s\S]+audienciaEstadosLista/u
+    );
+
+    const publicacion = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'publication.js'),
+        'utf8'
+    );
+    assert.match(
+        publicacion,
+        /Preparando audiencia; podés seleccionarla/u
+    );
+    assert.match(
+        publicacion,
+        /seleccionable\(s\)[\s\S]+con audiencia lista/u
+    );
+    assert.match(
+        publicacion,
+        /visiblesPreparando[\s\S]+preparando audiencia/u
+    );
+});

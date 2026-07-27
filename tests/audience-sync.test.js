@@ -23,10 +23,16 @@ function cargarBackendAislado(rutaDatos, opciones = {}) {
     const valorAnterior = process.env.AUTOSTATUES_DATA_DIR;
     const timeoutAudienciaAnterior =
         process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS;
+    const timeoutPrivacidadIqAnterior =
+        process.env.ZEROONE_AUDIENCE_PRIVACY_IQ_TIMEOUT_MS;
     process.env.AUTOSTATUES_DATA_DIR = rutaDatos;
     if (opciones.audienceTimeoutMs !== undefined) {
         process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS =
             String(opciones.audienceTimeoutMs);
+    }
+    if (opciones.privacyIqTimeoutMs !== undefined) {
+        process.env.ZEROONE_AUDIENCE_PRIVACY_IQ_TIMEOUT_MS =
+            String(opciones.privacyIqTimeoutMs);
     }
 
     try {
@@ -61,6 +67,12 @@ function cargarBackendAislado(rutaDatos, opciones = {}) {
         } else {
             process.env.ZEROONE_AUDIENCE_SYNC_TIMEOUT_MS =
                 timeoutAudienciaAnterior;
+        }
+        if (timeoutPrivacidadIqAnterior === undefined) {
+            delete process.env.ZEROONE_AUDIENCE_PRIVACY_IQ_TIMEOUT_MS;
+        } else {
+            process.env.ZEROONE_AUDIENCE_PRIVACY_IQ_TIMEOUT_MS =
+                timeoutPrivacidadIqAnterior;
         }
     }
 }
@@ -258,8 +270,7 @@ test('la audiencia aísla colecciones y conserva una recuperación parcial', asy
         await backend.resincronizarAudienciaEstados(linea, socket);
 
         assert.deepEqual(llamadas, [
-            ['critical_unblock_low'],
-            ['regular_high']
+            ['critical_unblock_low']
         ]);
         assert.equal(linea.privacidadEstados.modo, 2);
         assert.equal(linea.audienciaResincronizada, false);
@@ -274,7 +285,7 @@ test('la audiencia aísla colecciones y conserva una recuperación parcial', asy
     }
 });
 
-test('el IQ valida la privacidad guardada si falla regular_high', async () => {
+test('el IQ valida primero Mis contactos y evita regular_high', async () => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zeroone-audience-iq-')
     );
@@ -284,19 +295,24 @@ test('el IQ valida la privacidad guardada si falla regular_high', async () => {
     try {
         backend = cargarBackendAislado(rutaDatos);
         const contacto = '595981234567@s.whatsapp.net';
+        const orden = [];
         const llamadas = [];
         let linea;
         const socket = {
             ev: { isBuffering: () => false },
             resyncAppState: async colecciones => {
                 llamadas.push([...colecciones]);
+                orden.push(`appstate:${colecciones[0]}`);
                 if (colecciones[0] === 'critical_unblock_low') {
                     linea.contactosEstado.add(contacto);
                     return;
                 }
                 throw crearErrorCdn();
             },
-            fetchPrivacySettings: async () => ({ status: 'contacts' })
+            fetchPrivacySettings: async () => {
+                orden.push('iq');
+                return { status: 'contacts' };
+            }
         };
         linea = crearLinea(socket);
         linea.privacidadEstados = {
@@ -309,11 +325,14 @@ test('el IQ valida la privacidad guardada si falla regular_high', async () => {
         await backend.resincronizarAudienciaEstados(linea, socket);
 
         assert.deepEqual(llamadas, [
-            ['critical_unblock_low'],
-            ['regular_high']
+            ['critical_unblock_low']
         ]);
         assert.equal(linea.contactosEstado.has(contacto), true);
         assert.equal(linea.privacidadEstados.modo, 2);
+        assert.deepEqual(orden, [
+            'iq',
+            'appstate:critical_unblock_low'
+        ]);
         assert.equal(linea.audienciaResincronizada, true);
         assert.equal(linea.intentosResincronizacionAudiencia, 0);
         assert.equal(linea.temporizadorAudiencia, null);
@@ -354,6 +373,7 @@ test('conserva contactos confirmados mientras reintenta sólo la privacidad', as
                     usuarios: [],
                     usuariosInvalidos: 0
                 };
+                linea.privacidadAudienciaConfirmada = true;
             },
             fetchPrivacySettings: async () => ({
                 status: 'contact_blacklist'
@@ -579,6 +599,477 @@ test('una operación de Baileys colgada libera la sincronización por timeout', 
             backend.obtenerEstadoPublicoAudiencia(linea),
             'requiere_reintento'
         );
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un timeout no duplica la operación real de app-state', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-dedupe-')
+    );
+    let backend = null;
+    const bloqueo = crearDiferida();
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 30
+        });
+        let llamadasContactos = 0;
+        const socket = {
+            ev: { isBuffering: () => false },
+            resyncAppState: async colecciones => {
+                if (colecciones[0] !== 'critical_unblock_low') return;
+                llamadasContactos += 1;
+                await bloqueo.promesa;
+            },
+            fetchPrivacySettings: async () => ({ status: 'contacts' })
+        };
+        const linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+        assert.equal(llamadasContactos, 1);
+        backend.cancelarReintentoAudiencia(linea);
+        linea.noReintentarAudienciaAntes = 0;
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+        assert.equal(
+            llamadasContactos,
+            1,
+            'el segundo ciclo debe esperar la misma promesa en curso'
+        );
+        backend.cancelarReintentoAudiencia(linea);
+    } finally {
+        bloqueo.resolver();
+        await new Promise(resolve => setImmediate(resolve));
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una consulta IQ colgada no impide sincronizar contactos y privacidad', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-iq-timeout-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 400,
+            privacyIqTimeoutMs: 30
+        });
+        const nuncaTermina = new Promise(() => {});
+        const llamadas = [];
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => nuncaTermina,
+            resyncAppState: async colecciones => {
+                const coleccion = colecciones[0];
+                llamadas.push(coleccion);
+                if (coleccion === 'critical_unblock_low') {
+                    linea.contactosEstado.add(
+                        '595986666666@s.whatsapp.net'
+                    );
+                } else if (coleccion === 'regular_high') {
+                    linea.privacidadEstados = {
+                        modo: 2,
+                        usuarios: [],
+                        usuariosInvalidos: 0
+                    };
+                    linea.privacidadAudienciaConfirmada = true;
+                }
+            }
+        };
+        linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+        const inicio = Date.now();
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.ok(
+            Date.now() - inicio < 350,
+            'el IQ tiene un límite breve propio'
+        );
+        assert.deepEqual(llamadas, [
+            'critical_unblock_low',
+            'regular_high'
+        ]);
+        assert.equal(linea.audienciaResincronizada, true);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('Google completa la audiencia si la libreta de WhatsApp queda colgada', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-google-fallback-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 400,
+            privacyIqTimeoutMs: 30
+        });
+        const nuncaTermina = new Promise(() => {});
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => ({ status: 'contacts' }),
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    return nuncaTermina;
+                }
+            }
+        };
+        const linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+        backend.servicioAgendamiento.obtenerVista = () => ({
+            cuentaId: 'cuenta-prueba'
+        });
+        backend.servicioAgendamiento.obtenerTokenAcceso =
+            async () => 'token-prueba';
+        backend.servicioAgendamiento.listarConexionesGoogle = async () => [{
+            resourceName: 'people/contacto-prueba',
+            phoneNumbers: [{
+                canonicalForm: '+595989999999'
+            }]
+        }];
+        const inicio = Date.now();
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.ok(
+            Date.now() - inicio < 350,
+            'WhatsApp no debe consumir todo el ciclo y bloquear Google'
+        );
+        assert.equal(linea.origenAudiencia, 'google');
+        assert.equal(linea.contactosEstadoGoogle.size, 1);
+        assert.equal(linea.audienciaResincronizada, true);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('la espera en cola no consume el minuto asignado a cada línea', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-queue-budget-')
+    );
+    let backend = null;
+    const nuncaTermina = new Promise(() => {});
+    let lineasPrueba = [];
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 200,
+            privacyIqTimeoutMs: 30
+        });
+        const llamadas = [];
+        lineasPrueba = Array.from({ length: 4 }, (_valor, indice) => {
+            let linea;
+            const socket = {
+                ev: { isBuffering: () => false },
+                fetchPrivacySettings: async () => ({ status: 'contacts' }),
+                resyncAppState: async colecciones => {
+                    if (colecciones[0] !== 'critical_unblock_low') return;
+                    llamadas.push(indice);
+                    if (indice < 3) return nuncaTermina;
+                    linea.contactosEstado.add(
+                        `59598777777${indice}@s.whatsapp.net`
+                    );
+                }
+            };
+            linea = crearLinea(socket);
+            linea.id =
+                `77777777-7777-4777-8777-77777777777${indice}`;
+            linea.nombre = `L${indice + 1}`;
+            backend.lineas.set(linea.id, linea);
+            return linea;
+        });
+
+        const trabajos = lineasPrueba.map(linea =>
+            backend.resincronizarAudienciaEstados(linea, linea.socket)
+        );
+        await trabajos[3];
+
+        assert.deepEqual(
+            llamadas,
+            [0, 1, 2, 3],
+            'la cuarta línea debe iniciar al recibir su turno'
+        );
+        assert.equal(lineasPrueba[3].audienciaResincronizada, true);
+
+        await Promise.all(trabajos);
+        for (const linea of lineasPrueba) {
+            backend.cancelarReintentoAudiencia(linea);
+        }
+    } finally {
+        for (const linea of lineasPrueba) {
+            backend?.cancelarReintentoAudiencia(linea);
+        }
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('el modo all no se confunde con una lista personalizada', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-non-custom-mode-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => ({ status: 'all' }),
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    linea.contactosEstado.add(
+                        '595988888888@s.whatsapp.net'
+                    );
+                    return;
+                }
+                throw crearErrorCdn();
+            }
+        };
+        linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.equal(linea.fallosPrivacidadPersonalizada, 0);
+        assert.equal(
+            backend.obtenerEstadoPublicoAudiencia(linea),
+            'esperando_reintento'
+        );
+        backend.cancelarReintentoAudiencia(linea);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una privacidad custom no acepta una regla cacheada sin evento nuevo', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-custom-stale-cache-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            }),
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    linea.contactosEstado.add(
+                        '595980000010@s.whatsapp.net'
+                    );
+                }
+                // regular_high termina, pero no emitió settings.update.
+            }
+        };
+        linea = crearLinea(socket);
+        linea.privacidadEstados = {
+            modo: 2,
+            usuarios: [],
+            usuariosInvalidos: 0
+        };
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.equal(linea.privacidadAudienciaConfirmada, false);
+        assert.equal(linea.audienciaResincronizada, false);
+        assert.equal(linea.fallosPrivacidadPersonalizada, 1);
+        assert.match(linea.ultimoErrorAudiencia, /sincronizar privacidad/u);
+        backend.cancelarReintentoAudiencia(linea);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un evento válido gana aunque regular_high termine con error', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-custom-event-race-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            }),
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    linea.contactosEstado.add(
+                        '595980000020@s.whatsapp.net'
+                    );
+                    return;
+                }
+                linea.privacidadEstados = {
+                    modo: 1,
+                    usuarios: ['595980000021@s.whatsapp.net'],
+                    usuariosInvalidos: 0
+                };
+                linea.privacidadAudienciaConfirmada = true;
+                throw crearErrorCdn();
+            }
+        };
+        linea = crearLinea(socket);
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.equal(linea.privacidadAudienciaConfirmada, true);
+        assert.equal(linea.audienciaResincronizada, true);
+        assert.equal(linea.temporizadorAudiencia, null);
+    } finally {
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una operación custom colgada cuenta una sola llamada real', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-custom-dedupe-')
+    );
+    let backend = null;
+    const bloqueo = crearDiferida();
+
+    try {
+        backend = cargarBackendAislado(rutaDatos, {
+            audienceTimeoutMs: 200,
+            privacyIqTimeoutMs: 30
+        });
+        let llamadasPrivacidad = 0;
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            }),
+            resyncAppState: async colecciones => {
+                if (colecciones[0] === 'critical_unblock_low') {
+                    linea.contactosEstado.add(
+                        '595980000001@s.whatsapp.net'
+                    );
+                    return;
+                }
+                llamadasPrivacidad += 1;
+                await bloqueo.promesa;
+            }
+        };
+        linea = crearLinea(socket);
+        linea.privacidadEstados = {
+            modo: 1,
+            usuarios: ['595980000002@s.whatsapp.net'],
+            usuariosInvalidos: 0
+        };
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+        assert.equal(linea.fallosPrivacidadPersonalizada, 1);
+        backend.cancelarReintentoAudiencia(linea);
+        linea.noReintentarAudienciaAntes = 0;
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.equal(llamadasPrivacidad, 1);
+        assert.equal(linea.fallosPrivacidadPersonalizada, 1);
+        assert.equal(
+            backend.obtenerEstadoPublicoAudiencia(linea),
+            'esperando_reintento'
+        );
+        backend.cancelarReintentoAudiencia(linea);
+    } finally {
+        bloqueo.resolver();
+        await new Promise(resolve => setImmediate(resolve));
+        backend?.servicioAgendamiento?.cerrar();
+        backend?.runtimeIALocal?.detener();
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una lista personalizada sin detalle termina bloqueada y accionable', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-audience-custom-terminal-')
+    );
+    let backend = null;
+
+    try {
+        backend = cargarBackendAislado(rutaDatos);
+        const contacto = '595984444444@s.whatsapp.net';
+        const excluido = '595985555555@s.whatsapp.net';
+        const llamadas = [];
+        let linea;
+        const socket = {
+            ev: { isBuffering: () => false },
+            resyncAppState: async colecciones => {
+                const coleccion = colecciones[0];
+                llamadas.push(coleccion);
+                if (coleccion === 'critical_unblock_low') {
+                    linea.contactosEstado.add(contacto);
+                    return;
+                }
+                throw crearErrorCdn();
+            },
+            fetchPrivacySettings: async () => ({
+                status: 'contact_blacklist'
+            })
+        };
+        linea = crearLinea(socket);
+        linea.privacidadEstados = {
+            modo: 1,
+            usuarios: [excluido],
+            usuariosInvalidos: 0
+        };
+        backend.lineas.set(linea.id, linea);
+
+        await backend.resincronizarAudienciaEstados(linea, socket);
+        assert.equal(linea.privacidadEstados.modo, 1);
+        assert.deepEqual(linea.privacidadEstados.usuarios, [excluido]);
+        assert.equal(linea.fallosPrivacidadPersonalizada, 1);
+        assert.ok(linea.temporizadorAudiencia);
+
+        backend.cancelarReintentoAudiencia(linea);
+        linea.noReintentarAudienciaAntes = 0;
+        await backend.resincronizarAudienciaEstados(linea, socket);
+
+        assert.deepEqual(llamadas, [
+            'critical_unblock_low',
+            'regular_high',
+            'regular_high'
+        ]);
+        assert.equal(linea.audienciaResincronizada, false);
+        assert.equal(linea.fallosPrivacidadPersonalizada, 2);
+        assert.equal(linea.temporizadorAudiencia, null);
+        assert.equal(
+            backend.obtenerEstadoPublicoAudiencia(linea),
+            'requiere_reintento'
+        );
+        assert.match(linea.ultimoErrorAudiencia, /personalizada/u);
     } finally {
         backend?.servicioAgendamiento?.cerrar();
         backend?.runtimeIALocal?.detener();

@@ -243,6 +243,8 @@ const programaciones = new Map();
 const trabajosProgramados = new Map();
 const colaSincronizacionesAudiencia = [];
 let sincronizacionesAudienciaActivas = 0;
+const sincronizacionesAppStateAudiencia = new WeakMap();
+const consultasPrivacidadIqAudiencia = new WeakMap();
 const historialPublicaciones = [];
 
 function describirLineaParaAgendamiento(linea) {
@@ -332,6 +334,7 @@ const servicioAgendamiento = crearServicioAgendamiento({
 
 let almacenMensajesRecientes = null;
 let errorAlmacenMensajesInformado = false;
+let recuperacionAlmacenMensajesInformada = false;
 
 function obtenerAlmacenMensajesRecientes() {
     if (almacenMensajesRecientes) return almacenMensajesRecientes;
@@ -341,8 +344,21 @@ function obtenerAlmacenMensajesRecientes() {
             ruta: path.join(CARPETA_DATOS, 'agendamiento', 'mensajes-recientes.sqlite'),
             rutaClave: path.join(CARPETA_DATOS, 'agendamiento', 'mensajes-recientes.key'),
             cifrarClave: valor => puente.cifrar(valor),
-            descifrarClave: valor => puente.descifrar(valor)
+            descifrarClave: valor => puente.descifrar(valor),
+            cifradoDisponible: () => (
+                typeof puente.disponible !== 'function' || puente.disponible()
+            ),
+            recuperarCifradoIncompatible: true
         });
+        if (
+            almacenMensajesRecientes.recuperacionCifrado?.realizada &&
+            !recuperacionAlmacenMensajesInformada
+        ) {
+            recuperacionAlmacenMensajesInformada = true;
+            console.info(
+                'El caché cifrado de mensajes recientes era incompatible. Se conservó un respaldo local y se creó un almacén nuevo.'
+            );
+        }
         global.zerooneAlmacenMensajes = almacenMensajesRecientes;
         return almacenMensajesRecientes;
     } catch (error) {
@@ -516,6 +532,7 @@ const RETRASOS_REINTENTO_AUDIENCIA_CDN_MS = [
     30 * 60 * 1000
 ];
 const MAXIMAS_SINCRONIZACIONES_AUDIENCIA_SIMULTANEAS = 3;
+const MAXIMOS_FALLOS_PRIVACIDAD_PERSONALIZADA = 2;
 const MAXIMOS_INTENTOS_AUDIENCIA =
     RETRASOS_REINTENTO_AUDIENCIA_CDN_MS.length + 1;
 const tiempoMaximoAudienciaConfigurado = Number(
@@ -526,6 +543,20 @@ const TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS =
     tiempoMaximoAudienciaConfigurado >= 20
         ? Math.min(120000, Math.floor(tiempoMaximoAudienciaConfigurado))
         : 60000;
+const tiempoMaximoPrivacidadIqConfigurado = Number(
+    process.env.ZEROONE_AUDIENCE_PRIVACY_IQ_TIMEOUT_MS
+);
+const TIEMPO_MAXIMO_CONSULTA_PRIVACIDAD_IQ_MS =
+    Number.isFinite(tiempoMaximoPrivacidadIqConfigurado) &&
+    tiempoMaximoPrivacidadIqConfigurado >= 20
+        ? Math.min(15000, Math.floor(tiempoMaximoPrivacidadIqConfigurado))
+        : 8000;
+const TIEMPO_MAXIMO_COLECCION_AUDIENCIA_MS = Math.min(
+    20000,
+    Math.max(20, Math.floor(TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS / 3))
+);
+const TIEMPO_MAXIMO_GOOGLE_AUDIENCIA_MS =
+    TIEMPO_MAXIMO_COLECCION_AUDIENCIA_MS;
 const MAXIMOS_INTENTOS_RECONEXION = 5;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
@@ -3685,6 +3716,10 @@ function cargarAudienciaEstados(linea) {
 }
 
 function asegurarAudienciaEstados(linea) {
+    if (!Number.isFinite(Number(linea.fallosPrivacidadPersonalizada))) {
+        linea.fallosPrivacidadPersonalizada = 0;
+    }
+
     if (!linea.audienciaEstadosCargada) {
         cargarAudienciaEstados(linea);
     }
@@ -4977,6 +5012,7 @@ function finalizarAudienciaConfirmadaLocalmente(linea, socket) {
     }
 
     cancelarReintentoAudiencia(linea);
+    linea.fallosPrivacidadPersonalizada = 0;
     linea.audienciaResincronizada = true;
     linea.intentosResincronizacionAudiencia = 0;
     linea.noReintentarAudienciaAntes = 0;
@@ -4994,11 +5030,20 @@ function cancelarReintentoAudiencia(linea) {
     linea.temporizadorAudiencia = null;
 }
 
-function crearErrorTiempoAudiencia(detalle) {
+function crearErrorTiempoAudiencia(
+    detalle,
+    limiteMs = TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS
+) {
+    const segundos = Math.ceil(
+        Math.max(
+            1,
+            Number(limiteMs) || TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS
+        ) / 1000
+    );
     const error = new Error(
-        `${detalle} superó el límite de ${Math.ceil(
-            TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS / 1000
-        )} segundos. La cola continuará con las demás líneas.`
+        `${detalle} superó el límite de ${segundos} ` +
+        `${segundos === 1 ? 'segundo' : 'segundos'}. ` +
+        'La cola continuará con las demás líneas.'
     );
     error.codigo = 'AUDIENCIA_TIMEOUT';
     return error;
@@ -5010,13 +5055,35 @@ function tiempoRestanteCicloAudiencia(control) {
     return Math.max(0, limite - Date.now());
 }
 
+function crearControlAudienciaConPresupuesto(control, maximoMs) {
+    const ahora = Date.now();
+    const limitePadre = Number(control?.limiteEn);
+    const limiteEn = Math.min(
+        Number.isFinite(limitePadre)
+            ? limitePadre
+            : ahora + TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS,
+        ahora + Math.max(1, Number(maximoMs) || 1)
+    );
+
+    return {
+        ...control,
+        limiteEn,
+        duracionMaximaMs: Math.max(1, limiteEn - ahora)
+    };
+}
+
 async function ejecutarOperacionAudienciaConLimite(
     control,
     detalle,
     operacion
 ) {
     const restante = tiempoRestanteCicloAudiencia(control);
-    if (restante < 1) throw crearErrorTiempoAudiencia(detalle);
+    const limiteOperacion =
+        Number(control?.duracionMaximaMs) ||
+        TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS;
+    if (restante < 1) {
+        throw crearErrorTiempoAudiencia(detalle, limiteOperacion);
+    }
 
     const controlador = new AbortController();
     let temporizador = null;
@@ -5025,7 +5092,7 @@ async function ejecutarOperacionAudienciaConLimite(
         temporizador = setTimeout(() => {
             vencida = true;
             controlador.abort();
-            reject(crearErrorTiempoAudiencia(detalle));
+            reject(crearErrorTiempoAudiencia(detalle, limiteOperacion));
         }, restante);
         temporizador.unref?.();
     });
@@ -5036,7 +5103,9 @@ async function ejecutarOperacionAudienciaConLimite(
             timeout
         ]);
     } catch (error) {
-        if (vencida) throw crearErrorTiempoAudiencia(detalle);
+        if (vencida) {
+            throw crearErrorTiempoAudiencia(detalle, limiteOperacion);
+        }
         throw error;
     } finally {
         if (temporizador) clearTimeout(temporizador);
@@ -5174,6 +5243,71 @@ function adquirirTurnoSincronizacionAudiencia() {
     });
 }
 
+function ejecutarResyncAppStateAudienciaUnico(socket, coleccion) {
+    if (!socket || typeof socket.resyncAppState !== 'function') {
+        throw new Error('La conexión no permite sincronizar la audiencia.');
+    }
+
+    let porColeccion = sincronizacionesAppStateAudiencia.get(socket);
+    if (!porColeccion) {
+        porColeccion = new Map();
+        sincronizacionesAppStateAudiencia.set(socket, porColeccion);
+    }
+
+    const existente = porColeccion.get(coleccion);
+    if (existente) {
+        return {
+            promesa: existente,
+            nueva: false
+        };
+    }
+
+    // Promise.race no puede cancelar resyncAppState. Conservamos una sola
+    // operación real por socket y colección para que los reintentos esperen
+    // el mismo trabajo en vez de multiplicar descargas en segundo plano.
+    const promesa = Promise.resolve().then(
+        () => socket.resyncAppState([coleccion], false)
+    );
+    porColeccion.set(coleccion, promesa);
+
+    const limpiar = () => {
+        if (porColeccion.get(coleccion) === promesa) {
+            porColeccion.delete(coleccion);
+        }
+    };
+    promesa.then(limpiar, limpiar);
+
+    return {
+        promesa,
+        nueva: true
+    };
+}
+
+function consultarPrivacidadEstadosIqUnica(socket) {
+    if (!socket || typeof socket.fetchPrivacySettings !== 'function') {
+        throw new Error(
+            'La conexión no permite consultar la privacidad de estados.'
+        );
+    }
+
+    const existente = consultasPrivacidadIqAudiencia.get(socket);
+    if (existente) return existente;
+
+    const promesa = Promise.resolve().then(
+        () => socket.fetchPrivacySettings(true)
+    );
+    consultasPrivacidadIqAudiencia.set(socket, promesa);
+
+    const limpiar = () => {
+        if (consultasPrivacidadIqAudiencia.get(socket) === promesa) {
+            consultasPrivacidadIqAudiencia.delete(socket);
+        }
+    };
+    promesa.then(limpiar, limpiar);
+
+    return promesa;
+}
+
 function controlSincronizacionAudienciaVigente(linea, socket, control) {
     return (
         lineas.get(linea.id) === linea &&
@@ -5211,15 +5345,30 @@ async function sincronizarColeccionAudiencia(
     control
 ) {
     let error = null;
+    let iniciada = false;
+    let operacionNueva = false;
+    const controlColeccion = crearControlAudienciaConPresupuesto(
+        control,
+        TIEMPO_MAXIMO_COLECCION_AUDIENCIA_MS
+    );
 
     try {
         // Cada colección se solicita por separado. Baileys descarga los blobs
         // externos de una llamada combinada con Promise.all; una sola URL 403
         // cancelaba también la colección que sí estaba disponible.
         await ejecutarOperacionAudienciaConLimite(
-            control,
+            controlColeccion,
             `La sincronización ${coleccion} de WhatsApp`,
-            () => socket.resyncAppState([coleccion], false)
+            () => {
+                iniciada = true;
+                const operacion =
+                    ejecutarResyncAppStateAudienciaUnico(
+                        socket,
+                        coleccion
+                    );
+                operacionNueva = operacion.nueva;
+                return operacion.promesa;
+            }
         );
     } catch (errorSincronizacion) {
         error = errorSincronizacion;
@@ -5227,7 +5376,7 @@ async function sincronizarColeccionAudiencia(
 
     try {
         await ejecutarOperacionAudienciaConLimite(
-            control,
+            controlColeccion,
             `El procesamiento de ${coleccion}`,
             () => esperarEventosAudiencia(linea, socket)
         );
@@ -5237,6 +5386,8 @@ async function sincronizarColeccionAudiencia(
 
     return {
         coleccion,
+        iniciada,
+        operacionNueva,
         correcta: !error,
         error
     };
@@ -5246,6 +5397,8 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
     if (typeof socket?.fetchPrivacySettings !== 'function') {
         return {
             validada: false,
+            estado: null,
+            personalizada: false,
             error: new Error(
                 'La conexión no permite consultar la privacidad de estados.'
             )
@@ -5253,20 +5406,32 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
     }
 
     try {
-        const ajustes = await ejecutarOperacionAudienciaConLimite(
+        let estado = null;
+        const controlIq = crearControlAudienciaConPresupuesto(
             control,
-            'La consulta de privacidad de estados',
-            () => socket.fetchPrivacySettings(true)
+            TIEMPO_MAXIMO_CONSULTA_PRIVACIDAD_IQ_MS
         );
+        const ajustes = await ejecutarOperacionAudienciaConLimite(
+            controlIq,
+            'La consulta de privacidad de estados',
+            () => consultarPrivacidadEstadosIqUnica(socket)
+        );
+
+        estado = String(ajustes?.status || '').trim() || null;
+        const personalizada = estado === 'contact_blacklist';
 
         // El IQ de privacidad no incluye listas personalizadas. Solamente el
         // modo "contacts" es suficiente para reconstruir una regla completa
         // sin inventar destinatarios ni ignorar exclusiones configuradas.
-        if (ajustes?.status !== 'contacts') {
+        if (estado !== 'contacts') {
             return {
                 validada: false,
+                estado,
+                personalizada,
                 error: new Error(
-                    'La privacidad usa una lista personalizada que todavía no fue entregada.'
+                    personalizada
+                        ? 'La privacidad usa una lista personalizada que todavía no fue entregada.'
+                        : `WhatsApp informó el modo de privacidad "${estado || 'desconocido'}"; se esperará el detalle completo.`
                 )
             };
         }
@@ -5283,10 +5448,16 @@ async function recuperarPrivacidadEstadosPorIq(linea, socket, control) {
             usuarios: [],
             usuariosInvalidos: 0
         });
+        linea.fallosPrivacidadPersonalizada = 0;
 
-        return { validada: true, error: null };
+        return { validada: true, estado, personalizada: false, error: null };
     } catch (error) {
-        return { validada: false, error };
+        return {
+            validada: false,
+            estado: null,
+            personalizada: false,
+            error
+        };
     }
 }
 
@@ -5372,6 +5543,7 @@ function reiniciarCicloSincronizacionAudiencia(
     }
 
     linea.reinicioAudienciaPendiente = null;
+    linea.fallosPrivacidadPersonalizada = 0;
     cancelarReintentoAudiencia(linea);
     linea.intentosResincronizacionAudiencia = 0;
     linea.noReintentarAudienciaAntes = 0;
@@ -5514,8 +5686,8 @@ async function resincronizarAudienciaEstados(linea, socket) {
 
     const control = {
         socket,
-        creadoEn: Date.now(),
-        limiteEn: Date.now() + TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS
+        creadoEn: null,
+        limiteEn: null
     };
     linea.controlSincronizacionAudiencia = control;
     linea.resincronizandoAudiencia = true;
@@ -5527,6 +5699,13 @@ async function resincronizarAudienciaEstados(linea, socket) {
         if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
             return;
         }
+
+        // El límite corresponde al trabajo de esta línea, no al tiempo que
+        // esperó detrás de otras. Así una instalación con muchas líneas no
+        // consume intentos antes siquiera de consultar WhatsApp.
+        control.creadoEn = Date.now();
+        control.limiteEn =
+            control.creadoEn + TIEMPO_MAXIMO_CICLO_AUDIENCIA_MS;
 
         // El bootstrap inicial de Baileys también usa el buffer de eventos.
         // Si continúa activo, diferimos este trabajo sin consumir un intento ni
@@ -5557,6 +5736,34 @@ async function resincronizarAudienciaEstados(linea, socket) {
         // Ponerlas en null obliga a WhatsApp a devolver snapshots desde v0;
         // esas referencias CDN pueden estar vencidas y dejar la línea en cero.
         linea.audienciaResincronizada = false;
+
+        let privacidadValidada =
+            linea.privacidadAudienciaConfirmada === true;
+        let resultadoPrivacidadIq = null;
+
+        // La consulta IQ es directa y no descarga referencias de la CDN. Se
+        // ejecuta primero para que "Mis contactos" quede validado aunque la
+        // colección regular_high esté vencida, lenta o no disponible.
+        if (!privacidadValidada) {
+            resultadoPrivacidadIq = await recuperarPrivacidadEstadosPorIq(
+                linea,
+                socket,
+                control
+            );
+
+            if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
+                return;
+            }
+
+            privacidadValidada = resultadoPrivacidadIq.validada === true;
+            if (privacidadValidada) {
+                linea.privacidadAudienciaConfirmada = true;
+            }
+        }
+
+        if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
+            return;
+        }
 
         let resultadoContactos = {
             correcta: linea.contactosAudienciaConfirmados === true,
@@ -5606,8 +5813,12 @@ async function resincronizarAudienciaEstados(linea, socket) {
             // comparar ambas listas; la mayor gana y WhatsApp gana los empates.
             let resultadoGoogle = null;
             try {
-                resultadoGoogle = await ejecutarOperacionAudienciaConLimite(
+                const controlGoogle = crearControlAudienciaConPresupuesto(
                     control,
+                    TIEMPO_MAXIMO_GOOGLE_AUDIENCIA_MS
+                );
+                resultadoGoogle = await ejecutarOperacionAudienciaConLimite(
+                    controlGoogle,
                     'La lectura de Google Contacts',
                     signal => cargarContactosAudienciaDesdeGoogle(
                         linea,
@@ -5703,7 +5914,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
             error: null
         };
 
-        if (!linea.privacidadAudienciaConfirmada) {
+        if (!privacidadValidada) {
             resultadoPrivacidad = await sincronizarColeccionAudiencia(
                 linea,
                 socket,
@@ -5716,10 +5927,10 @@ async function resincronizarAudienciaEstados(linea, socket) {
             }
 
             if (
-                resultadoPrivacidad.correcta &&
+                linea.privacidadAudienciaConfirmada === true &&
                 privacidadEstadosEsSegura(linea.privacidadEstados)
             ) {
-                linea.privacidadAudienciaConfirmada = true;
+                privacidadValidada = true;
             }
         }
 
@@ -5727,34 +5938,6 @@ async function resincronizarAudienciaEstados(linea, socket) {
             return;
         }
 
-        let privacidadValidada =
-            linea.privacidadAudienciaConfirmada === true;
-        let resultadoPrivacidadIq = null;
-
-        // regular_high puede fallar por una referencia CDN vencida aunque ya
-        // exista una copia local de la privacidad. El IQ consulta el ajuste
-        // actual directamente y permite validar de forma segura el modo
-        // "Mis contactos" sin borrar la sesión ni descartar la audiencia.
-        if (!privacidadValidada) {
-            resultadoPrivacidadIq = await recuperarPrivacidadEstadosPorIq(
-                linea,
-                socket,
-                control
-            );
-
-            if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
-                return;
-            }
-
-            privacidadValidada = resultadoPrivacidadIq.validada === true;
-            if (privacidadValidada) {
-                linea.privacidadAudienciaConfirmada = true;
-            }
-        }
-
-        if (!controlSincronizacionAudienciaVigente(linea, socket, control)) {
-            return;
-        }
 
         const contactosValidados =
             linea.contactosAudienciaConfirmados === true;
@@ -5762,6 +5945,7 @@ async function resincronizarAudienciaEstados(linea, socket) {
         if (contactosValidados && privacidadValidada) {
             linea.audienciaResincronizada = true;
             linea.intentosResincronizacionAudiencia = 0;
+            linea.fallosPrivacidadPersonalizada = 0;
             linea.noReintentarAudienciaAntes = 0;
             linea.ultimoErrorAudiencia = null;
             guardarAudienciaEstados(linea);
@@ -5797,6 +5981,27 @@ async function resincronizarAudienciaEstados(linea, socket) {
             });
         }
 
+        const privacidadPersonalizadaPendiente =
+            !privacidadValidada &&
+            resultadoPrivacidadIq?.personalizada === true;
+        const falloRealPrivacidadPersonalizada =
+            privacidadPersonalizadaPendiente &&
+            resultadoPrivacidad.iniciada === true &&
+            resultadoPrivacidad.operacionNueva === true &&
+            (
+                resultadoPrivacidad.correcta === true ||
+                Boolean(resultadoPrivacidad.error)
+            );
+        if (falloRealPrivacidadPersonalizada) {
+            linea.fallosPrivacidadPersonalizada =
+                (Number(linea.fallosPrivacidadPersonalizada) || 0) + 1;
+        } else if (!privacidadPersonalizadaPendiente) {
+            linea.fallosPrivacidadPersonalizada = 0;
+        }
+        const privacidadPersonalizadaAgotada =
+            privacidadPersonalizadaPendiente &&
+            (Number(linea.fallosPrivacidadPersonalizada) || 0) >=
+                MAXIMOS_FALLOS_PRIVACIDAD_PERSONALIZADA;
         const falloDescargaAppState = errores.some(item =>
             esFalloDescargaAppState(item.error)
         );
@@ -5805,7 +6010,11 @@ async function resincronizarAudienciaEstados(linea, socket) {
             .join(' y ');
         const intento = Number(linea.intentosResincronizacionAudiencia) || 1;
         const puedeReintentar =
-            intento < MAXIMOS_INTENTOS_AUDIENCIA &&
+            (
+                privacidadPersonalizadaPendiente
+                    ? !privacidadPersonalizadaAgotada
+                    : intento < MAXIMOS_INTENTOS_AUDIENCIA
+            ) &&
             linea.socket === socket &&
             !linea.eliminando;
         const retrasoReintento = falloDescargaAppState
@@ -5819,13 +6028,39 @@ async function resincronizarAudienciaEstados(linea, socket) {
             (puedeReintentar
                 ? ''
                 : ' Usá Reconectar para iniciar un nuevo ciclo de comprobación sin borrar la sesión.');
-        linea.noReintentarAudienciaAntes = falloDescargaAppState
+        if (privacidadPersonalizadaAgotada) {
+            linea.ultimoErrorAudiencia =
+                'WhatsApp confirmó una privacidad personalizada, pero todavía no entregó ' +
+                'la lista completa. Volvé a guardar quién puede ver tus estados desde el ' +
+                'teléfono; ZeroOne detectará el cambio sin cerrar la sesión.';
+            linea.intentosResincronizacionAudiencia =
+                MAXIMOS_INTENTOS_AUDIENCIA;
+        } else if (
+            privacidadPersonalizadaPendiente &&
+            linea.intentosResincronizacionAudiencia >=
+                MAXIMOS_INTENTOS_AUDIENCIA
+        ) {
+            // La espera de cola o de otros componentes no debe bloquear una
+            // privacidad personalizada si regular_high todavía no acumuló
+            // sus propios fallos reales.
+            linea.intentosResincronizacionAudiencia =
+                MAXIMOS_INTENTOS_AUDIENCIA - 1;
+        }
+
+        linea.noReintentarAudienciaAntes = puedeReintentar && falloDescargaAppState
             ? Date.now() + retrasoReintento
             : 0;
         invalidarResumenPriorizacionAudiencia(linea);
 
         guardarAudienciaEstados(linea);
         guardarLineas();
+
+        if (privacidadPersonalizadaPendiente) {
+            console.warn(
+                `[Audiencia] ${linea.nombre}: privacidad directa ` +
+                `${resultadoPrivacidadIq.estado}; lista personalizada pendiente.`
+            );
+        }
 
         for (const item of errores) {
             const mensaje = esFalloDescargaAppState(item.error)
@@ -6467,6 +6702,7 @@ function cargarLineasGuardadas() {
                 generacionConexion: 0,
                 reiniciosRequeridos: 0,
                 reconexionManualEnCurso: false,
+                fallosPrivacidadPersonalizada: 0,
                 resincronizandoAudiencia: false,
                 intentosResincronizacionAudiencia: 0,
                 controlSincronizacionAudiencia: null,
@@ -8076,6 +8312,11 @@ async function iniciarWhatsApp(lineaId) {
                     actualizarPrivacidadEstados(linea, actualizacion.value);
 
                     if (privacidadEstadosEsSegura(linea.privacidadEstados)) {
+                        cancelarReintentoAudiencia(linea);
+                        linea.intentosResincronizacionAudiencia = 0;
+                        linea.fallosPrivacidadPersonalizada = 0;
+                        linea.noReintentarAudienciaAntes = 0;
+
                         if (linea.socketValidacionAudiencia !== sock) {
                             linea.socketValidacionAudiencia = sock;
                             linea.contactosAudienciaConfirmados = false;
@@ -8223,6 +8464,7 @@ async function iniciarWhatsApp(lineaId) {
                 linea.proximoIntentoReconexion = null;
                 linea.controlSincronizacionAudiencia = null;
                 linea.reinicioAudienciaPendiente = null;
+                linea.fallosPrivacidadPersonalizada = 0;
                 linea.resincronizandoAudiencia = false;
                 linea.intentosResincronizacionAudiencia = 0;
                 linea.noReintentarAudienciaAntes = 0;
@@ -8248,7 +8490,7 @@ async function iniciarWhatsApp(lineaId) {
 
                 console.log(
                     `Línea conectada: ${linea.nombre} ` +
-                    `(${linea.contactosEstado.size} contacto(s) sincronizado(s))`
+                    `(${linea.contactosEstado.size} contacto(s) guardado(s); validando audiencia)`
                 );
 
                 if (!audienciaEstadosLista(linea)) {
@@ -10776,6 +11018,7 @@ app.post('/lineas', (req, res) => {
         reiniciosRequeridos: 0,
         reconexionManualEnCurso: false,
         resincronizandoAudiencia: false,
+        fallosPrivacidadPersonalizada: 0,
         intentosResincronizacionAudiencia: 0,
         controlSincronizacionAudiencia: null,
         reinicioAudienciaPendiente: null,
@@ -12213,4 +12456,3 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
         cargarProgramaciones();
     }
 });
-

@@ -69,6 +69,10 @@
                 const contenidoSelector = visibles.length
                     ? visibles.map(linea => {
                     const listaParaPublicar = lineaListaParaPublicar(linea);
+                    const audienciaLista =
+                        Boolean(linea.audienciaEstadosLista);
+                    const audienciaPreparandose =
+                        listaParaPublicar && !audienciaLista;
                     const motivoNoPublicable = motivoLineaNoPublicable(linea);
                     return `
                         <label class="selector-line">
@@ -87,6 +91,8 @@
                             <span class="meta-with-icon">${iconoSVG('phone-call')}<span>${linea.numero ? escaparHTML(linea.numero) : 'Número no disponible'}</span></span>
                             ${motivoNoPublicable
                                 ? `<span class="selector-line-publication-state">${iconoSVG(linea.conexionEnVerificacion ? 'loader' : 'alert', linea.conexionEnVerificacion ? 'spin' : '')}<span>${escaparHTML(motivoNoPublicable)}</span></span>`
+                                : audienciaPreparandose
+                                    ? `<span class="selector-line-publication-state">${iconoSVG('loader', 'spin')}<span>Preparando audiencia; podés seleccionarla y ZeroOne esperará antes de publicar.</span></span>`
                                 : ''}
                         </span>
                         </label>
@@ -113,11 +119,22 @@
                 document.getElementById('nav-line-count').textContent =
                     conectadas.length;
 
-                const visiblesPublicables = visibles.filter(lineaListaParaPublicar).length;
+                const visiblesSeleccionables =
+                    visibles.filter(lineaListaParaPublicar).length;
+                const visiblesConAudienciaLista = visibles.filter(
+                    linea =>
+                        lineaListaParaPublicar(linea) &&
+                        Boolean(linea.audienciaEstadosLista)
+                ).length;
+                const visiblesPreparando =
+                    visiblesSeleccionables - visiblesConAudienciaLista;
+                const resumenAudiencia = visiblesPreparando > 0
+                    ? ` · ${visiblesPreparando} preparando audiencia`
+                    : '';
                 document.getElementById('resultado-busqueda').textContent =
                     busqueda
-                        ? `${visibles.length} resultado(s) · ${visiblesPublicables} lista(s) para publicar.`
-                        : `${conectadas.length} conectada(s) · ${idsLineasConectadas.length} lista(s) para publicar.`;
+                        ? `${visibles.length} resultado(s) · ${visiblesSeleccionables} seleccionable(s) · ${visiblesConAudienciaLista} con audiencia lista${resumenAudiencia}.`
+                        : `${conectadas.length} conectada(s) · ${idsLineasConectadas.length} seleccionable(s) · ${visiblesConAudienciaLista} con audiencia lista${resumenAudiencia}.`;
 
                 actualizarControlesOrdenLineasSubida(visibles.length);
 

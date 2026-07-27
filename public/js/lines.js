@@ -775,19 +775,35 @@
                     !audienciaLista &&
                     !audienciaSincronizando &&
                     !audienciaEsperando;
+                const contactosAudienciaConocidos = Math.max(
+                    0,
+                    audienciaSeleccionada,
+                    audienciaBase,
+                    audienciaTotal,
+                    Number(linea.contactosEstado) || 0,
+                    Number(linea.contactosEstadoWhatsApp) || 0,
+                    Number(linea.contactosEstadoGoogle) || 0
+                );
+                const detallePrivacidadPendiente = audienciaSincronizando
+                    ? 'validando privacidad'
+                    : audienciaConError
+                        ? 'privacidad sin validar'
+                        : 'privacidad pendiente';
                 const audiencia = audienciaLista
                     ? audienciaBase > audienciaSeleccionada
                         ? `${audienciaSeleccionada.toLocaleString('es')} de ${audienciaBase.toLocaleString('es')} recientes`
                         : `${audienciaSeleccionada.toLocaleString('es')} contacto(s)`
-                    : audienciaSincronizando
-                        ? 'Sincronizando...'
-                        : estadoAudiencia === 'esperando_reintento'
-                            ? 'Reintento programado'
-                            : estadoAudiencia === 'requiere_reintento'
-                                ? 'Requiere reintento'
-                                : linea.ultimoErrorAudiencia
-                                    ? 'Sin sincronizar'
-                                    : 'Esperando audiencia';
+                    : contactosAudienciaConocidos > 0
+                        ? `${contactosAudienciaConocidos.toLocaleString('es')} contacto(s) · ${detallePrivacidadPendiente}`
+                        : audienciaSincronizando
+                            ? 'Sincronizando...'
+                            : estadoAudiencia === 'esperando_reintento'
+                                ? 'Reintento programado'
+                                : estadoAudiencia === 'requiere_reintento'
+                                    ? 'Requiere reintento'
+                                    : linea.ultimoErrorAudiencia
+                                        ? 'Sin sincronizar'
+                                        : 'Esperando audiencia';
                 const origenAudiencia = ['google', 'whatsapp'].includes(
                     linea.origenAudiencia
                 ) ? linea.origenAudiencia : null;
@@ -855,15 +871,24 @@
                 const enVerificacion = linea.conexionEnVerificacion === true;
                 const requiereRevision = linea.requiereRevisionEnvio === true;
                 const listaParaPublicar = lineaListaParaPublicar(linea);
+                const listaParaPublicarAhora = listaParaPublicar && audienciaLista;
                 const estadoPublicacion = simulada
                     ? { icono: 'eye', texto: 'Vista simulada', clase: '' }
                     : requiereRevision
                     ? { icono: 'alert', texto: 'Publicaciones pausadas', clase: 'warning' }
                     : enVerificacion
                         ? { icono: 'loader', texto: 'Verificando conexión', clase: 'warning', iconoClase: 'spin' }
-                        : listaParaPublicar
-                            ? { icono: 'check-circle', texto: 'Lista para publicar', clase: '' }
-                            : { icono: 'pause', texto: 'Publicación no disponible', clase: 'warning' };
+                        : !listaParaPublicar
+                            ? { icono: 'pause', texto: 'Publicación no disponible', clase: 'warning' }
+                            : !audienciaLista
+                                ? audienciaSincronizando
+                                    ? { icono: 'loader', texto: 'Preparando audiencia', clase: 'warning', iconoClase: 'spin' }
+                                    : audienciaConError
+                                        ? { icono: 'alert', texto: 'Audiencia no disponible', clase: 'warning' }
+                                        : { icono: 'clock', texto: 'Audiencia pendiente', clase: 'warning' }
+                                : listaParaPublicarAhora
+                                    ? { icono: 'check-circle', texto: 'Lista para publicar', clase: '' }
+                                    : { icono: 'pause', texto: 'Publicación no disponible', clase: 'warning' };
                 const avisoPublicacion = simulada
                     ? `
                         <div class="publication-review-notice demo-data-notice">
@@ -1021,7 +1046,10 @@
                 `;
             }
 
-            const listasParaPublicar = cacheLineasSeccion.filter(lineaListaParaPublicar).length;
+            const listasParaPublicar = cacheLineasSeccion.filter(
+                linea => lineaListaParaPublicar(linea) &&
+                    Boolean(linea.audienciaEstadosLista)
+            ).length;
             document.getElementById('resultado-busqueda-seccion').textContent = busqueda
                 ? `${filtradas.length} resultado(s) de ${cacheLineasSeccion.length}.`
                 : `${cacheLineasSeccion.length} conectada(s) · ${listasParaPublicar} lista(s) para publicar.`;
@@ -1664,4 +1692,3 @@
                 toast(error.message, 'error');
             }
         }
-
