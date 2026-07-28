@@ -6,6 +6,10 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const sharp = require('sharp');
+const {
+    crearControladorRendimiento,
+    normalizarModoRendimiento
+} = require('../src/performance-mode');
 
 const RAIZ_PROYECTO = path.resolve(__dirname, '..');
 const ID_LINEA = '11111111-1111-4111-8111-111111111111';
@@ -188,6 +192,145 @@ function eliminarTemporalSeguro(rutaTemporal) {
 
     fs.rmSync(objetivo, { recursive: true, force: true });
 }
+
+test('el modo normal y el ahorro aplican límites de concurrencia previsibles', () => {
+    let modo = 'normal';
+    const controlador = crearControladorRendimiento({
+        obtenerModo: () => modo,
+        obtenerMemoria: () => ({
+            totalBytes: 1000,
+            libreBytes: 50
+        })
+    });
+
+    const normal = controlador.evaluar();
+    assert.equal(normal.modo, 'normal');
+    assert.equal(normal.reducido, false);
+    assert.equal(normal.limiteIniciosWhatsApp, 10);
+    assert.equal(normal.limiteSincronizacionesAudiencia, 3);
+
+    modo = 'ahorro';
+    const ahorro = controlador.evaluar();
+    assert.equal(ahorro.modo, 'ahorro');
+    assert.equal(ahorro.reducido, true);
+    assert.equal(ahorro.limiteIniciosWhatsApp, 3);
+    assert.equal(ahorro.limiteSincronizacionesAudiencia, 1);
+});
+
+test('el modo adaptativo usa histéresis para no oscilar por cambios mínimos de RAM', () => {
+    let libreBytes = 250;
+    const controlador = crearControladorRendimiento({
+        obtenerModo: () => 'adaptativo',
+        obtenerMemoria: () => ({
+            totalBytes: 1000,
+            libreBytes
+        })
+    });
+
+    assert.equal(controlador.evaluar().reducido, false);
+
+    libreBytes = 200;
+    const presionAlta = controlador.evaluar();
+    assert.equal(presionAlta.reducido, true);
+    assert.equal(presionAlta.porcentajeUso, 80);
+    assert.equal(presionAlta.limiteIniciosWhatsApp, 3);
+    assert.equal(presionAlta.limiteSincronizacionesAudiencia, 1);
+
+    libreBytes = 250;
+    assert.equal(
+        controlador.evaluar().reducido,
+        true,
+        'debe conservar el ahorro dentro de la banda de histéresis'
+    );
+
+    libreBytes = 300;
+    const recuperado = controlador.evaluar();
+    assert.equal(recuperado.reducido, false);
+    assert.equal(recuperado.limiteIniciosWhatsApp, 10);
+    assert.equal(recuperado.limiteSincronizacionesAudiencia, 3);
+});
+
+test('el controlador de rendimiento solo mide y limita; no toca sockets ni campañas', () => {
+    let crearIntervalos = 0;
+    let limpiarIntervalos = 0;
+    let evaluacionProgramada = null;
+    let llamadasEnd = 0;
+    let llamadasLogout = 0;
+    const tokenIntervalo = {
+        unref() {}
+    };
+    const lineaProtegida = {
+        id: 'linea-simulada',
+        estado: 'conectado',
+        socket: {
+            end() {
+                llamadasEnd += 1;
+            },
+            logout() {
+                llamadasLogout += 1;
+            }
+        }
+    };
+    const campanaProtegida = {
+        activa: true,
+        indice: 8,
+        idsLineas: ['linea-simulada', 'linea-siguiente']
+    };
+    const lineaAntes = {
+        id: lineaProtegida.id,
+        estado: lineaProtegida.estado,
+        socket: lineaProtegida.socket
+    };
+    const campanaAntes = structuredClone(campanaProtegida);
+
+    const controlador = crearControladorRendimiento({
+        obtenerModo: () => 'ahorro',
+        obtenerMemoria: () => ({
+            totalBytes: 1000,
+            libreBytes: 100
+        }),
+        setInterval: callback => {
+            crearIntervalos += 1;
+            evaluacionProgramada = callback;
+            return tokenIntervalo;
+        },
+        clearInterval: token => {
+            assert.equal(token, tokenIntervalo);
+            limpiarIntervalos += 1;
+        },
+        intervaloMs: 1000
+    });
+
+    controlador.iniciar();
+    controlador.iniciar();
+    evaluacionProgramada();
+    assert.equal(controlador.detener(), true);
+    assert.equal(controlador.detener(), false);
+
+    assert.equal(crearIntervalos, 1);
+    assert.equal(limpiarIntervalos, 1);
+    assert.equal(llamadasEnd, 0);
+    assert.equal(llamadasLogout, 0);
+    assert.deepEqual(lineaProtegida, lineaAntes);
+    assert.deepEqual(campanaProtegida, campanaAntes);
+
+    const fuente = fs.readFileSync(
+        path.join(RAIZ_PROYECTO, 'src', 'performance-mode.js'),
+        'utf8'
+    );
+    assert.doesNotMatch(fuente, /@whiskeysockets|baileys|\.logout\s*\(|\.end\s*\(/iu);
+});
+
+test('solo se aceptan los tres modos de rendimiento declarados', () => {
+    assert.equal(normalizarModoRendimiento('normal'), 'normal');
+    assert.equal(normalizarModoRendimiento('ADAPTATIVO'), 'adaptativo');
+    assert.equal(normalizarModoRendimiento(' ahorro '), 'ahorro');
+    assert.equal(normalizarModoRendimiento('hibernacion'), 'normal');
+    assert.equal(
+        normalizarModoRendimiento('turbo', 'adaptativo'),
+        'adaptativo'
+    );
+});
 
 test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
     const rutaDatos = fs.mkdtempSync(
@@ -607,6 +750,210 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(datos.mantenerEnSegundoPlano, true);
             assert.equal(datos.iniciarConWindows, true);
             assert.equal(datos.agendarMutuosSinUsuario, false);
+            assert.equal(datos.enfriamientoPreventivoMinutos, 5);
+            assert.equal(datos.modoRendimiento, 'normal');
+            assert.equal(datos.estadoRendimiento.modo, 'normal');
+            assert.equal(
+                datos.estadoRendimiento.limiteIniciosWhatsApp,
+                10
+            );
+            assert.equal(
+                datos.estadoRendimiento.limiteSincronizacionesAudiencia,
+                3
+            );
+        });
+
+        await t.test('valida, aplica y persiste solo el modo de rendimiento', async () => {
+            const estadoAntes = await solicitarJSON(
+                servidor.baseURL,
+                '/estado'
+            );
+            const progresoAntes = await solicitarJSON(
+                servidor.baseURL,
+                '/progreso'
+            );
+
+            const guardado = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        modoRendimiento: 'ahorro',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 1000,
+                        limiteFallosSeguridad: 1,
+                        enfriamientoPreventivoMinutos: 5,
+                        notificaciones: true
+                    })
+                }
+            );
+
+            assert.equal(guardado.respuesta.status, 200);
+            assert.equal(
+                guardado.datos.configuracion.modoRendimiento,
+                'ahorro'
+            );
+            assert.equal(
+                guardado.datos.estadoRendimiento.reducido,
+                true
+            );
+            assert.equal(
+                guardado.datos.estadoRendimiento.limiteIniciosWhatsApp,
+                3
+            );
+            assert.equal(
+                guardado.datos.estadoRendimiento
+                    .limiteSincronizacionesAudiencia,
+                1
+            );
+
+            const recargada = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion'
+            );
+            assert.equal(recargada.datos.modoRendimiento, 'ahorro');
+            assert.equal(recargada.datos.estadoRendimiento.reducido, true);
+
+            const estadoDespues = await solicitarJSON(
+                servidor.baseURL,
+                '/estado'
+            );
+            assert.equal(
+                estadoDespues.datos.estadoRendimiento.reducido,
+                true
+            );
+            assert.deepEqual(
+                estadoDespues.datos.lineas.map(linea => ({
+                    id: linea.id,
+                    estado: linea.estado,
+                    reconexionBloqueada: linea.reconexionBloqueada
+                })),
+                estadoAntes.datos.lineas.map(linea => ({
+                    id: linea.id,
+                    estado: linea.estado,
+                    reconexionBloqueada: linea.reconexionBloqueada
+                }))
+            );
+
+            const progresoDespues = await solicitarJSON(
+                servidor.baseURL,
+                '/progreso'
+            );
+            for (const campo of ['activo', 'estado', 'procesadas']) {
+                assert.equal(
+                    progresoDespues.datos[campo],
+                    progresoAntes.datos[campo],
+                    `cambiar rendimiento no debe alterar progreso.${campo}`
+                );
+            }
+
+            const configuracionPersistida = JSON.parse(
+                fs.readFileSync(
+                    path.join(rutaDatos, 'configuracion.json'),
+                    'utf8'
+                )
+            );
+            assert.equal(
+                configuracionPersistida.modoRendimiento,
+                'ahorro'
+            );
+            assert.equal(
+                Object.hasOwn(
+                    configuracionPersistida,
+                    'estadoRendimiento'
+                ),
+                false
+            );
+
+            const invalido = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        modoRendimiento: 'hibernacion',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 1000,
+                        limiteFallosSeguridad: 1,
+                        enfriamientoPreventivoMinutos: 5,
+                        notificaciones: true
+                    })
+                }
+            );
+            assert.equal(invalido.respuesta.status, 400);
+            assert.match(invalido.datos.error, /modo de rendimiento/i);
+        });
+
+        await t.test('guarda el enfriamiento preventivo configurable', async () => {
+            const guardado = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion',
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        modoRitmoPredeterminado: 'secuencial',
+                        intervaloSegundosPredeterminado: 45,
+                        variacionSegundosPredeterminada: 5,
+                        lineasPorGrupoPredeterminado: 10,
+                        intervaloMinutosPredeterminado: 5,
+                        maximoDestinatariosPorEstado: 1000,
+                        limiteFallosSeguridad: 1,
+                        enfriamientoPreventivoMinutos: 2,
+                        notificaciones: true
+                    })
+                }
+            );
+
+            assert.equal(guardado.respuesta.status, 200);
+            assert.equal(
+                guardado.datos.configuracion.enfriamientoPreventivoMinutos,
+                2
+            );
+
+            const recargada = await solicitarJSON(
+                servidor.baseURL,
+                '/configuracion'
+            );
+            assert.equal(recargada.datos.enfriamientoPreventivoMinutos, 2);
+        });
+
+        await t.test('rechaza enfriamientos preventivos fuera de 1 a 15 minutos', async () => {
+            for (const minutos of [0, 16, 2.5]) {
+                const { respuesta, datos } = await solicitarJSON(
+                    servidor.baseURL,
+                    '/configuracion',
+                    {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            modoRitmoPredeterminado: 'secuencial',
+                            intervaloSegundosPredeterminado: 45,
+                            variacionSegundosPredeterminada: 5,
+                            lineasPorGrupoPredeterminado: 10,
+                            intervaloMinutosPredeterminado: 5,
+                            maximoDestinatariosPorEstado: 1000,
+                            limiteFallosSeguridad: 1,
+                            enfriamientoPreventivoMinutos: minutos,
+                            notificaciones: true
+                        })
+                    }
+                );
+
+                assert.equal(respuesta.status, 400);
+                assert.match(datos.error, /entre 1 y 15 minutos/i);
+            }
         });
 
         await t.test('guarda las preferencias de ejecución en segundo plano', async () => {
@@ -886,6 +1233,17 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             assert.equal(datos.maximoDestinatariosPorEstado, 500);
             assert.equal(datos.temaVisual, 'eva-05');
             assert.equal(datos.agendarMutuosSinUsuario, true);
+            assert.equal(datos.enfriamientoPreventivoMinutos, 2);
+            assert.equal(datos.modoRendimiento, 'ahorro');
+            assert.equal(datos.estadoRendimiento.reducido, true);
+            assert.equal(
+                datos.estadoRendimiento.limiteIniciosWhatsApp,
+                3
+            );
+            assert.equal(
+                datos.estadoRendimiento.limiteSincronizacionesAudiencia,
+                1
+            );
         });
     } finally {
         await detenerServidor(servidor);

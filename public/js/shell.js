@@ -10,6 +10,7 @@
         let urlPreviewEdicion = null;
         let selectorEtiquetaAbiertoId = null;
         let configuracionActual = null;
+        let estadoRendimientoActual = null;
         let seccionActual = 'dashboard';
         let cacheLineasSeccion = [];
         let cacheLineasAgendamiento = [];
@@ -181,6 +182,11 @@
         };
 
         const MODOS_RITMO_VALIDOS = new Set(['secuencial', 'grupos']);
+        const MODOS_RENDIMIENTO_VALIDOS = new Set([
+            'normal',
+            'adaptativo',
+            'ahorro'
+        ]);
 
         function normalizarModoRitmo(valor, respaldo = 'secuencial') {
             return MODOS_RITMO_VALIDOS.has(valor) ? valor : respaldo;
@@ -213,6 +219,217 @@
             return normalizarModoRitmo(seleccionado?.value);
         }
 
+        function normalizarModoRendimiento(valor, respaldo = 'normal') {
+            const modo = String(valor || '').trim().toLowerCase();
+            return MODOS_RENDIMIENTO_VALIDOS.has(modo) ? modo : respaldo;
+        }
+
+        function establecerModoRendimiento(valor) {
+            const modo = normalizarModoRendimiento(valor);
+            const selector = document.getElementById(
+                'config-modo-rendimiento'
+            );
+            if (selector) selector.value = modo;
+            return modo;
+        }
+
+        function obtenerModoRendimiento() {
+            return normalizarModoRendimiento(
+                document.getElementById('config-modo-rendimiento')?.value
+            );
+        }
+
+        function numeroFinitoOIndefinido(valor) {
+            const numero = Number(valor);
+            return Number.isFinite(numero) && numero >= 0
+                ? numero
+                : undefined;
+        }
+
+        function formatearMemoria(bytes) {
+            const cantidad = numeroFinitoOIndefinido(bytes);
+            if (cantidad === undefined) return '';
+            const gibibytes = cantidad / (1024 ** 3);
+            return gibibytes >= 10
+                ? `${Math.round(gibibytes)} GB`
+                : `${gibibytes.toFixed(1)} GB`;
+        }
+
+        function extraerEstadoRendimiento(datos = {}) {
+            const informe = datos?.estadoRendimiento &&
+                typeof datos.estadoRendimiento === 'object'
+                ? datos.estadoRendimiento
+                : null;
+            const anterior = estadoRendimientoActual || {};
+            const modo = normalizarModoRendimiento(
+                informe?.modo ??
+                datos?.modoRendimiento ??
+                anterior.modo
+            );
+            const memoriaLibreBytes = numeroFinitoOIndefinido(
+                informe?.memoriaLibreBytes
+            ) ?? anterior.memoriaLibreBytes;
+            const memoriaTotalBytes = numeroFinitoOIndefinido(
+                informe?.memoriaTotalBytes
+            ) ?? anterior.memoriaTotalBytes;
+            let porcentajeUso = numeroFinitoOIndefinido(
+                informe?.porcentajeUso
+            );
+
+            if (
+                porcentajeUso === undefined &&
+                memoriaTotalBytes > 0 &&
+                memoriaLibreBytes !== undefined
+            ) {
+                porcentajeUso =
+                    ((memoriaTotalBytes - memoriaLibreBytes) / memoriaTotalBytes) * 100;
+            }
+            if (porcentajeUso === undefined) {
+                porcentajeUso = anterior.porcentajeUso;
+            }
+            if (porcentajeUso !== undefined) {
+                porcentajeUso = Math.max(0, Math.min(100, porcentajeUso));
+            }
+
+            const estadoInformado = Boolean(informe);
+            const reducido = modo === 'ahorro' ||
+                (modo === 'adaptativo' && informe?.reducido === true);
+
+            return {
+                modo,
+                reducido,
+                estadoInformado,
+                motivo: String(
+                    informe?.motivo ??
+                    (estadoInformado ? '' : anterior.motivo || '')
+                ).trim(),
+                memoriaLibreBytes,
+                memoriaTotalBytes,
+                porcentajeUso,
+                limiteIniciosWhatsApp: numeroFinitoOIndefinido(
+                    informe?.limiteIniciosWhatsApp
+                ) ?? anterior.limiteIniciosWhatsApp,
+                limiteSincronizacionesAudiencia: numeroFinitoOIndefinido(
+                    informe?.limiteSincronizacionesAudiencia
+                ) ?? anterior.limiteSincronizacionesAudiencia
+            };
+        }
+
+        function aplicarEstadoRendimiento(datos = {}) {
+            const estado = extraerEstadoRendimiento(datos);
+            estadoRendimientoActual = estado;
+
+            const raiz = document.documentElement;
+            raiz.dataset.performanceMode = estado.modo;
+            raiz.dataset.performanceState = estado.reducido
+                ? 'reducido'
+                : 'normal';
+            raiz.classList.toggle('performance-reduced', estado.reducido);
+
+            const nombresModo = {
+                normal: 'Rendimiento normal',
+                adaptativo: estado.reducido
+                    ? 'Adaptativo · Reducido'
+                    : 'Adaptativo · Normal',
+                ahorro: 'Ahorro activo'
+            };
+            const tituloEstado = estado.reducido
+                ? 'Protección de recursos activa'
+                : estado.modo === 'adaptativo'
+                    ? 'Recursos en nivel normal'
+                    : nombresModo[estado.modo];
+            const porcentaje = estado.porcentajeUso === undefined
+                ? null
+                : Math.round(estado.porcentajeUso);
+            const memoriaLibre = formatearMemoria(estado.memoriaLibreBytes);
+            const textoMemoria = porcentaje === null
+                ? 'RAM sin datos'
+                : `RAM ${porcentaje}%${memoriaLibre ? ` · ${memoriaLibre} libres` : ''}`;
+            const detallesPredeterminados = {
+                normal: 'ZeroOne mantiene el ritmo habitual de tareas secundarias.',
+                adaptativo: estado.reducido
+                    ? 'Se redujo temporalmente la carga secundaria para liberar recursos.'
+                    : estado.estadoInformado
+                        ? 'Hay memoria suficiente; no es necesario reducir tareas secundarias.'
+                        : 'Esperando información del sistema para ajustar la carga automáticamente.',
+                ahorro: 'La concurrencia y los refrescos secundarios permanecen reducidos.'
+            };
+
+            const indicador = document.getElementById('estado-modo-rendimiento');
+            if (indicador) {
+                indicador.dataset.state = estado.reducido ? 'reducido' : 'normal';
+                indicador.dataset.mode = estado.modo;
+                indicador.title = `${nombresModo[estado.modo]}. ${textoMemoria}. Abrir ajustes de rendimiento.`;
+            }
+
+            const etiqueta = document.getElementById('performance-status-label');
+            if (etiqueta) etiqueta.textContent = nombresModo[estado.modo];
+            const memoriaCompacta = document.getElementById(
+                'performance-status-memory'
+            );
+            if (memoriaCompacta) {
+                memoriaCompacta.textContent = porcentaje === null
+                    ? 'RAM sin datos'
+                    : `RAM ${porcentaje}%`;
+            }
+
+            const tarjeta = document.getElementById('performance-runtime-card');
+            if (tarjeta) {
+                tarjeta.dataset.state = estado.reducido ? 'reducido' : 'normal';
+                tarjeta.dataset.mode = estado.modo;
+            }
+            const titulo = document.getElementById('performance-runtime-title');
+            if (titulo) titulo.textContent = tituloEstado;
+            const memoria = document.getElementById('performance-runtime-memory');
+            if (memoria) memoria.textContent = textoMemoria;
+            const detalle = document.getElementById('performance-runtime-detail');
+            if (detalle) {
+                detalle.textContent =
+                    estado.motivo || detallesPredeterminados[estado.modo];
+            }
+
+            const limites = document.getElementById('performance-runtime-limits');
+            if (limites) {
+                const partes = [];
+                if (estado.limiteIniciosWhatsApp !== undefined) {
+                    partes.push(
+                        `${Math.round(estado.limiteIniciosWhatsApp)} conexiones nuevas simultáneas`
+                    );
+                }
+                if (estado.limiteSincronizacionesAudiencia !== undefined) {
+                    partes.push(
+                        `${Math.round(estado.limiteSincronizacionesAudiencia)} sincronizaciones de audiencia simultáneas`
+                    );
+                }
+                limites.textContent = partes.join(' · ');
+                limites.hidden = partes.length === 0;
+            }
+
+            const barra = document.getElementById('performance-memory-fill');
+            if (barra) {
+                barra.style.width = porcentaje === null ? '0%' : `${porcentaje}%`;
+                barra.parentElement?.classList.toggle(
+                    'unknown',
+                    porcentaje === null
+                );
+            }
+
+            return estado;
+        }
+
+        function intervaloRefrescoNoCritico(intervaloBaseMs) {
+            const estado = estadoRendimientoActual;
+            if (estado?.modo === 'ahorro') {
+                return Math.round(intervaloBaseMs * 3);
+            }
+            if (estado?.reducido) {
+                return Math.round(intervaloBaseMs * 2.5);
+            }
+            return intervaloBaseMs;
+        }
+
+        aplicarEstadoRendimiento({ modoRendimiento: 'normal' });
+
         function numeroConfigurado(valor, minimo, maximo, respaldo) {
             const numero = Number(valor);
             return Number.isFinite(numero) && numero >= minimo && numero <= maximo
@@ -234,6 +451,14 @@
         function textoLimiteFallos(valor) {
             const cantidad = Math.max(1, Math.min(10, Math.round(Number(valor) || 1)));
             return `${cantidad} ${cantidad === 1 ? 'línea' : 'líneas'}`;
+        }
+
+        function textoEnfriamientoPreventivo(valor) {
+            const minutos = Math.max(
+                1,
+                Math.min(15, Math.round(Number(valor) || 5))
+            );
+            return `${minutos} ${minutos === 1 ? 'minuto' : 'minutos'}`;
         }
 
         function describirRitmoPublicacion(item) {

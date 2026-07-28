@@ -5,6 +5,7 @@
                 const respuesta = await fetch('/estado');
                 const data = await respuesta.json();
                 if (secuencia !== secuenciaActualizacionLineas) return;
+                aplicarEstadoRendimiento(data);
 
                 const selector = document.getElementById('lista-lineas');
 
@@ -407,6 +408,10 @@
                 panel.removeAttribute('data-solicitud-id');
                 panel.classList.remove('is-simulated');
                 document.getElementById('confirmacion-envio-linea').textContent = '';
+                document.getElementById(
+                    'texto-omitir-envio-no-publicado'
+                ).textContent =
+                    'Omitir esta línea y continuar con el resto';
                 return;
             }
 
@@ -434,6 +439,10 @@
                 simulada
                     ? `${identificacion || 'Línea de prueba'} · SIMULACRO`
                     : identificacion || 'Línea pendiente de confirmación';
+            document.getElementById(
+                'texto-omitir-envio-no-publicado'
+            ).textContent =
+                `Omitir ${nombre || numero || 'esta línea'} y continuar con el resto`;
             document.getElementById('confirmacion-envio-advertencia').textContent =
                 simulada
                     ? 'No se envió nada a WhatsApp. Elegí cualquiera de las dos respuestas para observar cómo continúa la campaña.'
@@ -537,12 +546,9 @@
                 } else if (progreso.estado === 'completado_con_errores') {
                     proximo.textContent = 'Finalizado con errores';
                 } else if (progreso.estado === 'detenido_seguridad') {
-                    proximo.textContent = [
-                        'desconexion_previa',
-                        'lineas_no_disponibles'
-                    ].includes(
-                        progreso.decisionSeguridadPendiente?.tipo
-                    )
+                    proximo.textContent =
+                        progreso.decisionSeguridadPendiente
+                            ?.permiteOmitir === true
                         ? 'Esperando tu decisión'
                         : 'Detenido por seguridad';
                 } else if (progreso.estado === 'detenido_desconexion') {
@@ -580,34 +586,57 @@
                     document.getElementById('texto-reanudar-seguridad');
                 const textoCancelarSeguridad =
                     document.getElementById('texto-cancelar-seguridad');
+                const decisionSeguridad =
+                    progreso.decisionSeguridadPendiente &&
+                    typeof progreso.decisionSeguridadPendiente === 'object'
+                        ? progreso.decisionSeguridadPendiente
+                        : {};
                 const tipoDecisionSeguridad = String(
-                    progreso.decisionSeguridadPendiente?.tipo || ''
+                    decisionSeguridad.tipo || ''
                 ).trim().toLowerCase();
-                const permiteOmitirYContinuar = [
-                    'desconexion_previa',
-                    'lineas_no_disponibles'
-                ].includes(tipoDecisionSeguridad);
+                const permiteOmitirYContinuar =
+                    decisionSeguridad.permiteOmitir === true;
+                const lineaDecision = String(
+                    decisionSeguridad.lineaNombre ||
+                    progreso.lineaCorte?.nombre ||
+                    progreso.lineaActual?.nombre ||
+                    ''
+                ).trim();
+                const cantidadLineasNoDisponibles = Number(
+                    decisionSeguridad.cantidad
+                );
                 const sonVariasLineasNoDisponibles =
-                    tipoDecisionSeguridad === 'lineas_no_disponibles';
+                    tipoDecisionSeguridad === 'lineas_no_disponibles' &&
+                    Number.isInteger(cantidadLineasNoDisponibles) &&
+                    cantidadLineasNoDisponibles > 1;
                 const seguridadDetenida =
                     progreso.estado === 'detenido_seguridad';
+                const textoOmision = sonVariasLineasNoDisponibles
+                    ? `Omitir ${cantidadLineasNoDisponibles} líneas no disponibles y continuar con el resto`
+                    : `Omitir ${lineaDecision || 'la línea fallida'} y continuar con el resto`;
 
                 alertaSeguridad.classList.toggle('visible', seguridadDetenida);
                 alertaSeguridad.dataset.tipoDecisionSeguridad =
                     seguridadDetenida ? tipoDecisionSeguridad : '';
+                alertaSeguridad.dataset.permiteOmitir =
+                    seguridadDetenida && permiteOmitirYContinuar
+                        ? 'true'
+                        : 'false';
                 tituloSeguridad.textContent = permiteOmitirYContinuar
                     ? (
                         sonVariasLineasNoDisponibles
                             ? 'Líneas no disponibles'
-                            : 'Línea sin conexión'
+                            : lineaDecision
+                                ? `Error en ${lineaDecision}`
+                                : 'Línea fallida'
                     )
                     : 'Corte automático de seguridad';
                 textoReanudarSeguridad.textContent = permiteOmitirYContinuar
-                    ? 'Omitir y continuar'
-                    : 'Reanudar';
+                    ? textoOmision
+                    : 'Reanudar campaña';
                 textoCancelarSeguridad.textContent = permiteOmitirYContinuar
                     ? 'Detener campaña'
-                    : 'Cancelar';
+                    : 'Cancelar campaña';
 
                 if (seguridadDetenida) {
                     detalleSeguridad.textContent =
@@ -1235,6 +1264,7 @@
             try {
                 const respuesta = await fetch('/resumen');
                 const data = await respuesta.json();
+                aplicarEstadoRendimiento(data);
                 document.getElementById('resumen-lineas-conectadas').textContent = data.lineas?.conectadas || 0;
                 document.getElementById('resumen-lineas-problemas').textContent = data.lineas?.conProblemas || 0;
                 document.getElementById('resumen-publicaciones-hoy').textContent = data.publicacionesHoy || 0;

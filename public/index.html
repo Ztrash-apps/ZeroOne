@@ -175,15 +175,34 @@
                     </div>
                 </div>
 
-                <div class="topbar-actions" id="view-controls">
-                    <button class="view-button active" data-view="grid">
-                        <svg class="icon"><use href="#i-grid"></use></svg>
-                        <span>Cuadrícula</span>
+                <div class="topbar-right">
+                    <button
+                        type="button"
+                        id="estado-modo-rendimiento"
+                        class="performance-status"
+                        data-state="normal"
+                        title="Abrir ajustes de rendimiento"
+                        aria-label="Abrir ajustes de rendimiento"
+                    >
+                        <span class="performance-status-icon" aria-hidden="true">
+                            <svg class="icon"><use href="#i-activity"></use></svg>
+                        </span>
+                        <span class="performance-status-copy">
+                            <strong id="performance-status-label">Rendimiento normal</strong>
+                            <small id="performance-status-memory">RAM sin datos</small>
+                        </span>
                     </button>
-                    <button class="view-button" data-view="list">
-                        <svg class="icon"><use href="#i-list"></use></svg>
-                        <span>Lista</span>
-                    </button>
+
+                    <div class="topbar-actions" id="view-controls">
+                        <button class="view-button active" data-view="grid">
+                            <svg class="icon"><use href="#i-grid"></use></svg>
+                            <span>Cuadrícula</span>
+                        </button>
+                        <button class="view-button" data-view="list">
+                            <svg class="icon"><use href="#i-list"></use></svg>
+                            <span>Lista</span>
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -350,7 +369,7 @@
                                 class="uncertain-send-button omitted"
                             >
                                 <svg class="icon"><use href="#i-x-circle"></use></svg>
-                                <span>No se publicó, omitir</span>
+                                <span id="texto-omitir-envio-no-publicado">Omitir esta línea y continuar con el resto</span>
                             </button>
                         </div>
                     </div>
@@ -990,6 +1009,10 @@
                             <svg class="icon"><use href="#i-alert"></use></svg>
                             <span>Seguridad</span>
                         </button>
+                        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="rendimiento">
+                            <svg class="icon"><use href="#i-activity"></use></svg>
+                            <span>Rendimiento</span>
+                        </button>
                         <button type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="agendamiento">
                             <svg class="icon"><use href="#i-nav-agenda"></use></svg>
                             <span>Agendamiento</span>
@@ -1160,9 +1183,81 @@
                                 </div>
                                 <span class="help">Con 1, ZeroOne pausa antes de continuar con la siguiente línea. Una desconexión crítica detiene toda la publicación inmediatamente.</span>
                             </div>
+                            <div class="field settings-control-card settings-security-card">
+                                <label for="config-enfriamiento-preventivo-minutos">Enfriamiento preventivo</label>
+                                <div class="range-row">
+                                    <input id="config-enfriamiento-preventivo-minutos" type="range" min="1" max="15" step="1" value="5">
+                                    <strong id="config-enfriamiento-preventivo-valor">5 minutos</strong>
+                                </div>
+                                <span class="help">Tiempo de espera después de una desconexión recuperable antes de permitir una nueva publicación. Los envíos sin confirmar conservan su protección especial de 10 minutos.</span>
+                            </div>
+                            <div class="settings-warning-banner">
+                                <svg class="icon"><use href="#i-alert"></use></svg>
+                                <span><strong>WA_429 no se puede configurar.</strong> WhatsApp determina ese tiempo de espera y ZeroOne debe respetarlo.</span>
+                            </div>
                             <div class="settings-info-banner">
                                 <svg class="icon"><use href="#i-info"></use></svg>
                                 <span>Los fallos de sincronización de audiencia no cuentan como una desconexión crítica.</span>
+                            </div>
+                        </section>
+
+                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="rendimiento" hidden>
+                            <div class="settings-section-heading">
+                                <span class="settings-section-icon performance"><svg class="icon"><use href="#i-activity"></use></svg></span>
+                                <div>
+                                    <span class="settings-eyebrow">Recursos</span>
+                                    <h2>Modo rendimiento</h2>
+                                    <p>Elegí cuánto trabajo secundario puede realizar ZeroOne cuando la PC tiene mucha carga.</p>
+                                </div>
+                            </div>
+
+                            <div class="settings-control-card performance-mode-control">
+                                <span class="performance-mode-control-copy">
+                                    <label for="config-modo-rendimiento">Perfil de recursos</label>
+                                    <span class="help">El modo Normal conserva el comportamiento anterior. Podés cambiarlo sin reiniciar ZeroOne.</span>
+                                </span>
+                                <select id="config-modo-rendimiento" class="input">
+                                    <option value="normal" selected>Normal</option>
+                                    <option value="adaptativo">Adaptativo · Recomendado</option>
+                                    <option value="ahorro">Ahorro de memoria</option>
+                                </select>
+                            </div>
+
+                            <div class="performance-mode-guide" aria-label="Descripción de los modos de rendimiento">
+                                <span>
+                                    <svg class="icon"><use href="#i-rocket"></use></svg>
+                                    <span><strong>Normal</strong><small>Ritmo habitual para una PC con recursos disponibles.</small></span>
+                                </span>
+                                <span>
+                                    <svg class="icon"><use href="#i-activity"></use></svg>
+                                    <span><strong>Adaptativo</strong><small>Reduce la carga secundaria solo cuando detecta presión de RAM.</small></span>
+                                </span>
+                                <span>
+                                    <svg class="icon"><use href="#i-pause"></use></svg>
+                                    <span><strong>Ahorro</strong><small>Mantiene reducida la concurrencia y los refrescos no críticos.</small></span>
+                                </span>
+                            </div>
+
+                            <div id="performance-runtime-card" class="performance-runtime-card" data-state="normal">
+                                <span class="performance-runtime-icon" aria-hidden="true">
+                                    <svg class="icon"><use href="#i-activity"></use></svg>
+                                </span>
+                                <div class="performance-runtime-copy">
+                                    <span class="performance-runtime-heading">
+                                        <strong id="performance-runtime-title">Recursos en nivel normal</strong>
+                                        <em id="performance-runtime-memory">RAM sin datos</em>
+                                    </span>
+                                    <span id="performance-runtime-detail">ZeroOne actualizará este indicador cuando reciba información del sistema.</span>
+                                    <span id="performance-runtime-limits" class="performance-runtime-limits" hidden></span>
+                                    <span class="performance-memory-track" aria-hidden="true">
+                                        <span id="performance-memory-fill"></span>
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="settings-info-banner performance-safety-note">
+                                <svg class="icon"><use href="#i-check-circle"></use></svg>
+                                <span><strong>Nunca desconecta ni hiberna líneas o sesiones.</strong> Una campaña activa y su progreso mantienen prioridad; solo se reducen conexiones nuevas simultáneas, sincronizaciones de audiencia, IA inactiva, animaciones y refrescos secundarios.</span>
                             </div>
                         </section>
 

@@ -38,6 +38,11 @@ const {
 const { crearRuntimeIALocal } = require('./local-ai-runtime');
 const { crearAlmacenMensajesRecientes } = require('./recent-message-store');
 const {
+    MODOS_RENDIMIENTO,
+    crearControladorRendimiento,
+    normalizarModoRendimiento
+} = require('./performance-mode');
+const {
     crearEstadosActivosSimulados,
     crearLineasSimuladas,
     esLineaSimulada
@@ -586,7 +591,9 @@ const TIEMPO_MAXIMO_ENVIO_MS =
     tiempoMaximoEnvioConfigurado >= 20
         ? Math.min(5 * 60 * 1000, Math.floor(tiempoMaximoEnvioConfigurado))
         : 90000;
-const ENFRIAMIENTO_DESCONEXION_MS = 5 * 60 * 1000;
+const ENFRIAMIENTO_PREVENTIVO_MINUTOS_PREDETERMINADO = 5;
+const ENFRIAMIENTO_PREVENTIVO_MINUTOS_MINIMO = 1;
+const ENFRIAMIENTO_PREVENTIVO_MINUTOS_MAXIMO = 15;
 const ENFRIAMIENTO_LIMITE_TEMPORAL_MS = 30 * 60 * 1000;
 const ENFRIAMIENTO_ENVIO_INCIERTO_MS = 10 * 60 * 1000;
 const ENFRIAMIENTO_LIMITE_MINIMO_MS = 60 * 1000;
@@ -671,6 +678,9 @@ const MODOS_PRIVACIDAD_ESTADOS = Object.freeze({
 
 let configuracion = {
     limiteFallosSeguridad: 1,
+    enfriamientoPreventivoMinutos:
+        ENFRIAMIENTO_PREVENTIVO_MINUTOS_PREDETERMINADO,
+    modoRendimiento: 'normal',
     notificaciones: true,
     mantenerEnSegundoPlano: true,
     iniciarConWindows: true,
@@ -683,6 +693,17 @@ let configuracion = {
     intervaloMinutosPredeterminado: 5,
     maximoDestinatariosPorEstado: MAXIMO_DESTINATARIOS_ESTADO
 };
+
+const controladorRendimiento = crearControladorRendimiento({
+    obtenerModo: () => configuracion.modoRendimiento,
+    onCambio: estado => {
+        programarProcesamientoColaIniciosWhatsApp();
+        procesarColaSincronizacionesAudiencia();
+        if (estado.reducido && !tareaAnalisisIA) {
+            runtimeIALocal.detener();
+        }
+    }
+});
 
 let proteccionMiddlewarePublicacion = crearProteccionMiddlewareVacia();
 const solicitudesIdempotentes = new Map();
@@ -1473,6 +1494,17 @@ function cargarConfiguracion() {
                 10,
                 true
             ),
+            enfriamientoPreventivoMinutos: limitarNumero(
+                datos.enfriamientoPreventivoMinutos,
+                ENFRIAMIENTO_PREVENTIVO_MINUTOS_PREDETERMINADO,
+                ENFRIAMIENTO_PREVENTIVO_MINUTOS_MINIMO,
+                ENFRIAMIENTO_PREVENTIVO_MINUTOS_MAXIMO,
+                true
+            ),
+            modoRendimiento: normalizarModoRendimiento(
+                datos.modoRendimiento,
+                'normal'
+            ),
             notificaciones: datos.notificaciones !== false,
             mantenerEnSegundoPlano:
                 datos.mantenerEnSegundoPlano !== false,
@@ -1700,7 +1732,8 @@ function activarProteccionMiddlewarePorError(error) {
         error?.preflight !== true
     ) {
         tipo = 'desconexion';
-        duracionMs = ENFRIAMIENTO_DESCONEXION_MS;
+        duracionMs =
+            configuracion.enfriamientoPreventivoMinutos * 60 * 1000;
     }
 
     if (!tipo) return null;
@@ -2757,11 +2790,18 @@ function clasificarErrorPublicacion(error, linea, socketUsado, fase = 'envio') {
         };
     }
 
+    // Baileys usa 500 tanto para `badSession` como para fallos de envío que
+    // no cierran la conexión (por ejemplo, cifrado o carga multimedia). Un
+    // 500 aislado no alcanza para declarar caída la línea: el cierre real se
+    // confirma por el estado/socket o por una señal de transporte.
+    const codigoConexionConfirmado =
+        CODIGOS_ERROR_CONEXION.has(codigoEstado) &&
+        codigoEstado !== DisconnectReason.badSession;
     const desconectada = !linea ||
         linea.estado !== 'conectado' ||
         !linea.socket ||
         (socketUsado && linea.socket !== socketUsado) ||
-        CODIGOS_ERROR_CONEXION.has(codigoEstado) ||
+        codigoConexionConfirmado ||
         errorTransporte;
 
     if (desconectada) {
@@ -4891,6 +4931,12 @@ function iniciarAnalisisMensajesIA(linea) {
         control.progreso.finalizadoEn = new Date().toISOString();
         ultimoAnalisisIA = { ...control.progreso };
         if (tareaAnalisisIA === control) tareaAnalisisIA = null;
+        if (
+            controladorRendimiento.obtenerEstado().reducido &&
+            !tareaAnalisisIA
+        ) {
+            runtimeIALocal.detener();
+        }
     });
 
     return { ...control.progreso, activo: true };
@@ -5396,6 +5442,28 @@ function mensajeSeguroFalloDescargaAppState(error) {
     );
 }
 
+function obtenerLimiteSincronizacionesAudiencia() {
+    return Math.max(
+        1,
+        Number(
+            controladorRendimiento
+                .obtenerEstado()
+                .limiteSincronizacionesAudiencia
+        ) || MAXIMAS_SINCRONIZACIONES_AUDIENCIA_SIMULTANEAS
+    );
+}
+
+function procesarColaSincronizacionesAudiencia() {
+    while (
+        sincronizacionesAudienciaActivas <
+            obtenerLimiteSincronizacionesAudiencia() &&
+        colaSincronizacionesAudiencia.length > 0
+    ) {
+        const siguiente = colaSincronizacionesAudiencia.shift();
+        siguiente();
+    }
+}
+
 function adquirirTurnoSincronizacionAudiencia() {
     return new Promise(resolve => {
         const iniciar = () => {
@@ -5409,15 +5477,13 @@ function adquirirTurnoSincronizacionAudiencia() {
                     0,
                     sincronizacionesAudienciaActivas - 1
                 );
-
-                const siguiente = colaSincronizacionesAudiencia.shift();
-                if (siguiente) siguiente();
+                procesarColaSincronizacionesAudiencia();
             });
         };
 
         if (
             sincronizacionesAudienciaActivas <
-            MAXIMAS_SINCRONIZACIONES_AUDIENCIA_SIMULTANEAS
+            obtenerLimiteSincronizacionesAudiencia()
         ) {
             iniciar();
         } else {
@@ -8401,10 +8467,21 @@ function encolarInicioWhatsApp(
     return true;
 }
 
+function obtenerLimiteIniciosWhatsApp() {
+    return Math.max(
+        1,
+        Number(
+            controladorRendimiento
+                .obtenerEstado()
+                .limiteIniciosWhatsApp
+        ) || MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS
+    );
+}
+
 function procesarColaIniciosWhatsApp() {
     while (
         turnosInicioWhatsAppActivos.size <
-            MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS &&
+            obtenerLimiteIniciosWhatsApp() &&
         colaIniciosWhatsApp.length > 0
     ) {
         const solicitud = colaIniciosWhatsApp.shift();
@@ -9792,11 +9869,13 @@ async function ejecutarPublicacion({
 
             const decisionInicial = await esperarDecisionSeguridad({
                 tipo: 'lineas_no_disponibles',
+                permiteOmitir: true,
                 cantidad: noDisponibles.length,
                 lineaId: primera.id,
                 lineaNombre: primera.nombre,
                 codigo:
-                    primera.codigoError || 'LINEA_NO_CONECTADA'
+                    primera.codigoError || 'LINEA_NO_CONECTADA',
+                mensaje: progresoPublicacion.mensajeSeguridad
             });
 
             if (decisionInicial === 'alto_total') {
@@ -10031,13 +10110,37 @@ async function ejecutarPublicacion({
                                     }
                                 );
                         } catch (errorEnvio) {
-                            if (errorEnvio?.codigo !== 'TIEMPO_ENVIO_AGOTADO') {
+                            const clasificacionEnvio =
+                                clasificarErrorPublicacion(
+                                    errorEnvio,
+                                    linea,
+                                    socketUsado,
+                                    'envio'
+                                );
+                            const esTiempoAgotado =
+                                errorEnvio?.codigo === 'TIEMPO_ENVIO_AGOTADO';
+                            const requiereConfirmacionManual =
+                                esTiempoAgotado ||
+                                (
+                                    clasificacionEnvio.tipoError !==
+                                        'limite_temporal' &&
+                                    clasificacionEnvio.envioIncierto === true
+                                );
+
+                            if (!requiereConfirmacionManual) {
                                 throw errorEnvio;
                             }
 
+                            // Si sendMessage ya rechazó por una desconexión, ese
+                            // rechazo no demuestra si WhatsApp alcanzó a publicar
+                            // el estado. Se mantiene la confirmación manual abierta
+                            // hasta que el usuario revise la línea.
+                            const promesaResultadoEnvio = esTiempoAgotado
+                                ? promesaEnvioRegistrado
+                                : new Promise(() => {});
                             const decision =
                                 await esperarConfirmacionEnvioIncierto({
-                                    promesaEnvio: promesaEnvioRegistrado,
+                                    promesaEnvio: promesaResultadoEnvio,
                                     registroHistorial,
                                     linea,
                                     numero: numeroUsado
@@ -10352,93 +10455,95 @@ async function ejecutarPublicacion({
                         verificarCorteDesconexion();
                     }
 
-                    if (![
-                        'sincronizacion_audiencia',
-                        'limite_audiencia',
-                        'envio_omitido_manual'
-                    ].includes(clasificacion.tipoError)) {
+                    const errorEvaluable = ![
+                            'sincronizacion_audiencia',
+                            'limite_audiencia',
+                            'envio_omitido_manual'
+                        ].includes(clasificacion.tipoError);
+                    if (errorEvaluable) {
                         fallosEvaluablesDesdeCorte += 1;
+                    }
+                    const errorOmitible =
+                        quedanLineas &&
+                        errorEvaluable &&
+                        clasificacion.tipoError !== 'limite_temporal' &&
+                        (
+                            desconexionPreviaReanudable ||
+                            fallosEvaluablesDesdeCorte >=
+                                configuracion.limiteFallosSeguridad
+                        ) &&
+                        clasificacion.envioIncierto !== true;
+
+                    if (errorOmitible) {
+                        const corteReanudable =
+                            desconexionPreviaReanudable
+                                ? controlSeguridadPublicacion
+                                    .corteDesconexion
+                                : null;
+                        progresoPublicacion.estado = 'detenido_seguridad';
+                        progresoPublicacion.seguridadActiva = true;
+                        progresoPublicacion.proximoGrupoSegundos = 0;
+                        progresoPublicacion.proximaLineaSegundos = 0;
+                        progresoPublicacion.fallosGrupoActual =
+                            fallosTotalesGrupo;
+                        progresoPublicacion.totalGrupoActual = grupo.length;
+                        progresoPublicacion.limiteFallosSeguridad =
+                            configuracion.limiteFallosSeguridad;
+                        progresoPublicacion.mensajeSeguridad =
+                            clasificacion.tipoError === 'registro_local'
+                                ? `WhatsApp confirmó el estado de ${linea.nombre}, ` +
+                                    'pero ZeroOne no pudo guardar su ID local. ' +
+                                    'Podés continuar con el resto; esta publicación ' +
+                                    'podría no estar disponible para eliminarla o consultar sus vistas.'
+                                : `${fallo.error} ` +
+                                    'Podés omitir esta línea y continuar con el resto ' +
+                                    'o detener la campaña.';
+                        progresoPublicacion.mensaje =
+                            'Publicación pausada antes de iniciar otra línea.';
+                        notificarEscritorio(
+                            'Publicación pausada',
+                            progresoPublicacion.mensajeSeguridad
+                        );
+                        guardarLineas();
+
+                        const decision = await esperarDecisionSeguridad({
+                            tipo: 'error_linea',
+                            permiteOmitir: true,
+                            lineaId: linea.id,
+                            lineaNombre: linea.nombre,
+                            codigo: fallo.codigoError,
+                            mensaje:
+                                progresoPublicacion.mensajeSeguridad
+                        });
 
                         if (
-                            quedanLineas &&
-                            (
-                                desconexionPreviaReanudable ||
-                                fallosEvaluablesDesdeCorte >=
-                                    configuracion.limiteFallosSeguridad
-                            )
+                            corteReanudable ||
+                            desconexionPreviaReanudable
                         ) {
-                            const corteReanudable =
-                                desconexionPreviaReanudable
-                                    ? controlSeguridadPublicacion
-                                        .corteDesconexion
-                                    : null;
-                            progresoPublicacion.estado = 'detenido_seguridad';
-                            progresoPublicacion.seguridadActiva = true;
-                            progresoPublicacion.proximoGrupoSegundos = 0;
-                            progresoPublicacion.proximaLineaSegundos = 0;
-                            progresoPublicacion.fallosGrupoActual =
-                                fallosTotalesGrupo;
-                            progresoPublicacion.totalGrupoActual = grupo.length;
-                            progresoPublicacion.limiteFallosSeguridad =
-                                configuracion.limiteFallosSeguridad;
-                            progresoPublicacion.mensajeSeguridad =
-                                desconexionPreviaReanudable
-                                    ? `${linea.nombre} no recuperó una conexión estable. ` +
-                                        'El estado no se envió en esta línea. Podés omitirla ' +
-                                        'y continuar con las demás o detener la campaña.'
-                                    : `Se alcanzó el límite de ` +
-                                        `${configuracion.limiteFallosSeguridad} línea(s) con fallos. ` +
-                                        `El último error ocurrió en ${linea.nombre}.`;
-                            progresoPublicacion.mensaje =
-                                desconexionPreviaReanudable
-                                    ? 'Publicación pausada antes de iniciar otra línea.'
-                                    : 'Publicación pausada por seguridad antes de continuar con otra línea.';
-                            notificarEscritorio(
-                                'Publicación pausada',
-                                progresoPublicacion.mensajeSeguridad
-                            );
-                            guardarLineas();
-
-                            const decision = await esperarDecisionSeguridad({
-                                tipo: desconexionPreviaReanudable
-                                    ? 'desconexion_previa'
-                                    : 'limite_fallos',
-                                lineaId: linea.id,
-                                lineaNombre: linea.nombre,
-                                codigo: fallo.codigoError,
-                                mensaje:
-                                    progresoPublicacion.mensajeSeguridad
-                            });
-
-                            if (
+                            consumirCorteDesconexionReanudable(
                                 corteReanudable ||
-                                desconexionPreviaReanudable
-                            ) {
-                                consumirCorteDesconexionReanudable(
-                                    corteReanudable ||
-                                        controlSeguridadPublicacion
-                                            .corteDesconexion
-                                );
-                            }
-
-                            verificarCorteDesconexion();
-
-                            if (decision === 'cancelar') {
-                                throw crearErrorPublicacion(
-                                    'CANCELADA_SEGURIDAD',
-                                    'cancelacion_manual',
-                                    'Publicación cancelada manualmente después del corte de seguridad.',
-                                    { reintentable: false }
-                                );
-                            }
-
-                            fallosEvaluablesDesdeCorte = 0;
-                            progresoPublicacion.estado = 'publicando';
-                            progresoPublicacion.seguridadActiva = false;
-                            progresoPublicacion.mensajeSeguridad = '';
-                            progresoPublicacion.mensaje =
-                                'Control de seguridad confirmado. Continuando con la próxima línea.';
+                                    controlSeguridadPublicacion
+                                        .corteDesconexion
+                            );
                         }
+
+                        verificarCorteDesconexion();
+
+                        if (decision === 'cancelar') {
+                            throw crearErrorPublicacion(
+                                'CANCELADA_SEGURIDAD',
+                                'cancelacion_manual',
+                                'Publicación cancelada manualmente después del corte de seguridad.',
+                                { reintentable: false }
+                            );
+                        }
+
+                        progresoPublicacion.estado = 'publicando';
+                        progresoPublicacion.seguridadActiva = false;
+                        progresoPublicacion.mensajeSeguridad = '';
+                        fallosEvaluablesDesdeCorte = 0;
+                        progresoPublicacion.mensaje =
+                            `Línea ${linea.nombre} omitida. Continuando con el resto.`;
                     }
 
                     if (
@@ -12124,7 +12229,8 @@ app.get('/estado', (req, res) => {
     if (MODO_FIXTURES_UI) {
         return res.json({
             lineas: crearLineasSimuladas(FECHA_BASE_FIXTURES_UI),
-            simulada: true
+            simulada: true,
+            estadoRendimiento: controladorRendimiento.obtenerEstado()
         });
     }
 
@@ -12221,7 +12327,10 @@ app.get('/estado', (req, res) => {
             };
         });
 
-    res.json({ lineas: resultado });
+    res.json({
+        lineas: resultado,
+        estadoRendimiento: controladorRendimiento.obtenerEstado()
+    });
 });
 
 app.patch('/lineas/:id', (req, res) => {
@@ -12540,8 +12649,16 @@ app.post('/progreso/reanudar', (req, res) => {
         });
     }
 
-    const tipoDecision =
-        progresoPublicacion.decisionSeguridadPendiente?.tipo || null;
+    const decisionPendiente =
+        progresoPublicacion.decisionSeguridadPendiente || null;
+    const permiteOmitir = decisionPendiente?.permiteOmitir === true;
+    const lineaNombre = String(
+        decisionPendiente?.lineaNombre || ''
+    ).trim();
+    const cantidadLineas = Number(decisionPendiente?.cantidad) || 1;
+    const omisionMultiple =
+        decisionPendiente?.tipo === 'lineas_no_disponibles' &&
+        cantidadLineas > 1;
     if (!resolverDecisionSeguridad('reanudar')) {
         return res.status(409).json({
             error: 'La publicación ya no está esperando una decisión.'
@@ -12549,11 +12666,13 @@ app.post('/progreso/reanudar', (req, res) => {
     }
 
     res.json({
-        mensaje: tipoDecision === 'lineas_no_disponibles'
-            ? 'Líneas no disponibles omitidas. La publicación continuará con las demás.'
-            : tipoDecision === 'desconexion_previa'
-                ? 'Línea omitida. La publicación continuará con las líneas disponibles.'
-                : 'Publicación reanudada. Se continuará con la próxima línea.'
+        mensaje: permiteOmitir
+            ? omisionMultiple
+                ? `${cantidadLineas} líneas no disponibles omitidas. ` +
+                    'La publicación continuará con el resto.'
+                : `Línea ${lineaNombre || 'fallida'} omitida. ` +
+                    'La publicación continuará con el resto.'
+            : 'Publicación reanudada. Se continuará con la próxima línea.'
     });
 });
 
@@ -12564,8 +12683,12 @@ app.post('/progreso/cancelar', (req, res) => {
         });
     }
 
-    const tipoDecision =
-        progresoPublicacion.decisionSeguridadPendiente?.tipo || null;
+    const decisionPendiente =
+        progresoPublicacion.decisionSeguridadPendiente || null;
+    const permiteOmitir = decisionPendiente?.permiteOmitir === true;
+    const lineaNombre = String(
+        decisionPendiente?.lineaNombre || ''
+    ).trim();
     if (!resolverDecisionSeguridad('cancelar')) {
         return res.status(409).json({
             error: 'La publicación ya no está esperando una decisión.'
@@ -12573,11 +12696,10 @@ app.post('/progreso/cancelar', (req, res) => {
     }
 
     res.json({
-        mensaje: [
-            'desconexion_previa',
-            'lineas_no_disponibles'
-        ].includes(tipoDecision)
-            ? 'Campaña detenida. Las líneas restantes no se procesarán.'
+        mensaje: permiteOmitir
+            ? `Campaña detenida después del error de ` +
+                `${lineaNombre || 'la línea fallida'}. ` +
+                'Las líneas restantes no se procesarán.'
             : 'Publicación cancelada por seguridad.'
     });
 });
@@ -13143,7 +13265,8 @@ app.get('/resumen', (req, res) => {
             : 0,
         proximaProgramacion: proximas[0] || null,
         publicacionActiva: progresoPublicacion.activo,
-        progreso: progresoPublicacion
+        progreso: progresoPublicacion,
+        estadoRendimiento: controladorRendimiento.obtenerEstado()
     });
 });
 
@@ -13303,17 +13426,29 @@ app.post(
 
 registrarRutasConfiguracion(app, {
     obtenerConfiguracion: () => configuracion,
+    obtenerEstadoRendimiento: () =>
+        controladorRendimiento.obtenerEstado(),
     guardarConfiguracion: nuevaConfiguracion => {
         configuracion = nuevaConfiguracion;
         guardarConfiguracion();
+    },
+    aplicarModoRendimiento: () => {
+        controladorRendimiento.evaluar();
     },
     aplicarPreferenciasEscritorio: preferencias => {
         global.zerooneDesktop?.aplicarPreferencias?.(preferencias);
     },
     temasVisuales: TEMAS_VISUALES,
     modosRitmo: MODOS_RITMO_PUBLICACION,
+    modosRendimiento: MODOS_RENDIMIENTO,
     minimoDestinatarios: MINIMO_DESTINATARIOS_ESTADO,
-    maximoDestinatarios: MAXIMO_DESTINATARIOS_ESTADO
+    maximoDestinatarios: MAXIMO_DESTINATARIOS_ESTADO,
+    enfriamientoPreventivoPredeterminado:
+        ENFRIAMIENTO_PREVENTIVO_MINUTOS_PREDETERMINADO,
+    minimoEnfriamientoPreventivo:
+        ENFRIAMIENTO_PREVENTIVO_MINUTOS_MINIMO,
+    maximoEnfriamientoPreventivo:
+        ENFRIAMIENTO_PREVENTIVO_MINUTOS_MAXIMO
 });
 
 app.post('/lineas/reconectar-todas', (req, res) => {
@@ -13555,6 +13690,7 @@ app.use((error, req, res, next) => {
 });
 
 process.once('exit', () => {
+    controladorRendimiento.detener();
     runtimeIALocal.detener();
     almacenMensajesRecientes?.cerrar();
     almacenMensajesRecientes = null;
@@ -13585,6 +13721,7 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     );
 
     cargarConfiguracion();
+    controladorRendimiento.iniciar();
     cargarProteccionMiddleware();
     cargarClavesIdempotencia();
     if (MODO_FIXTURES_UI) {

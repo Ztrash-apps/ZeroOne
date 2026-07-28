@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const TAMANO_MAXIMO_PREDETERMINADO = 5 * 1024 * 1024;
 const MAXIMOS_CARACTERES_LINEA = 12000;
+const VENTANA_AGRUPACION_LIBSIGNAL_MS = 1500;
 
 function fechaArchivo(ahora = new Date()) {
     return ahora.toISOString().slice(0, 10);
@@ -96,6 +97,27 @@ function describirArgumentoSeguro(argumento) {
     return `[${redactarTextoLog(nombre)} omitido por seguridad]`;
 }
 
+function obtenerRuidoLibsignalAgrupable(argumentos = []) {
+    const primero = argumentos[0];
+    const texto = primero instanceof Error
+        ? `${primero.name}: ${primero.message}`
+        : String(primero ?? '');
+
+    if (/Session error:.*Bad MAC/iu.test(texto)) {
+        return {
+            clave: 'libsignal-bad-mac',
+            descripcion: 'Bad MAC'
+        };
+    }
+    if (/Failed to decrypt message with any known session/iu.test(texto)) {
+        return {
+            clave: 'libsignal-sin-sesion-coincidente',
+            descripcion: 'mensaje sin sesión cifrada coincidente'
+        };
+    }
+    return null;
+}
+
 function crearRegistradorLocal(opciones = {}) {
     const {
         directorio,
@@ -118,6 +140,8 @@ function crearRegistradorLocal(opciones = {}) {
     let bytesActuales = fsModule.existsSync(rutaActual)
         ? fsModule.statSync(rutaActual).size
         : 0;
+    let agrupacionLibsignal = null;
+    let temporizadorAgrupacionLibsignal = null;
 
     function rutaUnica(sufijo, fecha = ahora()) {
         const base = `zeroone-v${versionArchivo}-${fechaArchivo(fecha)}-${sufijo}`;
@@ -187,7 +211,7 @@ function crearRegistradorLocal(opciones = {}) {
         });
     }
 
-    function registrar(nivel, argumentos = []) {
+    function escribirRegistro(nivel, argumentos = []) {
         try {
             const fecha = ahora();
             const linea = construirLineaRegistro(nivel, argumentos, fecha);
@@ -222,7 +246,59 @@ function crearRegistradorLocal(opciones = {}) {
         }
     }
 
+    function cancelarTemporizadorAgrupacion() {
+        if (!temporizadorAgrupacionLibsignal) return;
+        clearTimeout(temporizadorAgrupacionLibsignal);
+        temporizadorAgrupacionLibsignal = null;
+    }
+
+    function vaciarAgrupacionLibsignal() {
+        cancelarTemporizadorAgrupacion();
+        const agrupacion = agrupacionLibsignal;
+        agrupacionLibsignal = null;
+        if (!agrupacion || agrupacion.repeticiones <= 0) return;
+
+        escribirRegistro('WARN', [
+            `Libsignal: se agruparon ${agrupacion.repeticiones} ` +
+            `repetición(es) adicional(es) de "${agrupacion.descripcion}" ` +
+            'para evitar saturar el registro.'
+        ]);
+    }
+
+    function programarVaciadoAgrupacion() {
+        cancelarTemporizadorAgrupacion();
+        temporizadorAgrupacionLibsignal = setTimeout(
+            vaciarAgrupacionLibsignal,
+            VENTANA_AGRUPACION_LIBSIGNAL_MS
+        );
+        temporizadorAgrupacionLibsignal.unref?.();
+    }
+
+    function registrar(nivel, argumentos = []) {
+        const ruidoAgrupable = obtenerRuidoLibsignalAgrupable(argumentos);
+        if (!ruidoAgrupable) {
+            vaciarAgrupacionLibsignal();
+            escribirRegistro(nivel, argumentos);
+            return;
+        }
+
+        if (agrupacionLibsignal?.clave === ruidoAgrupable.clave) {
+            agrupacionLibsignal.repeticiones += 1;
+            programarVaciadoAgrupacion();
+            return;
+        }
+
+        vaciarAgrupacionLibsignal();
+        escribirRegistro(nivel, argumentos);
+        agrupacionLibsignal = {
+            ...ruidoAgrupable,
+            repeticiones: 0
+        };
+        programarVaciadoAgrupacion();
+    }
+
     function crearNuevoRegistro() {
+        vaciarAgrupacionLibsignal();
         const fecha = ahora();
         const rutaNueva = rutaUnica(`nuevo-${horaArchivo(fecha)}`, fecha);
         crearArchivoRegistro(
@@ -239,11 +315,13 @@ function crearRegistradorLocal(opciones = {}) {
     }
 
     function leerRegistroActual() {
+        vaciarAgrupacionLibsignal();
         if (!fsModule.existsSync(rutaActual)) return '';
         return fsModule.readFileSync(rutaActual, 'utf8');
     }
 
     function eliminarRegistroActual() {
+        vaciarAgrupacionLibsignal();
         const rutaEliminada = rutaActual;
         const archivoEliminado = path.basename(rutaEliminada);
         const fecha = ahora();
@@ -288,7 +366,8 @@ function crearRegistradorLocal(opciones = {}) {
         eliminarRegistroActual,
         leerRegistroActual,
         obtenerRutaActual: () => rutaActual,
-        registrar
+        registrar,
+        vaciar: vaciarAgrupacionLibsignal
     };
 }
 
@@ -317,6 +396,7 @@ function instalarCapturaConsola(registrador, consola = console) {
     }
 
     return () => {
+        registrador.vaciar?.();
         for (const [metodo, original] of originales) {
             consola[metodo] = original;
         }

@@ -59,6 +59,52 @@ test('la redacción conserva mensajes útiles y elimina valores largos', () => {
     assert.doesNotMatch(mensaje, /123456|a{48}/u);
 });
 
+test('agrupa ráfagas de Bad MAC sin saturar el archivo de diagnóstico', t => {
+    const directorio = crearTemporal(t);
+    const registrador = crearRegistradorLocal({
+        directorio,
+        version: '1.5.9',
+        ahora: () => new Date('2026-07-28T12:56:06.000Z')
+    });
+    const mensaje =
+        'Session error:Error: Bad MAC Error: Bad MAC\n' +
+        '    at Object.verifyMAC (libsignal/src/crypto.js:87:15)';
+
+    for (let indice = 0; indice < 5000; indice += 1) {
+        registrador.registrar('ERROR', [mensaje]);
+    }
+    registrador.registrar('INFO', ['Fin de la ráfaga de prueba.']);
+
+    const contenido = registrador.leerRegistroActual();
+    const apariciones = contenido.match(/Session error:Error: Bad MAC/gu) || [];
+
+    assert.equal(apariciones.length, 1);
+    assert.match(contenido, /se agruparon 4999 repetición\(es\)/u);
+    assert.match(contenido, /Fin de la ráfaga de prueba/u);
+    assert.ok(Buffer.byteLength(contenido) < 2000);
+});
+
+test('no agrupa eventos operativos aunque sean idénticos', t => {
+    const directorio = crearTemporal(t);
+    const registrador = crearRegistradorLocal({
+        directorio,
+        version: '1.5.9',
+        ahora: () => new Date('2026-07-28T13:00:00.000Z')
+    });
+    const mensaje = '[Conexión] L47 cerró su socket (código 500).';
+
+    registrador.registrar('WARN', [mensaje]);
+    registrador.registrar('WARN', [mensaje]);
+
+    const contenido = registrador.leerRegistroActual();
+    const apariciones = contenido.match(
+        /\[Conexión\] L47 cerró su socket/gu
+    ) || [];
+
+    assert.equal(apariciones.length, 2);
+    assert.doesNotMatch(contenido, /se agruparon/u);
+});
+
 test('abre únicamente el directorio configurado y propaga errores de Windows', async t => {
     const raiz = crearTemporal(t);
     const directorio = path.join(raiz, 'logs');

@@ -8,11 +8,21 @@ function registrarRutasConfiguracion(app, opciones = {}) {
     const {
         obtenerConfiguracion,
         guardarConfiguracion,
+        obtenerEstadoRendimiento = () => null,
+        aplicarModoRendimiento = () => {},
         aplicarPreferenciasEscritorio = () => {},
         temasVisuales = new Set(),
         modosRitmo = new Set(),
+        modosRendimiento = new Set([
+            'normal',
+            'adaptativo',
+            'ahorro'
+        ]),
         minimoDestinatarios = 1,
-        maximoDestinatarios = 1000
+        maximoDestinatarios = 1000,
+        enfriamientoPreventivoPredeterminado = 5,
+        minimoEnfriamientoPreventivo = 1,
+        maximoEnfriamientoPreventivo = 15
     } = opciones;
 
     if (typeof obtenerConfiguracion !== 'function') {
@@ -23,18 +33,31 @@ function registrarRutasConfiguracion(app, opciones = {}) {
     }
 
     app.get('/configuracion', (_req, res) => {
-        res.json(obtenerConfiguracion());
+        res.json({
+            ...obtenerConfiguracion(),
+            estadoRendimiento: obtenerEstadoRendimiento()
+        });
     });
 
     app.put('/configuracion', (req, res) => {
         const actual = obtenerConfiguracion();
         const limiteFallos = Number(req.body.limiteFallosSeguridad);
         const modoRitmo = req.body.modoRitmoPredeterminado;
+        const modoRendimiento = String(
+            req.body.modoRendimiento ??
+            actual.modoRendimiento ??
+            'normal'
+        ).trim().toLowerCase();
         const intervaloSegundos = Number(req.body.intervaloSegundosPredeterminado);
         const variacionSegundos = Number(req.body.variacionSegundosPredeterminada);
         const lineasPorGrupo = Number(req.body.lineasPorGrupoPredeterminado);
         const intervalo = Number(req.body.intervaloMinutosPredeterminado);
         const limiteDestinatarios = Number(req.body.maximoDestinatariosPorEstado);
+        const enfriamientoPreventivo = Number(
+            req.body.enfriamientoPreventivoMinutos
+                ?? actual.enfriamientoPreventivoMinutos
+                ?? enfriamientoPreventivoPredeterminado
+        );
         const temaSolicitado = req.body.temaVisual ?? actual.temaVisual;
         const temaVisual = String(temaSolicitado || '').trim().toLowerCase();
 
@@ -55,6 +78,12 @@ function registrarRutasConfiguracion(app, opciones = {}) {
             return responderError(
                 res,
                 'El modo de ritmo predeterminado no es válido.'
+            );
+        }
+        if (!modosRendimiento.has(modoRendimiento)) {
+            return responderError(
+                res,
+                'El modo de rendimiento seleccionado no es válido.'
             );
         }
         if (
@@ -105,6 +134,18 @@ function registrarRutasConfiguracion(app, opciones = {}) {
                     `${minimoDestinatarios} y ${maximoDestinatarios}.`
             );
         }
+        if (
+            !Number.isInteger(enfriamientoPreventivo)
+            || enfriamientoPreventivo < minimoEnfriamientoPreventivo
+            || enfriamientoPreventivo > maximoEnfriamientoPreventivo
+        ) {
+            return responderError(
+                res,
+                `El enfriamiento preventivo debe estar entre ` +
+                    `${minimoEnfriamientoPreventivo} y ` +
+                    `${maximoEnfriamientoPreventivo} minutos.`
+            );
+        }
 
         const nuevaConfiguracion = {
             ...actual,
@@ -120,11 +161,13 @@ function registrarRutasConfiguracion(app, opciones = {}) {
                     : req.body.agendarMutuosSinUsuario === true,
             temaVisual,
             modoRitmoPredeterminado: modoRitmo,
+            modoRendimiento,
             intervaloSegundosPredeterminado: intervaloSegundos,
             variacionSegundosPredeterminada: variacionSegundos,
             lineasPorGrupoPredeterminado: lineasPorGrupo,
             intervaloMinutosPredeterminado: intervalo,
-            maximoDestinatariosPorEstado: limiteDestinatarios
+            maximoDestinatariosPorEstado: limiteDestinatarios,
+            enfriamientoPreventivoMinutos: enfriamientoPreventivo
         };
 
         try {
@@ -143,9 +186,15 @@ function registrarRutasConfiguracion(app, opciones = {}) {
         }
 
         guardarConfiguracion(nuevaConfiguracion);
+        aplicarModoRendimiento(modoRendimiento);
+        const estadoRendimiento = obtenerEstadoRendimiento();
         return res.json({
             mensaje: 'Configuración guardada.',
-            configuracion: nuevaConfiguracion
+            configuracion: {
+                ...nuevaConfiguracion,
+                estadoRendimiento
+            },
+            estadoRendimiento
         });
     });
 }

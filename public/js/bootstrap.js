@@ -4,6 +4,10 @@
                 const data = await respuesta.json();
                 configuracionActual = data;
                 aplicarTemaVisual(data.temaVisual, true);
+                document.getElementById('config-modo-rendimiento').value =
+                    normalizarModoRendimiento(data.modoRendimiento);
+                const estadoRendimiento = data.estadoRendimiento;
+                aplicarEstadoRendimiento({ ...data, estadoRendimiento });
                 establecerModoRitmo(
                     'config-modo-ritmo',
                     normalizarModoRitmo(data.modoRitmoPredeterminado)
@@ -32,6 +36,20 @@
                 document.getElementById('config-limite-fallos').value = limiteFallosSeguridad;
                 document.getElementById('config-limite-fallos-valor').textContent =
                     textoLimiteFallos(limiteFallosSeguridad);
+                const enfriamientoPreventivoMinutos = numeroConfigurado(
+                    data.enfriamientoPreventivoMinutos,
+                    1,
+                    15,
+                    5
+                );
+                document.getElementById(
+                    'config-enfriamiento-preventivo-minutos'
+                ).value = enfriamientoPreventivoMinutos;
+                document.getElementById(
+                    'config-enfriamiento-preventivo-valor'
+                ).textContent = textoEnfriamientoPreventivo(
+                    enfriamientoPreventivoMinutos
+                );
                 document.getElementById('config-notificaciones').checked = data.notificaciones !== false;
                 document.getElementById('config-segundo-plano').checked =
                     data.mantenerEnSegundoPlano !== false;
@@ -49,6 +67,7 @@
                 'general',
                 'publicacion',
                 'seguridad',
+                'rendimiento',
                 'agendamiento',
                 'apariencia'
             ]);
@@ -1261,6 +1280,12 @@
             localStorage.getItem('zeroone-settings-tab') || 'general',
             false
         );
+        document
+            .getElementById('estado-modo-rendimiento')
+            ?.addEventListener('click', () => {
+                mostrarSeccion('configuracion');
+                activarPestanaConfiguracion('rendimiento');
+            });
         [
             'config-modo-ritmo',
             'modo-ritmo',
@@ -1275,6 +1300,13 @@
         document.getElementById('config-limite-fallos').addEventListener('input', evento => {
             document.getElementById('config-limite-fallos-valor').textContent =
                 textoLimiteFallos(evento.target.value);
+        });
+        document.getElementById(
+            'config-enfriamiento-preventivo-minutos'
+        ).addEventListener('input', evento => {
+            document.getElementById(
+                'config-enfriamiento-preventivo-valor'
+            ).textContent = textoEnfriamientoPreventivo(evento.target.value);
         });
 
         document.getElementById('btn-guardar-configuracion').onclick = async () => {
@@ -1295,15 +1327,24 @@
                 const maximoDestinatariosPorEstado = Number(
                     document.getElementById('config-maximo-destinatarios').value
                 );
+                const enfriamientoPreventivoMinutos = Number(
+                    document.getElementById(
+                        'config-enfriamiento-preventivo-minutos'
+                    ).value
+                );
                 const temaVisual = normalizarTemaVisual(
                     document.querySelector('input[name="config-tema-visual"]:checked')?.value
                 );
-
+                const modoRendimiento = obtenerModoRendimiento();
                 const segundosValidos = Number.isInteger(intervaloSegundosPredeterminado) && intervaloSegundosPredeterminado >= 10 && intervaloSegundosPredeterminado <= 3600;
                 const variacionValida = Number.isInteger(variacionSegundosPredeterminada) && variacionSegundosPredeterminada >= 0 && variacionSegundosPredeterminada <= 30 && variacionSegundosPredeterminada <= intervaloSegundosPredeterminado;
                 const grupoValido = Number.isInteger(lineasPorGrupoPredeterminado) && lineasPorGrupoPredeterminado >= 1 && lineasPorGrupoPredeterminado <= 10;
                 const minutosValidos = Number.isFinite(intervaloMinutosPredeterminado) && intervaloMinutosPredeterminado >= 0 && intervaloMinutosPredeterminado <= 1440;
                 const destinatariosValidos = Number.isInteger(maximoDestinatariosPorEstado) && maximoDestinatariosPorEstado >= 1 && maximoDestinatariosPorEstado <= 1000;
+                const enfriamientoPreventivoValido =
+                    Number.isInteger(enfriamientoPreventivoMinutos) &&
+                    enfriamientoPreventivoMinutos >= 1 &&
+                    enfriamientoPreventivoMinutos <= 15;
 
                 if (modoRitmoPredeterminado === 'secuencial' && !segundosValidos) {
                     throw new Error('El intervalo secuencial debe estar entre 10 y 3600 segundos.');
@@ -1319,6 +1360,11 @@
                 }
                 if (!destinatariosValidos) {
                     throw new Error('Los destinatarios por estado deben estar entre 1 y 1.000.');
+                }
+                if (!enfriamientoPreventivoValido) {
+                    throw new Error(
+                        'El enfriamiento preventivo debe estar entre 1 y 15 minutos.'
+                    );
                 }
 
                 if (!segundosValidos) intervaloSegundosPredeterminado = 45;
@@ -1336,6 +1382,10 @@
                         lineasPorGrupoPredeterminado,
                         intervaloMinutosPredeterminado,
                         maximoDestinatariosPorEstado,
+                        enfriamientoPreventivoMinutos,
+                        modoRendimiento: document.getElementById(
+                            'config-modo-rendimiento'
+                        ).value || modoRendimiento,
                         temaVisual,
                         limiteFallosSeguridad: Number(
                             document.getElementById('config-limite-fallos').value
@@ -1355,9 +1405,17 @@
                 if (!respuesta.ok) throw new Error(data.error || 'No se pudo guardar.');
                 configuracionActual = data.configuracion;
                 aplicarTemaVisual(data.configuracion.temaVisual, true);
+                establecerModoRendimiento(
+                    data.configuracion.modoRendimiento
+                );
+                aplicarEstadoRendimiento(data.configuracion);
                 toast(data.mensaje, 'success');
             } catch (error) {
                 aplicarTemaVisual(configuracionActual?.temaVisual, true);
+                establecerModoRendimiento(
+                    configuracionActual?.modoRendimiento
+                );
+                aplicarEstadoRendimiento(configuracionActual || {});
                 toast(error.message, 'error');
             }
         };
@@ -1565,14 +1623,9 @@
         };
 
         document.getElementById('btn-cancelar-seguridad').onclick = async () => {
-            const tipoDecision = String(
+            const omisionDisponible =
                 document.getElementById('alerta-seguridad')
-                    .dataset.tipoDecisionSeguridad || ''
-            ).trim().toLowerCase();
-            const omisionDisponible = [
-                'desconexion_previa',
-                'lineas_no_disponibles'
-            ].includes(tipoDecision);
+                    .dataset.permiteOmitir === 'true';
             const confirmado = await solicitarConfirmacion({
                 titulo: omisionDisponible
                     ? 'Detener campaña'
@@ -1766,7 +1819,10 @@
                 : null;
 
             const programar = () => {
-                temporizador = window.setTimeout(ejecutar, intervaloMs);
+                temporizador = window.setTimeout(
+                    ejecutar,
+                    intervaloRefrescoNoCritico(intervaloMs)
+                );
             };
             const ejecutar = async () => {
                 const correspondeSeccion = !seccionesPermitidas

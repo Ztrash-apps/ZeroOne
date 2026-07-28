@@ -88,13 +88,30 @@ test('el envío incierto se confirma por solicitud sin cerrar el progreso', () =
         path.join(rutaPublica, 'js', 'bootstrap.js'),
         'utf8'
     );
+    const interfaz = fs.readFileSync(
+        path.join(rutaPublica, 'css', 'interface.css'),
+        'utf8'
+    );
 
     assert.match(html, /id="confirmacion-envio-progreso"/u);
     assert.match(html, /id="btn-confirmar-envio-publicado"/u);
     assert.match(html, /id="btn-omitir-envio-no-publicado"/u);
+    assert.match(html, /id="texto-omitir-envio-no-publicado"/u);
+    assert.match(
+        html,
+        /id="btn-confirmar-envio-publicado"[\s\S]+id="btn-omitir-envio-no-publicado"/u
+    );
     assert.match(html, /id="btn-simulacro-envio"[\s\S]+Modo de prueba/u);
     assert.match(publicacion, /confirmacionEnvioPendiente\?\.solicitudId/u);
     assert.match(publicacion, /Esperando tu confirmación/u);
+    assert.match(
+        publicacion,
+        /texto-omitir-envio-no-publicado[\s\S]+Omitir \$\{nombre \|\| numero \|\| 'esta línea'\} y continuar con el resto/u
+    );
+    assert.match(
+        interfaz,
+        /\.uncertain-send-button\s*\{[\s\S]+line-height:\s*1\.35;[\s\S]+white-space:\s*normal;/u
+    );
     assert.match(publicacion, /simulacroDisponible\s*===\s*true/u);
     assert.match(
         bootstrap,
@@ -106,7 +123,7 @@ test('el envío incierto se confirma por solicitud sin cerrar el progreso', () =
     );
 });
 
-test('la pausa por desconexión permite omitir la línea o detener la campaña', () => {
+test('cada decisión segura permite omitir la línea identificada o detener la campaña', () => {
     const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
     const publicacion = fs.readFileSync(
         path.join(rutaPublica, 'js', 'publication.js'),
@@ -122,11 +139,88 @@ test('la pausa por desconexión permite omitir la línea o detener la campaña',
     assert.match(html, /id="texto-cancelar-seguridad"/u);
     assert.match(
         publicacion,
-        /decisionSeguridadPendiente\?\.tipo[\s\S]+Omitir y continuar/u
+        /decisionSeguridad\.permiteOmitir\s*===\s*true[\s\S]+Omitir \$\{lineaDecision \|\| 'la línea fallida'\} y continuar con el resto/u
+    );
+    assert.match(
+        publicacion,
+        /decisionSeguridadPendiente[\s\S]+\.permiteOmitir\s*===\s*true[\s\S]+Esperando tu decisión/u
+    );
+    assert.match(
+        publicacion,
+        /Omitir \$\{cantidadLineasNoDisponibles\} líneas no disponibles y continuar con el resto/u
+    );
+    assert.match(
+        publicacion,
+        /dataset\.permiteOmitir[\s\S]+Error en \$\{lineaDecision\}/u
     );
     assert.match(
         bootstrap,
-        /dataset\.tipoDecisionSeguridad[\s\S]+Detener campaña/u
+        /dataset\.permiteOmitir\s*===\s*'true'[\s\S]+Detener campaña/u
+    );
+});
+
+test('Ajustes permite configurar el enfriamiento preventivo sin alterar WA_429', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+
+    assert.match(
+        html,
+        /id="config-enfriamiento-preventivo-minutos"[^>]+min="1"[^>]+max="15"/u
+    );
+    assert.match(html, /id="config-enfriamiento-preventivo-valor"/u);
+    assert.match(html, /WA_429 no se puede configurar/u);
+    assert.match(html, /WhatsApp determina ese tiempo de espera/u);
+    assert.match(
+        bootstrap,
+        /data\.enfriamientoPreventivoMinutos[\s\S]+textoEnfriamientoPreventivo/u
+    );
+    assert.match(
+        bootstrap,
+        /body:\s*JSON\.stringify\([\s\S]+enfriamientoPreventivoMinutos/u
+    );
+});
+
+test('Ajustes ofrece rendimiento adaptativo sin hibernar ni desconectar líneas', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const shell = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'shell.js'),
+        'utf8'
+    );
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+
+    assert.match(html, /id="config-modo-rendimiento"/u);
+    for (const modo of ['normal', 'adaptativo', 'ahorro']) {
+        assert.match(
+            html,
+            new RegExp(
+                `(?:option|input)[^>]+value="${modo}"`,
+                'u'
+            ),
+            `debe ofrecer el modo ${modo}`
+        );
+    }
+    assert.match(html, /id="estado-modo-rendimiento"/u);
+    assert.match(
+        html,
+        /(?:no|nunca) desconecta[^<]*(?:líneas|sesiones)[^<]*(?:líneas|sesiones)/iu
+    );
+    assert.match(
+        bootstrap,
+        /normalizarModoRendimiento\(data\.modoRendimiento\)/u
+    );
+    assert.match(
+        bootstrap,
+        /(?:obtenerModoRendimiento\(\)|document\.getElementById\([\s\S]+config-modo-rendimiento)[\s\S]+body:\s*JSON\.stringify\([\s\S]+modoRendimiento/u
+    );
+    assert.match(
+        shell,
+        /estadoRendimiento[\s\S]+estado-modo-rendimiento/u
     );
 });
 

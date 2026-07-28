@@ -973,7 +973,9 @@
             agendaTemporizador = setTimeout(() => {
                 agendaTemporizador = null;
                 actualizarAgendamiento(false);
-            }, 2000);
+            }, procesoActivo || analisisIAActivo || modeloIAActivo
+                ? 2000
+                : intervaloRefrescoNoCritico(2000));
         }
 
         async function actualizarAgendamiento(mostrarError = false) {

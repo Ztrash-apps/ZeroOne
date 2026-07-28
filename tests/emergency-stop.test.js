@@ -53,6 +53,9 @@ function cargarBackendAislado(
                 solicitarAltoTotalPublicacion,
                 resolverConfirmacionEnvioPendiente,
                 registrarCorteDesconexion,
+                clasificarErrorPublicacion,
+                activarProteccionMiddlewarePorError,
+                cargarConfiguracion,
                 solicitarReconexionManual,
                 solicitarEliminacionEstado,
                 lineas,
@@ -226,6 +229,238 @@ function crearParametrosPublicacion(idsLineas, rutaImagen, texto) {
         origen: 'prueba interna'
     };
 }
+
+test('un WA_500 de envío con el socket intacto no se confunde con una desconexión', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-500-envio-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        const linea = crearLinea(async () => {});
+        const socketUsado = linea.socket;
+        const error = new Error('El servidor rechazó temporalmente el envío.');
+        error.output = {
+            statusCode: 500
+        };
+
+        const clasificacion = backend.clasificarErrorPublicacion(
+            error,
+            linea,
+            socketUsado,
+            'envio'
+        );
+
+        assert.equal(clasificacion.tipoError, 'envio');
+        assert.equal(clasificacion.codigoError, 'WA_500');
+        assert.equal(clasificacion.envioIncierto, false);
+        assert.equal(clasificacion.reintentoSeguro, true);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un WA_500 con el socket cerrado sí se conserva como desconexión', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-500-desconexion-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        const linea = crearLinea(async () => {});
+        const socketUsado = linea.socket;
+        linea.estado = 'desconectado';
+        linea.socket = null;
+
+        const error = new Error('WhatsApp cerró la sesión.');
+        error.output = {
+            statusCode: 500
+        };
+
+        const clasificacion = backend.clasificarErrorPublicacion(
+            error,
+            linea,
+            socketUsado,
+            'envio'
+        );
+
+        assert.equal(clasificacion.tipoError, 'desconexion');
+        assert.equal(clasificacion.codigoError, 'WA_500');
+        assert.equal(clasificacion.envioIncierto, true);
+        assert.equal(clasificacion.reintentoSeguro, false);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('el ajuste configura solo el enfriamiento preventivo de desconexión', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-enfriamiento-preventivo-')
+    );
+
+    try {
+        fs.writeFileSync(
+            path.join(rutaDatos, 'configuracion.json'),
+            JSON.stringify({ enfriamientoPreventivoMinutos: 2 }),
+            'utf8'
+        );
+        const backend = cargarBackendAislado(rutaDatos);
+        backend.cargarConfiguracion();
+        const error = new Error('Desconexión preventiva simulada.');
+        error.codigo = 'DETENIDA_DESCONEXION';
+        error.preflight = false;
+
+        const proteccion =
+            backend.activarProteccionMiddlewarePorError(error);
+
+        assert.equal(proteccion.tipo, 'desconexion');
+        assert.ok(proteccion.segundosRestantes >= 118);
+        assert.ok(proteccion.segundosRestantes <= 120);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('el envío incierto conserva sus 10 minutos de protección propia', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-enfriamiento-incierto-')
+    );
+
+    try {
+        fs.writeFileSync(
+            path.join(rutaDatos, 'configuracion.json'),
+            JSON.stringify({ enfriamientoPreventivoMinutos: 1 }),
+            'utf8'
+        );
+        const backend = cargarBackendAislado(rutaDatos);
+        backend.cargarConfiguracion();
+        const error = new Error('Resultado del envío incierto.');
+        error.codigo = 'DETENIDA_DESCONEXION';
+        error.envioIncierto = true;
+
+        const proteccion =
+            backend.activarProteccionMiddlewarePorError(error);
+
+        assert.equal(proteccion.tipo, 'envio_incierto');
+        assert.ok(proteccion.segundosRestantes >= 598);
+        assert.ok(proteccion.segundosRestantes <= 600);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un fallo de envío común ofrece omitir la línea y continuar con el resto', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-error-linea-continuar-')
+    );
+    let servidorPrueba = null;
+
+    try {
+        fs.writeFileSync(
+            path.join(rutaDatos, 'configuracion.json'),
+            JSON.stringify({ limiteFallosSeguridad: 1 }),
+            'utf8'
+        );
+        const backend = cargarBackendAislado(rutaDatos);
+        backend.cargarConfiguracion();
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(async () => {
+            enviosPrimeraLinea += 1;
+            const error = new Error('WhatsApp rechazó este envío sin cerrar el socket.');
+            error.statusCode = 500;
+            throw error;
+        });
+        primeraLinea.nombre = 'Línea con fallo recuperable';
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-ERROR-RECUPERABLE'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Línea posterior al fallo recuperable',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+        servidorPrueba = await abrirServidorPrueba(backend.app);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'error-linea-continuar.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Continuar después de un error recuperable'
+            )
+        );
+
+        const decision = await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'detenido_seguridad' &&
+                progreso.decisionSeguridadPendiente?.tipo === 'error_linea'
+                ? progreso.decisionSeguridadPendiente
+                : null;
+        }, {
+            mensaje:
+                'El error recuperable no ofreció omitir la línea y continuar.'
+        });
+
+        assert.equal(decision.lineaId, primeraLinea.id);
+        assert.equal(decision.lineaNombre, primeraLinea.nombre);
+        assert.equal(decision.codigo, 'WA_500');
+        assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 0);
+
+        const reanudacion = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/reanudar',
+            { method: 'POST' }
+        );
+        assert.equal(reanudacion.respuesta.status, 200);
+        assert.equal(
+            reanudacion.cuerpo.mensaje,
+            `Línea ${primeraLinea.nombre} omitida. ` +
+                'La publicación continuará con el resto.'
+        );
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 1 });
+        assert.equal(enviosSegundaLinea, 1);
+        assert.equal(
+            backend.obtenerProgreso().estado,
+            'completado_con_errores'
+        );
+        assert.equal(
+            backend.obtenerProgreso().decisionSeguridadPendiente,
+            null
+        );
+        const fallo = backend.obtenerProgreso().lineasFallidas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(fallo.tipoError, 'envio');
+        assert.equal(fallo.codigoError, 'WA_500');
+        assert.equal(fallo.envioIncierto, false);
+        assert.equal(fallo.reintentoSeguro, true);
+    } finally {
+        if (servidorPrueba) {
+            await cerrarServidorPrueba(servidorPrueba.servidor);
+        }
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
 
 test('Alto total cancela la cola y conserva el ID del envío en curso', async () => {
     const rutaDatos = fs.mkdtempSync(
@@ -818,7 +1053,8 @@ test('un WA_408 preflight permite omitir la línea y continuar sin enfriamiento'
                 const progreso = backend.obtenerProgreso();
                 return progreso.estado === 'detenido_seguridad' &&
                     progreso.decisionSeguridadPendiente?.tipo ===
-                        'desconexion_previa';
+                        'error_linea' &&
+                    progreso.decisionSeguridadPendiente?.permiteOmitir === true;
             },
             {
                 mensaje:
@@ -862,6 +1098,129 @@ test('un WA_408 preflight permite omitir la línea y continuar sin enfriamiento'
         assert.equal(fallo.reintentoSeguro, true);
         assert.equal(proteccion.activa, false);
         assert.equal(proteccion.segundosRestantes, 0);
+    } finally {
+        if (servidorPrueba) {
+            await cerrarServidorPrueba(servidorPrueba.servidor);
+        }
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('una desconexión fatal antes del envío se puede omitir porque no deja un resultado incierto', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-401-preflight-continuar-')
+    );
+    let servidorPrueba = null;
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(async () => {
+            enviosPrimeraLinea += 1;
+            throw new Error('No debía enviar después de una desconexión fatal.');
+        });
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-WA-401-PREFLIGHT'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Línea posterior al WA_401',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        primeraLinea.socket = null;
+        primeraLinea.jid = null;
+        primeraLinea.estado = 'reconectando';
+        primeraLinea.etiqueta = 'caida';
+        primeraLinea.iniciando = true;
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+        servidorPrueba = await abrirServidorPrueba(backend.app);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-401-preflight-continuar.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Omitir desconexión fatal previa al envío'
+            )
+        );
+
+        await esperarHasta(
+            () => backend.obtenerProgreso().estado === 'esperando_reconexion',
+            {
+                mensaje:
+                    'La línea fatal no entró en preparación antes de simular el cierre.'
+            }
+        );
+        primeraLinea.reconexionBloqueada = true;
+        backend.registrarCorteDesconexion(
+            primeraLinea,
+            'WhatsApp cerró la sesión antes de intentar el envío.',
+            401,
+            {
+                fasePublicacion: 'preparacion',
+                preflight: true,
+                envioIncierto: false
+            }
+        );
+
+        const decision = await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'detenido_seguridad' &&
+                progreso.decisionSeguridadPendiente?.tipo ===
+                    'error_linea' &&
+                progreso.decisionSeguridadPendiente?.permiteOmitir === true
+                ? progreso.decisionSeguridadPendiente
+                : null;
+        }, {
+            mensaje:
+                'La desconexión fatal preflight no ofreció una omisión segura.'
+        });
+
+        assert.equal(decision.lineaId, primeraLinea.id);
+        assert.equal(decision.codigo, 'WA_401');
+        assert.equal(enviosPrimeraLinea, 0);
+        assert.equal(enviosSegundaLinea, 0);
+        assert.equal(
+            backend.obtenerProgreso().confirmacionEnvioPendiente,
+            null
+        );
+
+        const reanudacion = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/reanudar',
+            { method: 'POST' }
+        );
+        assert.equal(reanudacion.respuesta.status, 200);
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 1 });
+        assert.equal(enviosPrimeraLinea, 0);
+        assert.equal(enviosSegundaLinea, 1);
+        const fallo = backend.obtenerProgreso().lineasFallidas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(fallo.codigoError, 'WA_401');
+        assert.equal(fallo.fase, 'preparacion');
+        assert.equal(fallo.envioIncierto, false);
+        assert.equal(fallo.reintentoSeguro, true);
+        const proteccion = backend.obtenerProteccionMiddleware();
+        assert.equal(proteccion.activa, false);
     } finally {
         if (servidorPrueba) {
             await cerrarServidorPrueba(servidorPrueba.servidor);
@@ -936,7 +1295,8 @@ test('cancelar durante la pausa de un WA_408 detiene las líneas restantes', asy
                 const progreso = backend.obtenerProgreso();
                 return progreso.estado === 'detenido_seguridad' &&
                     progreso.decisionSeguridadPendiente?.tipo ===
-                        'desconexion_previa';
+                        'error_linea' &&
+                    progreso.decisionSeguridadPendiente?.permiteOmitir === true;
             }
         );
 
@@ -975,9 +1335,16 @@ test('un WA_429 mantiene el corte absoluto y no ofrece continuar', async () => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zeroone-wa-429-sin-continuar-')
     );
+    let servidorPrueba = null;
 
     try {
+        fs.writeFileSync(
+            path.join(rutaDatos, 'configuracion.json'),
+            JSON.stringify({ enfriamientoPreventivoMinutos: 15 }),
+            'utf8'
+        );
         const backend = cargarBackendAislado(rutaDatos);
+        backend.cargarConfiguracion();
         let enviosPrimeraLinea = 0;
         let enviosSegundaLinea = 0;
         const primeraLinea = crearLinea(async () => {
@@ -1001,6 +1368,7 @@ test('un WA_429 mantiene el corte absoluto y no ofrece continuar', async () => {
         );
         backend.lineas.set(primeraLinea.id, primeraLinea);
         backend.lineas.set(segundaLinea.id, segundaLinea);
+        servidorPrueba = await abrirServidorPrueba(backend.app);
 
         const rutaImagen = crearImagenPrueba(
             rutaDatos,
@@ -1027,8 +1395,25 @@ test('un WA_429 mantiene el corte absoluto y no ofrece continuar', async () => {
         assert.equal(progreso.codigoErrorCorte, 'WA_429');
         assert.equal(progreso.decisionSeguridadPendiente, null);
         assert.equal(proteccion.activa, true);
-        assert.ok(proteccion.segundosRestantes > 0);
+        assert.equal(proteccion.tipo, 'limite_temporal');
+        assert.ok(proteccion.segundosRestantes >= 58);
+        assert.ok(proteccion.segundosRestantes <= 60);
+
+        const intentoContinuar = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/reanudar',
+            { method: 'POST' }
+        );
+        assert.equal(intentoContinuar.respuesta.status, 409);
+        assert.match(
+            intentoContinuar.cuerpo.error,
+            /no hay una publicación detenida por seguridad/i
+        );
+        assert.equal(enviosSegundaLinea, 0);
     } finally {
+        if (servidorPrueba) {
+            await cerrarServidorPrueba(servidorPrueba.servidor);
+        }
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }
 });
@@ -1136,7 +1521,9 @@ test('dos WA_408 preflight consecutivos pueden omitirse antes de continuar', asy
                     const progreso = backend.obtenerProgreso();
                     return progreso.estado === 'detenido_seguridad' &&
                         progreso.decisionSeguridadPendiente?.tipo ===
-                            'desconexion_previa' &&
+                            'error_linea' &&
+                        progreso.decisionSeguridadPendiente
+                            ?.permiteOmitir === true &&
                         progreso.decisionSeguridadPendiente?.lineaId ===
                             linea.id;
                 },
@@ -1369,10 +1756,170 @@ test('una reconexión manual tardía no corta una publicación activa', async ()
     }
 });
 
+for (const escenario of [
+    {
+        resultado: 'publicado',
+        descripcion: 'publicado',
+        correctas: 2,
+        fallidas: 0
+    },
+    {
+        resultado: 'no_publicado',
+        descripcion: 'no publicado',
+        correctas: 1,
+        fallidas: 1
+    }
+]) {
+    test(`un rechazo WA_408 durante sendMessage espera confirmar ${escenario.descripcion} antes de continuar`, async () => {
+        const rutaDatos = fs.mkdtempSync(
+            path.join(
+                os.tmpdir(),
+                `zeroone-wa-408-envio-${escenario.resultado}-`
+            )
+        );
+        let servidorPrueba = null;
+
+        try {
+            const backend = cargarBackendAislado(rutaDatos);
+            let enviosPrimeraLinea = 0;
+            let enviosSegundaLinea = 0;
+            let primeraLinea = null;
+            primeraLinea = crearLinea(async () => {
+                enviosPrimeraLinea += 1;
+                primeraLinea.estado = 'desconectado';
+                primeraLinea.etiqueta = 'caida';
+                primeraLinea.socket = null;
+                const error = new Error(
+                    'Connection Closed mientras WhatsApp procesaba el estado.'
+                );
+                error.statusCode = 408;
+                throw error;
+            });
+            primeraLinea.nombre = 'Línea con WA_408 durante el envío';
+            const segundaLinea = crearLinea(
+                async () => {
+                    enviosSegundaLinea += 1;
+                    return {
+                        key: {
+                            remoteJid: 'status@broadcast',
+                            fromMe: true,
+                            id:
+                                `ID-DESPUES-DE-WA-408-${escenario.resultado}`
+                        },
+                        messageTimestamp: Math.floor(Date.now() / 1000)
+                    };
+                },
+                {
+                    id: ID_LINEA_SIGUIENTE,
+                    nombre: 'Línea posterior al WA_408 de envío',
+                    jidPropio: '595888888888@s.whatsapp.net',
+                    contacto: '595222222222@s.whatsapp.net'
+                }
+            );
+            backend.lineas.set(primeraLinea.id, primeraLinea);
+            backend.lineas.set(segundaLinea.id, segundaLinea);
+            servidorPrueba = await abrirServidorPrueba(backend.app);
+
+            const rutaImagen = crearImagenPrueba(
+                rutaDatos,
+                `wa-408-envio-${escenario.resultado}.png`
+            );
+            const tarea = backend.ejecutarPublicacion(
+                crearParametrosPublicacion(
+                    [primeraLinea.id, segundaLinea.id],
+                    rutaImagen,
+                    'Confirmar un rechazo ambiguo durante el envío'
+                )
+            );
+            tarea.catch(() => {});
+
+            const solicitud = await esperarHasta(() => {
+                const progreso = backend.obtenerProgreso();
+                return progreso.estado === 'esperando_confirmacion_envio'
+                    ? progreso.confirmacionEnvioPendiente
+                    : null;
+            }, {
+                mensaje:
+                    'El rechazo por desconexión durante sendMessage no pidió confirmación.'
+            });
+
+            assert.equal(solicitud.lineaId, primeraLinea.id);
+            assert.equal(enviosPrimeraLinea, 1);
+            assert.equal(enviosSegundaLinea, 0);
+            assert.equal(
+                backend.obtenerProgreso().decisionSeguridadPendiente,
+                null
+            );
+
+            const intentoContinuar = await solicitarJson(
+                servidorPrueba.baseUrl,
+                '/progreso/reanudar',
+                { method: 'POST' }
+            );
+            assert.equal(intentoContinuar.respuesta.status, 409);
+            assert.equal(enviosSegundaLinea, 0);
+
+            const confirmacion = await solicitarJson(
+                servidorPrueba.baseUrl,
+                '/progreso/confirmar-envio',
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        solicitudId: solicitud.solicitudId,
+                        resultado: escenario.resultado
+                    })
+                }
+            );
+            assert.equal(confirmacion.respuesta.status, 200);
+            assert.equal(confirmacion.cuerpo.resuelta, true);
+
+            const resultado = await tarea;
+            assert.deepEqual(resultado, {
+                correctas: escenario.correctas,
+                fallidas: escenario.fallidas
+            });
+            assert.equal(enviosPrimeraLinea, 1);
+            assert.equal(enviosSegundaLinea, 1);
+            assert.equal(
+                backend.obtenerProgreso().estado,
+                escenario.fallidas > 0
+                    ? 'completado_con_errores'
+                    : 'completado'
+            );
+            assert.equal(
+                backend.obtenerProgreso().confirmacionEnvioPendiente,
+                null
+            );
+
+            if (escenario.resultado === 'publicado') {
+                const primeraCorrecta =
+                    backend.obtenerProgreso().lineasCorrectas.find(
+                        item => item.id === primeraLinea.id
+                    );
+                assert.equal(primeraCorrecta.confirmacionManual, true);
+                assert.equal(primeraCorrecta.estadoId, null);
+            } else {
+                const fallo = backend.obtenerProgreso().lineasFallidas.find(
+                    item => item.id === primeraLinea.id
+                );
+                assert.equal(fallo.tipoError, 'envio_omitido_manual');
+                assert.equal(fallo.codigoError, 'ENVIO_OMITIDO_MANUAL');
+                assert.equal(fallo.confirmacionManual, 'no_publicado');
+            }
+        } finally {
+            if (servidorPrueba) {
+                await cerrarServidorPrueba(servidorPrueba.servidor);
+            }
+            fs.rmSync(rutaDatos, { recursive: true, force: true });
+        }
+    });
+}
+
 test('un envío incierto confirmado como publicado continúa sin poner la línea en cuarentena', async () => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zeroone-confirmacion-publicado-')
     );
+    let servidorPrueba = null;
 
     try {
         const backend = cargarBackendAislado(rutaDatos, {
@@ -1405,6 +1952,7 @@ test('un envío incierto confirmado como publicado continúa sin poner la línea
         );
         backend.lineas.set(primeraLinea.id, primeraLinea);
         backend.lineas.set(segundaLinea.id, segundaLinea);
+        servidorPrueba = await abrirServidorPrueba(backend.app);
 
         const rutaImagen = crearImagenPrueba(
             rutaDatos,
@@ -1431,6 +1979,18 @@ test('un envío incierto confirmado como publicado continúa sin poner la línea
             }
         );
         assert.equal(enviosPrimeraLinea, 1);
+        assert.equal(enviosSegundaLinea, 0);
+        assert.equal(
+            backend.obtenerProgreso().decisionSeguridadPendiente,
+            null
+        );
+
+        const intentoContinuarAntesDeConfirmar = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/reanudar',
+            { method: 'POST' }
+        );
+        assert.equal(intentoContinuarAntesDeConfirmar.respuesta.status, 409);
         assert.equal(enviosSegundaLinea, 0);
 
         const confirmacion = backend.resolverConfirmacionEnvioPendiente(
@@ -1459,6 +2019,9 @@ test('un envío incierto confirmado como publicado continúa sin poner la línea
         assert.equal(primeraLinea.estado, 'conectado');
         assert.equal(primeraLinea.etiqueta, 'activa');
     } finally {
+        if (servidorPrueba) {
+            await cerrarServidorPrueba(servidorPrueba.servidor);
+        }
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }
 });

@@ -4090,7 +4090,8 @@
             color: var(--text);
             font-size: 10px;
             font-weight: 820;
-            white-space: nowrap;
+            line-height: 1.35;
+            white-space: normal;
             cursor: pointer;
             transition:
                 transform .16s var(--motion-standard),
