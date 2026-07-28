@@ -226,16 +226,18 @@
 
         function establecerModoRendimiento(valor) {
             const modo = normalizarModoRendimiento(valor);
-            const selector = document.getElementById(
-                'config-modo-rendimiento'
+            const selector = document.querySelector(
+                `input[name="config-modo-rendimiento"][value="${modo}"]`
             );
-            if (selector) selector.value = modo;
+            if (selector) selector.checked = true;
             return modo;
         }
 
         function obtenerModoRendimiento() {
             return normalizarModoRendimiento(
-                document.getElementById('config-modo-rendimiento')?.value
+                document.querySelector(
+                    'input[name="config-modo-rendimiento"]:checked'
+                )?.value
             );
         }
 

@@ -13,6 +13,7 @@ function cargarBackendAislado(
     rutaDatos,
     {
         tiempoMaximoEnvioMs = null,
+        demoraReintentoPreparacionMs = null,
         fixturesUi = false
     } = {}
 ) {
@@ -31,11 +32,19 @@ function cargarBackendAislado(
     const valorAnterior = process.env[nombreVariable];
     const nombreVariableTimeout = 'ZEROONE_SEND_TIMEOUT_MS';
     const valorAnteriorTimeout = process.env[nombreVariableTimeout];
+    const nombreVariableReintento =
+        'ZEROONE_TRANSIENT_PREPARATION_RETRY_MS';
+    const valorAnteriorReintento =
+        process.env[nombreVariableReintento];
     const nombreVariableFixtures = 'ZEROONE_UI_FIXTURES';
     const valorAnteriorFixtures = process.env[nombreVariableFixtures];
     process.env[nombreVariable] = rutaDatos;
     if (tiempoMaximoEnvioMs !== null) {
         process.env[nombreVariableTimeout] = String(tiempoMaximoEnvioMs);
+    }
+    if (demoraReintentoPreparacionMs !== null) {
+        process.env[nombreVariableReintento] =
+            String(demoraReintentoPreparacionMs);
     }
     if (fixturesUi) {
         process.env[nombreVariableFixtures] = '1';
@@ -53,6 +62,8 @@ function cargarBackendAislado(
                 solicitarAltoTotalPublicacion,
                 resolverConfirmacionEnvioPendiente,
                 registrarCorteDesconexion,
+                obtenerCodigoError,
+                esErrorServicioNoDisponiblePreparacion,
                 clasificarErrorPublicacion,
                 activarProteccionMiddlewarePorError,
                 cargarConfiguracion,
@@ -85,6 +96,13 @@ function cargarBackendAislado(
             process.env[nombreVariableTimeout] = valorAnteriorTimeout;
         }
 
+        if (valorAnteriorReintento === undefined) {
+            delete process.env[nombreVariableReintento];
+        } else {
+            process.env[nombreVariableReintento] =
+                valorAnteriorReintento;
+        }
+
         if (valorAnteriorFixtures === undefined) {
             delete process.env[nombreVariableFixtures];
         } else {
@@ -99,7 +117,8 @@ function crearLinea(
         id = ID_LINEA,
         nombre = 'Línea de prueba de Alto total',
         jidPropio = '595999999999@s.whatsapp.net',
-        contacto = '595111111111@s.whatsapp.net'
+        contacto = '595111111111@s.whatsapp.net',
+        socket: propiedadesSocket = {}
     } = {}
 ) {
     const socket = {
@@ -107,7 +126,8 @@ function crearLinea(
             id: jidPropio,
             phoneNumber: jidPropio
         },
-        sendMessage
+        sendMessage,
+        ...propiedadesSocket
     };
 
     return {
@@ -146,6 +166,24 @@ function crearLinea(
         revisionPriorizacionAudiencia: 0,
         cacheResumenPriorizacionAudiencia: null
     };
+}
+
+function establecerContactosPrueba(linea, cantidad) {
+    const contactos = Array.from(
+        { length: cantidad },
+        (_, indice) =>
+            `595${String(100000000 + indice).padStart(9, '0')}@s.whatsapp.net`
+    );
+    linea.contactosEstado = new Set(contactos);
+    linea.contactosEstadoWhatsApp = new Set(contactos);
+    linea.contactosEstadoGoogle = new Set();
+    linea.origenAudiencia = 'whatsapp';
+    linea.ultimaInteraccionContactos = new Map(
+        contactos.map((jid, indice) => [jid, Date.now() - indice])
+    );
+    linea.fechaUltimaInteraccionContactos = Date.now();
+    linea.cacheResumenPriorizacionAudiencia = null;
+    return contactos;
 }
 
 async function esperarHasta(
@@ -230,6 +268,23 @@ function crearParametrosPublicacion(idsLineas, rutaImagen, texto) {
     };
 }
 
+function crearErrorServicioNoDisponible(opciones = {}) {
+    const error = new Error('service-unavailable');
+    error.isBoom = true;
+    error.output = {
+        statusCode: 500,
+        payload: {
+            statusCode: 500,
+            error: 'Internal Server Error'
+        }
+    };
+    error.data = 503;
+    if (opciones.stanzaFinalEnviado === true) {
+        error.stanzaFinalEnviado = true;
+    }
+    return error;
+}
+
 test('un WA_500 de envío con el socket intacto no se confunde con una desconexión', () => {
     const rutaDatos = fs.mkdtempSync(
         path.join(os.tmpdir(), 'zeroone-wa-500-envio-')
@@ -256,6 +311,742 @@ test('un WA_500 de envío con el socket intacto no se confunde con una desconexi
         assert.equal(clasificacion.envioIncierto, false);
         assert.equal(clasificacion.reintentoSeguro, true);
     } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('prioriza el 503 escalar de Baileys y no lo confunde con una desconexión si el socket sigue vivo', () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-escalar-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        const linea = crearLinea(async () => {});
+        const error = crearErrorServicioNoDisponible();
+
+        assert.equal(backend.obtenerCodigoError(error), 503);
+        assert.equal(
+            backend.esErrorServicioNoDisponiblePreparacion(error),
+            true
+        );
+
+        const clasificacionEnvio = backend.clasificarErrorPublicacion(
+            error,
+            linea,
+            linea.socket,
+            'envio'
+        );
+        assert.equal(clasificacionEnvio.tipoError, 'envio');
+        assert.equal(clasificacionEnvio.codigoError, 'WA_503');
+        assert.equal(clasificacionEnvio.envioIncierto, false);
+
+        const clasificacionPreparacion = backend.clasificarErrorPublicacion(
+            error,
+            linea,
+            linea.socket,
+            'preparacion'
+        );
+        assert.equal(
+            clasificacionPreparacion.tipoError,
+            'preparacion_transitoria'
+        );
+        assert.equal(clasificacionPreparacion.codigoError, 'WA_503');
+        assert.equal(clasificacionPreparacion.reintentoSeguro, true);
+
+        const errorPosteriorAlStanza = crearErrorServicioNoDisponible({
+            stanzaFinalEnviado: true
+        });
+        assert.equal(
+            backend.esErrorServicioNoDisponiblePreparacion(
+                errorPosteriorAlStanza
+            ),
+            false,
+            'No debe autorizar un reintento si el stanza final pudo enviarse.'
+        );
+
+        const error503Generico = new Error('Fallo HTTP temporal');
+        error503Generico.statusCode = 503;
+        assert.equal(
+            backend.esErrorServicioNoDisponiblePreparacion(
+                error503Generico
+            ),
+            false,
+            'Un 503 genérico no demuestra que el stanza final no se envió.'
+        );
+        const clasificacionGenerica = backend.clasificarErrorPublicacion(
+            error503Generico,
+            linea,
+            linea.socket,
+            'envio'
+        );
+        assert.equal(clasificacionGenerica.tipoError, 'desconexion');
+        assert.equal(clasificacionGenerica.codigoError, 'WA_503');
+        assert.equal(clasificacionGenerica.envioIncierto, true);
+        assert.equal(clasificacionGenerica.reintentoSeguro, false);
+
+        const boomConMensajeDistinto = new Error(
+            '503 recibido después del envío'
+        );
+        boomConMensajeDistinto.isBoom = true;
+        boomConMensajeDistinto.data = 503;
+        assert.equal(
+            backend.esErrorServicioNoDisponiblePreparacion(
+                boomConMensajeDistinto
+            ),
+            false,
+            'La firma debe incluir service-unavailable, no solo isBoom/data.'
+        );
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('prepara dispositivos y sesiones en tandas de 50 antes de un único envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-preparacion-tandas-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        const eventos = [];
+        const tandasUsync = [];
+        const tandasSesiones = [];
+        let envios = 0;
+        let opcionesEnvio = null;
+        const linea = crearLinea(
+            async (_jid, _contenido, opciones) => {
+                eventos.push('envio');
+                envios += 1;
+                opcionesEnvio = opciones;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-PREPARAR-TANDAS'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea con audiencia amplia',
+                socket: {
+                    refreshMediaConn: async () => {
+                        eventos.push('media_conn');
+                        return {};
+                    },
+                    getUSyncDevices: async (
+                        lote,
+                        usarCache,
+                        ignorarDispositivosCero
+                    ) => {
+                        eventos.push(`usync_${lote.length}`);
+                        tandasUsync.push({
+                            lote: [...lote],
+                            usarCache,
+                            ignorarDispositivosCero
+                        });
+                        return lote.map(jid => ({
+                            jid: jid.replace(
+                                '@s.whatsapp.net',
+                                ':1@s.whatsapp.net'
+                            )
+                        }));
+                    },
+                    assertSessions: async (lote, forzar) => {
+                        eventos.push(`sesiones_${lote.length}`);
+                        tandasSesiones.push({
+                            lote: [...lote],
+                            forzar
+                        });
+                    }
+                }
+            }
+        );
+        establecerContactosPrueba(linea, 120);
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'preparacion-tandas.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Preparación segura por tandas'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(envios, 1);
+        assert.deepEqual(
+            tandasUsync.map(tanda => tanda.lote.length),
+            [50, 50, 21]
+        );
+        assert.ok(tandasUsync.every(tanda => tanda.usarCache === true));
+        assert.ok(
+            tandasUsync.every(
+                tanda => tanda.ignorarDispositivosCero === false
+            )
+        );
+        assert.deepEqual(
+            tandasSesiones.map(tanda => tanda.lote.length),
+            [50, 50, 21]
+        );
+        assert.ok(tandasSesiones.every(tanda => tanda.forzar === false));
+        assert.equal(eventos.at(-1), 'envio');
+        assert.equal(opcionesEnvio.useUserDevicesCache, true);
+        assert.equal(opcionesEnvio.statusJidList.length, 121);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un service-unavailable de USync se reintenta una vez antes de un único envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-preflight-exitoso-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            demoraReintentoPreparacionMs: 20
+        });
+        let consultasUsync = 0;
+        let sesiones = 0;
+        let envios = 0;
+        let cierres = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-WA-503-PREFLIGHT'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea con 503 transitorio',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasUsync += 1;
+                        if (consultasUsync === 1) {
+                            throw crearErrorServicioNoDisponible();
+                        }
+                        return lote.map(jid => ({ jid }));
+                    },
+                    assertSessions: async () => {
+                        sesiones += 1;
+                    },
+                    end: () => {
+                        cierres += 1;
+                    },
+                    logout: async () => {
+                        cierres += 1;
+                    }
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-preflight-exitoso.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Reintento seguro antes de enviar'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(consultasUsync, 2);
+        assert.equal(sesiones, 1);
+        assert.equal(envios, 1);
+        assert.equal(cierres, 0);
+        assert.equal(linea.estado, 'conectado');
+        assert.equal(backend.obtenerProgreso().lineasFallidas.length, 0);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un service-unavailable de sesiones se reintenta una vez antes de un único envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-sesiones-exitoso-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            demoraReintentoPreparacionMs: 20
+        });
+        let consultasUsync = 0;
+        let consultasSesiones = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-WA-503-SESIONES'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea con sesión transitoria',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasUsync += 1;
+                        return lote.map(jid => ({ jid }));
+                    },
+                    assertSessions: async () => {
+                        consultasSesiones += 1;
+                        if (consultasSesiones === 1) {
+                            throw crearErrorServicioNoDisponible();
+                        }
+                    }
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-sesiones-exitoso.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Reintento seguro de sesiones'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(consultasUsync, 1);
+        assert.equal(consultasSesiones, 2);
+        assert.equal(envios, 1);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un service-unavailable de media_conn no se repite sobre el mismo socket ni inicia el envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-media-conn-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            demoraReintentoPreparacionMs: 20
+        });
+        let consultasMedia = 0;
+        let consultasUsync = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                throw new Error('No debía iniciarse el envío.');
+            },
+            {
+                nombre: 'Línea con media_conn transitorio',
+                socket: {
+                    refreshMediaConn: async () => {
+                        consultasMedia += 1;
+                        throw crearErrorServicioNoDisponible();
+                    },
+                    getUSyncDevices: async () => {
+                        consultasUsync += 1;
+                        return [];
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-media-conn.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'No repetir media_conn rechazada'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 0, fallidas: 1 });
+        assert.equal(consultasMedia, 1);
+        assert.equal(consultasUsync, 0);
+        assert.equal(envios, 0);
+        const [fallo] = backend.obtenerProgreso().lineasFallidas;
+        assert.equal(fallo.tipoError, 'preparacion_transitoria');
+        assert.equal(fallo.codigoError, 'WA_503');
+        assert.equal(fallo.envioIncierto, false);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un service-unavailable devuelto por sendMessage nunca inicia un segundo envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-sin-reenvio-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                throw crearErrorServicioNoDisponible();
+            },
+            {
+                nombre: 'Línea sin reenvío automático'
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-sin-reenvio.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'No repetir sendMessage'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 0, fallidas: 1 });
+        assert.equal(envios, 1);
+        const [fallo] = backend.obtenerProgreso().lineasFallidas;
+        assert.equal(fallo.tipoError, 'preparacion_transitoria');
+        assert.equal(fallo.codigoError, 'WA_503');
+        assert.equal(fallo.fase, 'preparacion');
+        assert.equal(fallo.envioIncierto, false);
+        assert.equal(fallo.reintentoSeguro, true);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('si cambia el socket durante el preflight, lo repite y envía una sola vez en el socket nuevo', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-socket-cambiado-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        let consultasSocketOriginal = 0;
+        let consultasSocketNuevo = 0;
+        let enviosSocketOriginal = 0;
+        let enviosSocketNuevo = 0;
+        let linea;
+        const socketNuevo = {
+            user: {
+                id: '595999999999@s.whatsapp.net',
+                phoneNumber: '595999999999@s.whatsapp.net'
+            },
+            getUSyncDevices: async lote => {
+                consultasSocketNuevo += 1;
+                return lote.map(jid => ({ jid }));
+            },
+            assertSessions: async () => {},
+            sendMessage: async () => {
+                enviosSocketNuevo += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-EN-SOCKET-NUEVO'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            }
+        };
+        linea = crearLinea(
+            async () => {
+                enviosSocketOriginal += 1;
+                throw new Error('No se debe enviar con el socket reemplazado.');
+            },
+            {
+                nombre: 'Línea cuyo socket cambia',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasSocketOriginal += 1;
+                        linea.socket = socketNuevo;
+                        linea.jid = socketNuevo.user.id;
+                        throw new Error(
+                            'La operación anterior terminó al cambiar el socket.'
+                        );
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-socket-cambiado.png'
+        );
+        const resultado = await backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Preparar de nuevo en el socket vigente'
+            )
+        );
+
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(consultasSocketOriginal, 1);
+        assert.equal(consultasSocketNuevo, 1);
+        assert.equal(enviosSocketOriginal, 0);
+        assert.equal(enviosSocketNuevo, 1);
+        assert.equal(linea.socket, socketNuevo);
+        assert.equal(linea.estado, 'conectado');
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('Alto total interrumpe la espera previa al reintento WA_503', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-alto-total-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            demoraReintentoPreparacionMs: 300
+        });
+        let consultasUsync = 0;
+        let envios = 0;
+        let cierres = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                throw new Error('Alto total debió impedir el envío.');
+            },
+            {
+                nombre: 'Línea detenida antes del reintento',
+                socket: {
+                    getUSyncDevices: async () => {
+                        consultasUsync += 1;
+                        throw crearErrorServicioNoDisponible();
+                    },
+                    assertSessions: async () => {},
+                    end: () => {
+                        cierres += 1;
+                    },
+                    logout: async () => {
+                        cierres += 1;
+                    }
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-alto-total.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Alto total durante espera WA_503'
+            )
+        );
+
+        await esperarHasta(
+            () => backend.obtenerProgreso().estado ===
+                'esperando_reintento_preparacion',
+            {
+                mensaje:
+                    'No se abrió la espera del reintento WA_503.'
+            }
+        );
+        backend.solicitarAltoTotalPublicacion(
+            'Alto total simulado durante el reintento.'
+        );
+
+        await assert.rejects(
+            tarea,
+            error => error?.codigo === 'DETENIDA_ALTO_TOTAL'
+        );
+        assert.equal(consultasUsync, 1);
+        assert.equal(envios, 0);
+        assert.equal(cierres, 0);
+        assert.equal(
+            backend.obtenerProgreso().estado,
+            'detenido_alto_total'
+        );
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('si también falla el único reintento WA_503, pausa con un mensaje seguro y permite omitir la línea', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-503-reintento-agotado-')
+    );
+    let servidorPrueba = null;
+    const advertirOriginal = console.warn;
+    const advertencias = [];
+
+    try {
+        console.warn = (...argumentos) => {
+            advertencias.push(argumentos.map(String).join(' '));
+        };
+        const backend = cargarBackendAislado(rutaDatos, {
+            demoraReintentoPreparacionMs: 20
+        });
+        let consultasUsyncPrimeraLinea = 0;
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        let cierres = 0;
+        const primeraLinea = crearLinea(
+            async () => {
+                enviosPrimeraLinea += 1;
+                throw new Error(
+                    'No debe iniciarse el envío si falla el preflight.'
+                );
+            },
+            {
+                nombre: 'Línea con servicio temporal',
+                socket: {
+                    getUSyncDevices: async () => {
+                        consultasUsyncPrimeraLinea += 1;
+                        throw crearErrorServicioNoDisponible();
+                    },
+                    assertSessions: async () => {},
+                    end: () => {
+                        cierres += 1;
+                    },
+                    logout: async () => {
+                        cierres += 1;
+                    }
+                }
+            }
+        );
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-WA-503-AGOTADO'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Línea posterior al 503',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+        servidorPrueba = await abrirServidorPrueba(backend.app);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-503-reintento-agotado.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [primeraLinea.id, segundaLinea.id],
+                rutaImagen,
+                'Omitir después del único reintento'
+            )
+        );
+
+        const decision = await esperarHasta(() => {
+            const progreso = backend.obtenerProgreso();
+            return progreso.estado === 'detenido_seguridad' &&
+                progreso.decisionSeguridadPendiente?.tipo === 'error_linea'
+                ? progreso.decisionSeguridadPendiente
+                : null;
+        }, {
+            mensaje: 'El WA_503 agotado no ofreció omitir la línea.'
+        });
+
+        assert.equal(consultasUsyncPrimeraLinea, 2);
+        assert.equal(enviosPrimeraLinea, 0);
+        assert.equal(enviosSegundaLinea, 0);
+        assert.equal(decision.lineaId, primeraLinea.id);
+        assert.equal(decision.codigo, 'WA_503');
+        assert.equal(cierres, 0);
+        assert.ok(
+            advertencias.some(lineaLog =>
+                lineaLog.includes('fase=preparacion') &&
+                lineaLog.includes('codigo=WA_503') &&
+                lineaLog.includes('reintento=1/1')
+            )
+        );
+        assert.ok(
+            advertencias.some(lineaLog =>
+                lineaLog.includes('fase=preparacion') &&
+                lineaLog.includes('codigo=WA_503') &&
+                lineaLog.includes('envio_final=no_reintentado')
+            )
+        );
+        assert.equal(
+            advertencias
+                .filter(lineaLog => lineaLog.includes('codigo=WA_503'))
+                .some(lineaLog =>
+                    lineaLog.includes('595999999999') ||
+                    lineaLog.includes('595111111111')
+                ),
+            false,
+            'Los logs del reintento no deben exponer JIDs ni destinatarios.'
+        );
+
+        const reanudacion = await solicitarJson(
+            servidorPrueba.baseUrl,
+            '/progreso/reanudar',
+            { method: 'POST' }
+        );
+        assert.equal(reanudacion.respuesta.status, 200);
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 1 });
+        assert.equal(consultasUsyncPrimeraLinea, 2);
+        assert.equal(enviosPrimeraLinea, 0);
+        assert.equal(enviosSegundaLinea, 1);
+        assert.equal(cierres, 0);
+        const fallo = backend.obtenerProgreso().lineasFallidas.find(
+            item => item.id === primeraLinea.id
+        );
+        assert.equal(fallo.tipoError, 'preparacion_transitoria');
+        assert.equal(fallo.codigoError, 'WA_503');
+        assert.equal(fallo.fase, 'preparacion');
+        assert.equal(fallo.envioIncierto, false);
+        assert.equal(fallo.reintentoSeguro, true);
+        assert.match(
+            fallo.error,
+            /Servicio temporalmente no disponible/
+        );
+    } finally {
+        console.warn = advertirOriginal;
+        if (servidorPrueba) {
+            await cerrarServidorPrueba(servidorPrueba.servidor);
+        }
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }
 });
@@ -1327,6 +2118,82 @@ test('cancelar durante la pausa de un WA_408 detiene las líneas restantes', asy
         if (servidorPrueba) {
             await cerrarServidorPrueba(servidorPrueba.servidor);
         }
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un WA_429 durante el preflight corta sin reintentar ni iniciar sendMessage', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-wa-429-preflight-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos);
+        let consultasUsync = 0;
+        let enviosPrimeraLinea = 0;
+        let enviosSegundaLinea = 0;
+        const primeraLinea = crearLinea(
+            async () => {
+                enviosPrimeraLinea += 1;
+                throw new Error('El WA_429 debía impedir sendMessage.');
+            },
+            {
+                nombre: 'Línea limitada durante el preflight',
+                socket: {
+                    getUSyncDevices: async () => {
+                        consultasUsync += 1;
+                        const error = new Error('Too Many Requests');
+                        error.statusCode = 429;
+                        error.retryAfter = 60;
+                        throw error;
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        const segundaLinea = crearLinea(
+            async () => {
+                enviosSegundaLinea += 1;
+                throw new Error('El WA_429 debía cortar toda la campaña.');
+            },
+            {
+                id: ID_LINEA_SIGUIENTE,
+                nombre: 'Línea posterior al WA_429 de preflight',
+                jidPropio: '595888888888@s.whatsapp.net',
+                contacto: '595222222222@s.whatsapp.net'
+            }
+        );
+        backend.lineas.set(primeraLinea.id, primeraLinea);
+        backend.lineas.set(segundaLinea.id, segundaLinea);
+
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'wa-429-preflight.png'
+        );
+        await assert.rejects(
+            backend.ejecutarPublicacion(
+                crearParametrosPublicacion(
+                    [primeraLinea.id, segundaLinea.id],
+                    rutaImagen,
+                    'El límite temporal corta antes del envío'
+                )
+            ),
+            error => error?.codigo === 'DETENIDA_LIMITE_TEMPORAL'
+        );
+
+        assert.equal(consultasUsync, 1);
+        assert.equal(enviosPrimeraLinea, 0);
+        assert.equal(enviosSegundaLinea, 0);
+        assert.equal(
+            backend.obtenerProgreso().estado,
+            'detenido_limite_temporal'
+        );
+        assert.equal(backend.obtenerProgreso().codigoErrorCorte, 'WA_429');
+        assert.equal(
+            backend.obtenerProgreso().decisionSeguridadPendiente,
+            null
+        );
+    } finally {
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }
 });

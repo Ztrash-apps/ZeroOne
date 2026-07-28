@@ -173,6 +173,7 @@
                 audiencia: 'Audiencia no sincronizada',
                 privacidad: 'Privacidad incompleta',
                 sincronizacion_audiencia: 'Sincronización de audiencia',
+                preparacion_transitoria: 'Servicio temporal de WhatsApp',
                 limite_audiencia: 'Límite de audiencia',
                 limite_temporal: 'Limitación temporal',
                 middleware_enfriamiento: 'Enfriamiento preventivo',
@@ -534,6 +535,12 @@
                     proximo.textContent = formatearTiempo(segundosRestantes);
                 } else if (progreso.estado === 'esperando_reconexion') {
                     proximo.textContent = 'Esperando reconexión';
+                } else if (progreso.estado === 'preparando_entrega') {
+                    proximo.textContent = 'Preparando entrega';
+                } else if (
+                    progreso.estado === 'esperando_reintento_preparacion'
+                ) {
+                    proximo.textContent = 'Preparando reintento seguro';
                 } else if (progreso.estado === 'esperando_resultado_envio') {
                     proximo.textContent = 'Guardando resultado';
                 } else if (progreso.estado === 'esperando_sincronizacion_audiencia') {

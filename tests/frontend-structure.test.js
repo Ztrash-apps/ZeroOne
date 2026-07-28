@@ -159,6 +159,26 @@ test('cada decisión segura permite omitir la línea identificada o detener la c
     );
 });
 
+test('el progreso distingue la preparación segura de un envío ya iniciado', () => {
+    const publicacion = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'publication.js'),
+        'utf8'
+    );
+
+    assert.match(
+        publicacion,
+        /preparacion_transitoria:\s*'Servicio temporal de WhatsApp'/u
+    );
+    assert.match(
+        publicacion,
+        /progreso\.estado === 'preparando_entrega'[\s\S]+Preparando entrega/u
+    );
+    assert.match(
+        publicacion,
+        /progreso\.estado === 'esperando_reintento_preparacion'[\s\S]+Preparando reintento seguro/u
+    );
+});
+
 test('Ajustes permite configurar el enfriamiento preventivo sin alterar WA_429', () => {
     const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
     const bootstrap = fs.readFileSync(
@@ -199,12 +219,24 @@ test('Ajustes ofrece rendimiento adaptativo sin hibernar ni desconectar líneas'
         assert.match(
             html,
             new RegExp(
-                `(?:option|input)[^>]+value="${modo}"`,
+                `input[^>]+name="config-modo-rendimiento"[^>]+value="${modo}"`,
                 'u'
             ),
             `debe ofrecer el modo ${modo}`
         );
     }
+    assert.match(
+        html,
+        /input[^>]+name="config-modo-rendimiento"[^>]+value="normal"[^>]+checked/u
+    );
+    assert.doesNotMatch(
+        html,
+        /<select[^>]+id="config-modo-rendimiento"/u
+    );
+    assert.match(
+        html,
+        /id="config-modo-rendimiento"[\s\S]+role|<fieldset[\s\S]+id="config-modo-rendimiento"/u
+    );
     assert.match(html, /id="estado-modo-rendimiento"/u);
     assert.match(
         html,
@@ -212,15 +244,19 @@ test('Ajustes ofrece rendimiento adaptativo sin hibernar ni desconectar líneas'
     );
     assert.match(
         bootstrap,
-        /normalizarModoRendimiento\(data\.modoRendimiento\)/u
+        /establecerModoRendimiento\(data\.modoRendimiento\)/u
     );
     assert.match(
         bootstrap,
-        /(?:obtenerModoRendimiento\(\)|document\.getElementById\([\s\S]+config-modo-rendimiento)[\s\S]+body:\s*JSON\.stringify\([\s\S]+modoRendimiento/u
+        /obtenerModoRendimiento\(\)[\s\S]+body:\s*JSON\.stringify\([\s\S]+modoRendimiento/u
     );
     assert.match(
         shell,
         /estadoRendimiento[\s\S]+estado-modo-rendimiento/u
+    );
+    assert.match(
+        shell,
+        /input\[name="config-modo-rendimiento"\]:checked/u
     );
 });
 

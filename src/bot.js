@@ -571,6 +571,20 @@ const TIEMPO_MAXIMO_GOOGLE_AUDIENCIA_MS =
 const MAXIMOS_INTENTOS_RECONEXION = 5;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
+const TAMANO_LOTE_PREPARACION_ENTREGA = 50;
+const TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS = 20000;
+const TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS = 2 * 60 * 1000;
+const demoraReintentoPreparacionTransitoriaConfigurada = Number(
+    process.env.ZEROONE_TRANSIENT_PREPARATION_RETRY_MS
+);
+const DEMORA_REINTENTO_PREPARACION_TRANSITORIA_MS =
+    Number.isFinite(demoraReintentoPreparacionTransitoriaConfigurada) &&
+    demoraReintentoPreparacionTransitoriaConfigurada >= 20
+        ? Math.min(
+            12000,
+            Math.floor(demoraReintentoPreparacionTransitoriaConfigurada)
+        )
+        : null;
 const MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS = 10;
 const JITTER_MAXIMO_RECONEXION_MS = 2500;
 const RETRASOS_RECONEXION_MS = [3000, 8000, 15000, 30000, 60000];
@@ -2698,7 +2712,15 @@ function crearErrorPublicacion(codigo, tipoError, mensaje, datos = {}) {
 }
 
 function obtenerCodigoError(error) {
+    const datosEscalares = [
+        error?.data,
+        error?.cause?.data
+    ].filter(valor =>
+        typeof valor === 'number' ||
+        (typeof valor === 'string' && valor.trim() !== '')
+    );
     const candidatos = [
+        ...datosEscalares,
         error?.output?.statusCode,
         error?.output?.payload?.statusCode,
         error?.statusCode,
@@ -2715,6 +2737,377 @@ function obtenerCodigoError(error) {
     ];
 
     return candidatos.map(Number).find(Number.isFinite) ?? null;
+}
+
+function esErrorServicioNoDisponiblePreparacion(error) {
+    if (
+        error?.stanzaFinalEnviado === true ||
+        error?.envioIncierto === true
+    ) {
+        return false;
+    }
+
+    // Baileys crea este Boom con `data: 503` al fallar una consulta IQ
+    // previa a sendNode. Esa forma garantiza que el stanza final todavía no
+    // fue entregado al socket y, por tanto, permite un único reintento seguro.
+    return [error, error?.cause].filter(Boolean).some(candidato => {
+        if (
+            candidato?.isBoom !== true ||
+            candidato?.stanzaFinalEnviado === true ||
+            candidato?.envioIncierto === true ||
+            (
+                typeof candidato?.data !== 'number' &&
+                typeof candidato?.data !== 'string'
+            ) ||
+            Number(candidato.data) !== 503
+        ) {
+            return false;
+        }
+
+        const mensajeNormalizado = String(candidato?.message || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[\s_]+/g, '-');
+        return mensajeNormalizado === 'service-unavailable';
+    });
+}
+
+function obtenerDemoraReintentoPreparacionTransitoria() {
+    return DEMORA_REINTENTO_PREPARACION_TRANSITORIA_MS ??
+        crypto.randomInt(5000, 12001);
+}
+
+function dividirPreparacionEnLotes(valores) {
+    const unicos = [...new Set(
+        (Array.isArray(valores) ? valores : []).filter(Boolean)
+    )];
+    const lotes = [];
+    for (
+        let indice = 0;
+        indice < unicos.length;
+        indice += TAMANO_LOTE_PREPARACION_ENTREGA
+    ) {
+        lotes.push(
+            unicos.slice(indice, indice + TAMANO_LOTE_PREPARACION_ENTREGA)
+        );
+    }
+    return lotes;
+}
+
+function crearErrorTiempoPreparacionEntrega(linea) {
+    return crearErrorPublicacion(
+        'PREPARACION_ENTREGA_AGOTADA',
+        'preparacion_entrega',
+        `La preparación segura de ${linea.nombre} superó el límite de 2 minutos.`,
+        {
+            fasePublicacion: 'preparacion',
+            reintentable: false,
+            envioConfirmado: false,
+            envioIncierto: false,
+            reintentoSeguro: true
+        }
+    );
+}
+
+function verificarSocketPreparacionEntrega(linea, socketEsperado) {
+    verificarCorteDesconexion();
+    const lineaActual = lineas.get(linea.id) || linea;
+
+    if (
+        lineaActual.estado !== 'conectado' ||
+        !lineaActual.socket ||
+        lineaActual.socket !== socketEsperado
+    ) {
+        throw crearErrorPublicacion(
+            'SOCKET_REEMPLAZADO',
+            'desconexion',
+            `La conexión de ${linea.nombre} cambió durante la preparación segura.`,
+            {
+                lineaId: linea.id,
+                lineaNombre: linea.nombre,
+                fasePublicacion: 'preparacion',
+                preflight: true,
+                reintentable: true,
+                envioConfirmado: false,
+                envioIncierto: false,
+                reintentoSeguro: true
+            }
+        );
+    }
+
+    return lineaActual;
+}
+
+function tiempoRestantePreparacionEntrega(limite, linea) {
+    const restante = limite - Date.now();
+    if (restante <= 0) throw crearErrorTiempoPreparacionEntrega(linea);
+    return restante;
+}
+
+async function esperarReintentoPreparacionTransitoria(
+    linea,
+    socketEsperado,
+    limite
+) {
+    let restante = obtenerDemoraReintentoPreparacionTransitoria();
+
+    if (restante >= tiempoRestantePreparacionEntrega(limite, linea)) {
+        throw crearErrorTiempoPreparacionEntrega(linea);
+    }
+
+    while (restante > 0) {
+        verificarSocketPreparacionEntrega(linea, socketEsperado);
+        const tramo = Math.min(250, restante);
+        await esperar(tramo);
+        verificarSocketPreparacionEntrega(linea, socketEsperado);
+        restante -= tramo;
+    }
+}
+
+async function ejecutarOperacionPreparacionEntrega({
+    linea,
+    socketEsperado,
+    limite,
+    nombrePaso,
+    operacion,
+    permitirReintento503 = true
+}) {
+    let reintentoConsumido = false;
+
+    while (true) {
+        verificarSocketPreparacionEntrega(linea, socketEsperado);
+        const timeoutMs = Math.min(
+            TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS,
+            tiempoRestantePreparacionEntrega(limite, linea)
+        );
+        const agotaLimiteTotal =
+            timeoutMs < TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS;
+
+        try {
+            const resultado = await esperarOperacionPublicacion(
+                Promise.resolve().then(operacion),
+                {
+                    timeoutMs,
+                    codigoTimeout: agotaLimiteTotal
+                        ? 'PREPARACION_ENTREGA_AGOTADA'
+                        : 'PREPARACION_PASO_AGOTADA',
+                    tipoTimeout: 'preparacion_entrega',
+                    mensajeTimeout: agotaLimiteTotal
+                        ? `La preparación segura de ${linea.nombre} superó el límite de 2 minutos.`
+                        : `El paso ${nombrePaso} de la preparación segura de ` +
+                            `${linea.nombre} no respondió en 20 segundos.`
+                }
+            );
+            verificarSocketPreparacionEntrega(linea, socketEsperado);
+            return resultado;
+        } catch (error) {
+            if (
+                reintentoConsumido ||
+                !permitirReintento503 ||
+                !esErrorServicioNoDisponiblePreparacion(error)
+            ) {
+                if (esErrorServicioNoDisponiblePreparacion(error)) {
+                    error.fasePublicacion = 'preparacion';
+                }
+                throw error;
+            }
+
+            reintentoConsumido = true;
+            progresoPublicacion.estado =
+                'esperando_reintento_preparacion';
+            progresoPublicacion.mensaje =
+                `WhatsApp no pudo completar la preparación de ${linea.nombre}. ` +
+                'Se realizará un único reintento seguro antes de enviar.';
+            console.warn(
+                `[Publicacion] ${linea.nombre}: fase=preparacion ` +
+                `paso=${nombrePaso} codigo=WA_503 reintento=1/1.`
+            );
+            await esperarReintentoPreparacionTransitoria(
+                linea,
+                socketEsperado,
+                limite
+            );
+            progresoPublicacion.estado = 'preparando_entrega';
+        }
+    }
+}
+
+function esCambioSocketDurantePreparacion(
+    error,
+    linea,
+    socketEsperado = null
+) {
+    if (
+        error?.codigo === 'DETENIDA_ALTO_TOTAL' ||
+        error?.tipoError === 'limite_temporal' ||
+        obtenerCodigoError(error) === 429
+    ) {
+        return false;
+    }
+
+    if (error?.codigo === 'SOCKET_REEMPLAZADO') return true;
+
+    if (
+        error?.codigo === 'DETENIDA_DESCONEXION' &&
+        error?.preflight === true &&
+        error?.envioIncierto !== true &&
+        (!error?.lineaId || error.lineaId === linea.id)
+    ) {
+        return true;
+    }
+
+    const lineaActual = lineas.get(linea.id) || linea;
+    return Boolean(
+        lineaActual.estado !== 'conectado' ||
+        !lineaActual.socket ||
+        (
+            socketEsperado &&
+            lineaActual.socket !== socketEsperado
+        )
+    );
+}
+
+async function prepararEntregaEstado(
+    linea,
+    socketInicial,
+    destinatariosEstado
+) {
+    const limite = Date.now() + TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS;
+    let socketPreparado = socketInicial;
+
+    while (true) {
+        progresoPublicacion.estado = 'preparando_entrega';
+        progresoPublicacion.mensaje =
+            `Preparando de forma segura la entrega en ${linea.nombre}.`;
+
+        try {
+            verificarSocketPreparacionEntrega(linea, socketPreparado);
+
+            if (typeof socketPreparado.refreshMediaConn === 'function') {
+                // Una promesa media_conn rechazada queda cacheada dentro de
+                // Baileys hasta cambiar el socket. No se repite sobre la misma
+                // conexión: se falla antes de sendMessage y la línea se puede
+                // omitir sin dejar un envío incierto.
+                await ejecutarOperacionPreparacionEntrega({
+                    linea,
+                    socketEsperado: socketPreparado,
+                    limite,
+                    nombrePaso: 'media_conn',
+                    operacion: () => socketPreparado.refreshMediaConn(false),
+                    permitirReintento503: false
+                });
+            }
+
+            if (
+                typeof socketPreparado.getUSyncDevices !== 'function' ||
+                typeof socketPreparado.assertSessions !== 'function'
+            ) {
+                verificarSocketPreparacionEntrega(linea, socketPreparado);
+                return socketPreparado;
+            }
+
+            const lotesDestinatarios = dividirPreparacionEnLotes(
+                destinatariosEstado
+            );
+            for (let indice = 0; indice < lotesDestinatarios.length; indice += 1) {
+                const lote = lotesDestinatarios[indice];
+                progresoPublicacion.mensaje =
+                    `Preparando ${linea.nombre}: tanda ${indice + 1} ` +
+                    `de ${lotesDestinatarios.length}.`;
+                const encontrados = await ejecutarOperacionPreparacionEntrega({
+                    linea,
+                    socketEsperado: socketPreparado,
+                    limite,
+                    nombrePaso: `usync_${indice + 1}`,
+                    operacion: () =>
+                        socketPreparado.getUSyncDevices(lote, true, false)
+                });
+                const jidsDispositivos = [
+                    ...new Set(
+                        (Array.isArray(encontrados) ? encontrados : [])
+                            .map(dispositivo =>
+                                typeof dispositivo === 'string'
+                                    ? dispositivo
+                                    : dispositivo?.jid
+                            )
+                            .filter(Boolean)
+                    )
+                ];
+                const lotesDispositivos = dividirPreparacionEnLotes(
+                    jidsDispositivos
+                );
+                for (
+                    let indiceSesiones = 0;
+                    indiceSesiones < lotesDispositivos.length;
+                    indiceSesiones += 1
+                ) {
+                    const loteSesiones = lotesDispositivos[indiceSesiones];
+                    await ejecutarOperacionPreparacionEntrega({
+                        linea,
+                        socketEsperado: socketPreparado,
+                        limite,
+                        nombrePaso:
+                            `sesiones_${indice + 1}_${indiceSesiones + 1}`,
+                        operacion: () =>
+                            socketPreparado.assertSessions(
+                                loteSesiones,
+                                false
+                            )
+                    });
+                }
+            }
+
+            verificarSocketPreparacionEntrega(linea, socketPreparado);
+            return socketPreparado;
+        } catch (error) {
+            if (
+                !esCambioSocketDurantePreparacion(
+                    error,
+                    linea,
+                    socketPreparado
+                )
+            ) {
+                throw error;
+            }
+
+            consumirCorteDesconexionReanudable(
+                controlSeguridadPublicacion.corteDesconexion
+            );
+            tiempoRestantePreparacionEntrega(limite, linea);
+            progresoPublicacion.estado = 'esperando_reconexion';
+            progresoPublicacion.mensaje =
+                `La conexión de ${linea.nombre} cambió durante la preparación. ` +
+                'Se esperará su recuperación antes de volver a prepararla.';
+
+            await esperarRecuperacionLineaPublicacion(
+                linea.id,
+                `antes de volver a preparar ${linea.nombre}`,
+                limite
+            );
+            tiempoRestantePreparacionEntrega(limite, linea);
+
+            const lineaActual = lineas.get(linea.id) || linea;
+            if (
+                lineaActual.estado !== 'conectado' ||
+                !lineaActual.socket
+            ) {
+                throw crearErrorPublicacion(
+                    'LINEA_NO_RECUPERADA',
+                    'desconexion',
+                    `La línea ${linea.nombre} no recuperó una conexión disponible.`,
+                    {
+                        fasePublicacion: 'preparacion',
+                        preflight: true,
+                        reintentable: false,
+                        envioIncierto: false,
+                        reintentoSeguro: true
+                    }
+                );
+            }
+
+            socketPreparado = lineaActual.socket;
+        }
+    }
 }
 
 function obtenerDuracionEnfriamientoLimite(error) {
@@ -2790,13 +3183,39 @@ function clasificarErrorPublicacion(error, linea, socketUsado, fase = 'envio') {
         };
     }
 
+    if (
+        fase === 'preparacion' &&
+        esErrorServicioNoDisponiblePreparacion(error) &&
+        linea?.estado === 'conectado' &&
+        Boolean(linea.socket) &&
+        (!socketUsado || linea.socket === socketUsado) &&
+        !errorTransporte
+    ) {
+        return {
+            tipoError: 'preparacion_transitoria',
+            codigoError: 'WA_503',
+            reintentable: true,
+            envioConfirmado: false,
+            envioIncierto: false,
+            reintentoSeguro: true
+        };
+    }
+
     // Baileys usa 500 tanto para `badSession` como para fallos de envío que
     // no cierran la conexión (por ejemplo, cifrado o carga multimedia). Un
     // 500 aislado no alcanza para declarar caída la línea: el cierre real se
     // confirma por el estado/socket o por una señal de transporte.
+    const servicioNoDisponibleConSocketVivo =
+        codigoEstado === DisconnectReason.unavailableService &&
+        esErrorServicioNoDisponiblePreparacion(error) &&
+        linea?.estado === 'conectado' &&
+        Boolean(linea.socket) &&
+        (!socketUsado || linea.socket === socketUsado) &&
+        !errorTransporte;
     const codigoConexionConfirmado =
         CODIGOS_ERROR_CONEXION.has(codigoEstado) &&
-        codigoEstado !== DisconnectReason.badSession;
+        codigoEstado !== DisconnectReason.badSession &&
+        !servicioNoDisponibleConSocketVivo;
     const desconectada = !linea ||
         linea.estado !== 'conectado' ||
         !linea.socket ||
@@ -9616,10 +10035,25 @@ function limpiarRecuperacionPublicacion(lineaId) {
     controlSeguridadPublicacion.recuperacionDesde?.delete(lineaId);
 }
 
-async function esperarRecuperacionLineaPublicacion(lineaId, contexto = '') {
+async function esperarRecuperacionLineaPublicacion(
+    lineaId,
+    contexto = '',
+    limitePreparacion = null
+) {
     while (true) {
         verificarCorteDesconexion();
         const linea = lineas.get(lineaId);
+
+        if (
+            limitePreparacion !== null &&
+            limitePreparacion !== undefined &&
+            Number.isFinite(Number(limitePreparacion)) &&
+            Date.now() >= Number(limitePreparacion)
+        ) {
+            throw crearErrorTiempoPreparacionEntrega(
+                linea || { nombre: 'la línea' }
+            );
+        }
 
         if (!lineaEnRecuperacion(linea)) {
             limpiarRecuperacionPublicacion(lineaId);
@@ -10048,6 +10482,17 @@ async function ejecutarPublicacion({
                     }
 
                     verificarCorteDesconexion();
+                    fase = 'preparacion';
+                    socketUsado = await prepararEntregaEstado(
+                        linea,
+                        socketUsado,
+                        destinatariosEstado
+                    );
+                    verificarSocketPreparacionEntrega(linea, socketUsado);
+                    progresoPublicacion.estado = 'publicando';
+                    progresoPublicacion.mensaje =
+                        `Enviando el estado en ${linea.nombre}.`;
+
                     const contenido = { image: imagenLeida };
                     if (textoLimpio) contenido.caption = textoLimpio;
 
@@ -10059,7 +10504,8 @@ async function ejecutarPublicacion({
                             contenido,
                             {
                                 statusJidList: destinatariosEstado,
-                                broadcast: true
+                                broadcast: true,
+                                useUserDevicesCache: true
                             }
                         )
                     ).then(mensajeEstado => {
@@ -10256,7 +10702,14 @@ async function ejecutarPublicacion({
                         throw error;
                     }
 
-                    const faseFallo = error?.fasePublicacion || fase;
+                    const servicioNoDisponibleEnPreparacion =
+                        esErrorServicioNoDisponiblePreparacion(error) &&
+                        linea.estado === 'conectado' &&
+                        Boolean(linea.socket) &&
+                        (!socketUsado || linea.socket === socketUsado);
+                    const faseFallo = servicioNoDisponibleEnPreparacion
+                        ? 'preparacion'
+                        : error?.fasePublicacion || fase;
 
                     const clasificacion = clasificarErrorPublicacion(
                         error,
@@ -10264,6 +10717,7 @@ async function ejecutarPublicacion({
                         socketUsado,
                         faseFallo
                     );
+
                     const desconexionPreviaReanudable =
                         esDesconexionPreviaReanudable(
                             clasificacion,
@@ -10312,10 +10766,16 @@ async function ejecutarPublicacion({
                         continue;
                     }
 
+                    const mensajeFallo =
+                        servicioNoDisponibleEnPreparacion
+                            ? 'Servicio temporalmente no disponible durante la ' +
+                                `preparación del estado en ${linea.nombre}. ` +
+                                'No se inició un segundo envío para evitar duplicados.'
+                            : error.message || 'Error desconocido';
                     const fallo = {
                         id: linea.id,
                         nombre: linea.nombre,
-                        error: error.message || 'Error desconocido',
+                        error: mensajeFallo,
                         tipoError: clasificacion.tipoError,
                         codigoError: clasificacion.codigoError,
                         fase: faseFallo,
@@ -10340,6 +10800,12 @@ async function ejecutarPublicacion({
                         console.warn(
                             `[Publicación] ${linea.nombre}: ${fallo.error} ` +
                             'La campaña esperará una decisión antes de continuar.'
+                        );
+                    } else if (servicioNoDisponibleEnPreparacion) {
+                        console.warn(
+                            `[Publicacion] ${linea.nombre}: fase=preparacion ` +
+                            'codigo=WA_503 envio_final=no_reintentado. ' +
+                            'La linea quedo pendiente de decision.'
                         );
                     } else {
                         console.error(`Error publicando en ${linea.nombre}:`, error);

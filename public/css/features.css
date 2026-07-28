@@ -1409,10 +1409,9 @@
 }
 
 .performance-mode-control {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 320px);
-    align-items: center !important;
-    gap: 18px;
+    display: grid !important;
+    gap: 13px !important;
+    align-items: stretch !important;
 }
 
 .performance-mode-control-copy {
@@ -1421,58 +1420,187 @@
     gap: 5px;
 }
 
-.performance-mode-control-copy label {
+.performance-mode-control-copy > strong {
     color: var(--text);
     font-size: 12px;
     font-weight: 780;
 }
 
-.performance-mode-control .input {
-    width: 100%;
-    min-height: 42px;
-}
-
-.performance-mode-guide {
+.performance-mode-options {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
-    margin-top: 10px;
 }
 
-.performance-mode-guide > span {
+.performance-mode-options > legend {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.performance-mode-option {
+    position: relative;
     min-width: 0;
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    padding: 11px 12px;
-    border: 1px solid rgba(var(--border-rgb), .18);
-    border-radius: 12px;
-    background: rgba(var(--accent-rgb), .035);
+    cursor: pointer;
 }
 
-.performance-mode-guide > span > .icon {
-    flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
-    margin-top: 1px;
+.performance-mode-option > input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.performance-mode-card {
+    min-height: 62px;
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) 17px;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 10px;
+    border: 1px solid rgba(var(--border-rgb), .22);
+    border-radius: 12px;
+    background:
+        linear-gradient(
+            145deg,
+            rgba(var(--accent-rgb), .065),
+            rgba(var(--signal-rgb), .018)
+        );
+    color: var(--muted);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025);
+    transition:
+        border-color .16s ease,
+        background .16s ease,
+        box-shadow .16s ease,
+        color .16s ease,
+        transform .16s ease;
+}
+
+.performance-mode-option:hover .performance-mode-card {
+    transform: translateY(-1px);
+    border-color: rgba(var(--signal-rgb), .26);
+    background:
+        linear-gradient(
+            145deg,
+            rgba(var(--accent-rgb), .11),
+            rgba(var(--signal-rgb), .04)
+        );
+    color: var(--text);
+}
+
+.performance-mode-option > input:focus-visible + .performance-mode-card {
+    outline: 2px solid var(--signal);
+    outline-offset: 2px;
+}
+
+.performance-mode-option > input:checked + .performance-mode-card {
+    border-color: rgba(var(--signal-rgb), .42);
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--accent-rgb), .21),
+            rgba(var(--signal-rgb), .095)
+        );
+    color: var(--text);
+    box-shadow:
+        0 9px 24px rgba(0, 0, 0, .12),
+        inset 0 1px 0 rgba(255, 255, 255, .045);
+}
+
+.performance-mode-icon {
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(var(--accent-rgb), .24);
+    border-radius: 9px;
+    background: rgba(var(--accent-rgb), .10);
+    color: var(--accent-soft);
+}
+
+.performance-mode-icon .icon {
+    width: 14px;
+    height: 14px;
+}
+
+.performance-mode-option > input:checked + .performance-mode-card .performance-mode-icon {
+    border-color: rgba(var(--signal-rgb), .28);
+    background: rgba(var(--signal-rgb), .10);
     color: var(--signal);
 }
 
-.performance-mode-guide > span > span {
+.performance-mode-copy {
     min-width: 0;
     display: grid;
-    gap: 3px;
+    gap: 2px;
 }
 
-.performance-mode-guide strong {
+.performance-mode-copy strong {
     color: var(--text);
     font-size: 10px;
+    font-weight: 800;
+    line-height: 1.2;
 }
 
-.performance-mode-guide small {
+.performance-mode-copy small {
+    min-width: 0;
     color: var(--muted);
     font-size: 8px;
-    line-height: 1.4;
+    line-height: 1.3;
+}
+
+.performance-mode-title {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.performance-mode-title em {
+    padding: 2px 4px;
+    border: 1px solid rgba(var(--signal-rgb), .20);
+    border-radius: 999px;
+    background: rgba(var(--signal-rgb), .07);
+    color: var(--signal);
+    font-size: 6px;
+    font-style: normal;
+    font-weight: 850;
+    letter-spacing: .04em;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+.performance-mode-check {
+    width: 17px;
+    height: 17px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(var(--border-rgb), .30);
+    border-radius: 999px;
+    color: transparent;
+}
+
+.performance-mode-check .icon {
+    width: 10px;
+    height: 10px;
+}
+
+.performance-mode-option > input:checked + .performance-mode-card .performance-mode-check {
+    border-color: rgba(var(--signal-rgb), .46);
+    background: var(--signal);
+    color: var(--on-signal, #07130f);
 }
 
 .performance-runtime-card {
@@ -1626,13 +1754,6 @@
         grid-column: 1;
     }
 
-    .performance-mode-guide {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .performance-mode-control {
-        grid-template-columns: minmax(0, 1fr);
-    }
 }
 
 @media (max-width: 620px) {
@@ -1669,6 +1790,14 @@
     .performance-runtime-heading em {
         white-space: normal;
     }
+
+    .performance-mode-options {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .performance-mode-card {
+        min-height: 56px;
+    }
 }
 
 /* El modo reducido conserva los indicadores de progreso y limita solo efectos
@@ -1681,7 +1810,7 @@
     .settings-tab,
     .settings-tab-panel,
     .performance-status,
-    .performance-mode-control,
+    .performance-mode-card,
     .theme-option-card
 ) {
     animation: none !important;
@@ -1694,7 +1823,7 @@
     .program-card,
     .summary-card,
     .performance-status,
-    .performance-mode-control
+    .performance-mode-card
 ):hover {
     transform: none !important;
 }

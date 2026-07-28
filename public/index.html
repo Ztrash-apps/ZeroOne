@@ -1213,29 +1213,65 @@
 
                             <div class="settings-control-card performance-mode-control">
                                 <span class="performance-mode-control-copy">
-                                    <label for="config-modo-rendimiento">Perfil de recursos</label>
-                                    <span class="help">El modo Normal conserva el comportamiento anterior. Podés cambiarlo sin reiniciar ZeroOne.</span>
+                                    <strong id="performance-mode-label">Perfil de recursos</strong>
+                                    <span id="performance-mode-help" class="help">El modo Normal conserva el comportamiento anterior. Podés cambiarlo sin reiniciar ZeroOne.</span>
                                 </span>
-                                <select id="config-modo-rendimiento" class="input">
-                                    <option value="normal" selected>Normal</option>
-                                    <option value="adaptativo">Adaptativo · Recomendado</option>
-                                    <option value="ahorro">Ahorro de memoria</option>
-                                </select>
-                            </div>
-
-                            <div class="performance-mode-guide" aria-label="Descripción de los modos de rendimiento">
-                                <span>
-                                    <svg class="icon"><use href="#i-rocket"></use></svg>
-                                    <span><strong>Normal</strong><small>Ritmo habitual para una PC con recursos disponibles.</small></span>
-                                </span>
-                                <span>
-                                    <svg class="icon"><use href="#i-activity"></use></svg>
-                                    <span><strong>Adaptativo</strong><small>Reduce la carga secundaria solo cuando detecta presión de RAM.</small></span>
-                                </span>
-                                <span>
-                                    <svg class="icon"><use href="#i-pause"></use></svg>
-                                    <span><strong>Ahorro</strong><small>Mantiene reducida la concurrencia y los refrescos no críticos.</small></span>
-                                </span>
+                                <fieldset
+                                    id="config-modo-rendimiento"
+                                    class="performance-mode-options"
+                                    aria-labelledby="performance-mode-label"
+                                    aria-describedby="performance-mode-help"
+                                >
+                                    <legend>Perfil de recursos</legend>
+                                    <label class="performance-mode-option">
+                                        <input type="radio" name="config-modo-rendimiento" value="normal" checked>
+                                        <span class="performance-mode-card">
+                                            <span class="performance-mode-icon" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-rocket"></use></svg>
+                                            </span>
+                                            <span class="performance-mode-copy">
+                                                <strong>Normal</strong>
+                                                <small>Ritmo habitual</small>
+                                            </span>
+                                            <span class="performance-mode-check" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-check"></use></svg>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label class="performance-mode-option">
+                                        <input type="radio" name="config-modo-rendimiento" value="adaptativo">
+                                        <span class="performance-mode-card">
+                                            <span class="performance-mode-icon" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-activity"></use></svg>
+                                            </span>
+                                            <span class="performance-mode-copy">
+                                                <span class="performance-mode-title">
+                                                    <strong>Adaptativo</strong>
+                                                    <em>Recomendado</em>
+                                                </span>
+                                                <small>Se ajusta a la RAM</small>
+                                            </span>
+                                            <span class="performance-mode-check" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-check"></use></svg>
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label class="performance-mode-option">
+                                        <input type="radio" name="config-modo-rendimiento" value="ahorro">
+                                        <span class="performance-mode-card">
+                                            <span class="performance-mode-icon" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-pause"></use></svg>
+                                            </span>
+                                            <span class="performance-mode-copy">
+                                                <strong>Ahorro</strong>
+                                                <small>Carga secundaria reducida</small>
+                                            </span>
+                                            <span class="performance-mode-check" aria-hidden="true">
+                                                <svg class="icon"><use href="#i-check"></use></svg>
+                                            </span>
+                                        </span>
+                                    </label>
+                                </fieldset>
                             </div>
 
                             <div id="performance-runtime-card" class="performance-runtime-card" data-state="normal">

@@ -4,8 +4,7 @@
                 const data = await respuesta.json();
                 configuracionActual = data;
                 aplicarTemaVisual(data.temaVisual, true);
-                document.getElementById('config-modo-rendimiento').value =
-                    normalizarModoRendimiento(data.modoRendimiento);
+                establecerModoRendimiento(data.modoRendimiento);
                 const estadoRendimiento = data.estadoRendimiento;
                 aplicarEstadoRendimiento({ ...data, estadoRendimiento });
                 establecerModoRitmo(
@@ -1383,9 +1382,7 @@
                         intervaloMinutosPredeterminado,
                         maximoDestinatariosPorEstado,
                         enfriamientoPreventivoMinutos,
-                        modoRendimiento: document.getElementById(
-                            'config-modo-rendimiento'
-                        ).value || modoRendimiento,
+                        modoRendimiento,
                         temaVisual,
                         limiteFallosSeguridad: Number(
                             document.getElementById('config-limite-fallos').value
