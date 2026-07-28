@@ -13,6 +13,8 @@ function cargarBackendAislado(
     rutaDatos,
     {
         tiempoMaximoEnvioMs = null,
+        tiempoMaximoPreparacionMs = null,
+        avisoPreparacionLentaMs = null,
         demoraReintentoPreparacionMs = null,
         fixturesUi = false
     } = {}
@@ -32,6 +34,14 @@ function cargarBackendAislado(
     const valorAnterior = process.env[nombreVariable];
     const nombreVariableTimeout = 'ZEROONE_SEND_TIMEOUT_MS';
     const valorAnteriorTimeout = process.env[nombreVariableTimeout];
+    const nombreVariableTimeoutPreparacion =
+        'ZEROONE_PREPARATION_TIMEOUT_MS';
+    const valorAnteriorTimeoutPreparacion =
+        process.env[nombreVariableTimeoutPreparacion];
+    const nombreVariableAvisoPreparacion =
+        'ZEROONE_PREPARATION_SLOW_NOTICE_MS';
+    const valorAnteriorAvisoPreparacion =
+        process.env[nombreVariableAvisoPreparacion];
     const nombreVariableReintento =
         'ZEROONE_TRANSIENT_PREPARATION_RETRY_MS';
     const valorAnteriorReintento =
@@ -41,6 +51,14 @@ function cargarBackendAislado(
     process.env[nombreVariable] = rutaDatos;
     if (tiempoMaximoEnvioMs !== null) {
         process.env[nombreVariableTimeout] = String(tiempoMaximoEnvioMs);
+    }
+    if (tiempoMaximoPreparacionMs !== null) {
+        process.env[nombreVariableTimeoutPreparacion] =
+            String(tiempoMaximoPreparacionMs);
+    }
+    if (avisoPreparacionLentaMs !== null) {
+        process.env[nombreVariableAvisoPreparacion] =
+            String(avisoPreparacionLentaMs);
     }
     if (demoraReintentoPreparacionMs !== null) {
         process.env[nombreVariableReintento] =
@@ -69,6 +87,7 @@ function cargarBackendAislado(
                 cargarConfiguracion,
                 solicitarReconexionManual,
                 solicitarEliminacionEstado,
+                adquirirTurnoSincronizacionAudiencia,
                 lineas,
                 estadosActivos,
                 historialPublicaciones,
@@ -94,6 +113,20 @@ function cargarBackendAislado(
             delete process.env[nombreVariableTimeout];
         } else {
             process.env[nombreVariableTimeout] = valorAnteriorTimeout;
+        }
+
+        if (valorAnteriorTimeoutPreparacion === undefined) {
+            delete process.env[nombreVariableTimeoutPreparacion];
+        } else {
+            process.env[nombreVariableTimeoutPreparacion] =
+                valorAnteriorTimeoutPreparacion;
+        }
+
+        if (valorAnteriorAvisoPreparacion === undefined) {
+            delete process.env[nombreVariableAvisoPreparacion];
+        } else {
+            process.env[nombreVariableAvisoPreparacion] =
+                valorAnteriorAvisoPreparacion;
         }
 
         if (valorAnteriorReintento === undefined) {
@@ -498,6 +531,293 @@ test('prepara dispositivos y sesiones en tandas de 50 antes de un único envío'
         assert.equal(eventos.at(-1), 'envio');
         assert.equal(opcionesEnvio.useUserDevicesCache, true);
         assert.equal(opcionesEnvio.statusJidList.length, 121);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un USync lento supera el aviso sin duplicar la consulta ni el envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-preflight-lento-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoPreparacionMs: 400,
+            avisoPreparacionLentaMs: 20
+        });
+        let consultasUsync = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-USYNC-LENTO'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea con preparación lenta',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasUsync += 1;
+                        await new Promise(resolve => setTimeout(resolve, 80));
+                        return lote.map(jid => ({ jid }));
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'preflight-lento.png'
+        );
+
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Esperar la misma consulta lenta'
+            )
+        );
+        await esperarHasta(
+            () => backend.obtenerProgreso().mensaje.includes(
+                'sin repetirla'
+            ),
+            {
+                mensaje:
+                    'La preparación lenta no mostró el aviso suave esperado.'
+            }
+        );
+
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(consultasUsync, 1);
+        assert.equal(envios, 1);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('un USync bloqueado vence una sola vez y una campaña posterior no lo duplica', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-preflight-bloqueado-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoPreparacionMs: 80,
+            avisoPreparacionLentaMs: 20
+        });
+        let consultasUsync = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                throw new Error('No debía iniciarse el envío.');
+            },
+            {
+                nombre: 'Línea con preparación bloqueada',
+                socket: {
+                    getUSyncDevices: async () => {
+                        consultasUsync += 1;
+                        return new Promise(() => {});
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'preflight-bloqueado.png'
+        );
+        const parametros = crearParametrosPublicacion(
+            [linea.id],
+            rutaImagen,
+            'No duplicar consulta bloqueada'
+        );
+
+        const primerResultado = await backend.ejecutarPublicacion(parametros);
+        assert.deepEqual(primerResultado, { correctas: 0, fallidas: 1 });
+        assert.equal(consultasUsync, 1);
+        assert.equal(envios, 0);
+        assert.equal(
+            backend.obtenerProgreso().lineasFallidas[0]?.codigoError,
+            'PREPARACION_ENTREGA_AGOTADA'
+        );
+
+        linea.ultimoError = null;
+        linea.fallosRecientes = 0;
+        const segundoResultado = await backend.ejecutarPublicacion(parametros);
+        assert.deepEqual(segundoResultado, { correctas: 0, fallidas: 1 });
+        assert.equal(
+            consultasUsync,
+            1,
+            'La consulta pendiente del mismo socket y tanda no debe duplicarse.'
+        );
+        assert.equal(envios, 0);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('la preparación espera que drene una sincronización de audiencia activa', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-preflight-drena-audiencia-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoPreparacionMs: 500,
+            avisoPreparacionLentaMs: 20
+        });
+        const liberarAudiencia =
+            await backend.adquirirTurnoSincronizacionAudiencia();
+        let consultasUsync = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-DESPUES-DE-DRENAJE'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea que espera drenaje',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasUsync += 1;
+                        return lote.map(jid => ({ jid }));
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'preflight-drena-audiencia.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Esperar drenaje antes de preparar'
+            )
+        );
+
+        await esperarHasta(
+            () => backend.obtenerProgreso().mensaje.includes(
+                'comprobación(es) de audiencia'
+            )
+        );
+        await new Promise(resolve => setTimeout(resolve, 35));
+        assert.equal(consultasUsync, 0);
+        assert.equal(envios, 0);
+
+        liberarAudiencia();
+        const resultado = await tarea;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(consultasUsync, 1);
+        assert.equal(envios, 1);
+    } finally {
+        fs.rmSync(rutaDatos, { recursive: true, force: true });
+    }
+});
+
+test('no comienza otra sincronización de audiencia entre el preflight y el resultado del envío', async () => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'zeroone-preflight-bloquea-audiencia-')
+    );
+
+    try {
+        const backend = cargarBackendAislado(rutaDatos, {
+            tiempoMaximoPreparacionMs: 500,
+            avisoPreparacionLentaMs: 20
+        });
+        let resolverUsync;
+        let resolverEnvio;
+        let consultasUsync = 0;
+        let envios = 0;
+        const linea = crearLinea(
+            async () => {
+                envios += 1;
+                await new Promise(resolve => {
+                    resolverEnvio = resolve;
+                });
+                return {
+                    key: {
+                        remoteJid: 'status@broadcast',
+                        fromMe: true,
+                        id: 'ID-CON-BLOQUEO-DE-AUDIENCIA'
+                    },
+                    messageTimestamp: Math.floor(Date.now() / 1000)
+                };
+            },
+            {
+                nombre: 'Línea con prioridad de entrega',
+                socket: {
+                    getUSyncDevices: async lote => {
+                        consultasUsync += 1;
+                        await new Promise(resolve => {
+                            resolverUsync = resolve;
+                        });
+                        return lote.map(jid => ({ jid }));
+                    },
+                    assertSessions: async () => {}
+                }
+            }
+        );
+        backend.lineas.set(linea.id, linea);
+        const rutaImagen = crearImagenPrueba(
+            rutaDatos,
+            'preflight-bloquea-audiencia.png'
+        );
+        const tarea = backend.ejecutarPublicacion(
+            crearParametrosPublicacion(
+                [linea.id],
+                rutaImagen,
+                'Mantener prioridad hasta confirmar el envío'
+            )
+        );
+
+        await esperarHasta(() => consultasUsync === 1);
+        let turnoAudienciaConcedido = false;
+        let liberarAudiencia = null;
+        const turnoAudiencia =
+            backend.adquirirTurnoSincronizacionAudiencia().then(liberar => {
+                turnoAudienciaConcedido = true;
+                liberarAudiencia = liberar;
+            });
+        await new Promise(resolve => setTimeout(resolve, 35));
+        assert.equal(turnoAudienciaConcedido, false);
+
+        resolverUsync();
+        await esperarHasta(() => envios === 1);
+        await new Promise(resolve => setTimeout(resolve, 35));
+        assert.equal(
+            turnoAudienciaConcedido,
+            false,
+            'La cola de audiencia no debe reanudarse con sendMessage en curso.'
+        );
+
+        resolverEnvio();
+        const resultado = await tarea;
+        await turnoAudiencia;
+        assert.deepEqual(resultado, { correctas: 1, fallidas: 0 });
+        assert.equal(turnoAudienciaConcedido, true);
+        liberarAudiencia();
     } finally {
         fs.rmSync(rutaDatos, { recursive: true, force: true });
     }

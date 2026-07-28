@@ -173,6 +173,7 @@
                 audiencia: 'Audiencia no sincronizada',
                 privacidad: 'Privacidad incompleta',
                 sincronizacion_audiencia: 'Sincronización de audiencia',
+                preparacion_entrega: 'Preparación sin respuesta',
                 preparacion_transitoria: 'Servicio temporal de WhatsApp',
                 limite_audiencia: 'Límite de audiencia',
                 limite_temporal: 'Limitación temporal',

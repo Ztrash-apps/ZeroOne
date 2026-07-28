@@ -252,8 +252,10 @@ let secuenciaInicioWhatsApp = 0;
 let procesamientoColaIniciosProgramado = false;
 const colaSincronizacionesAudiencia = [];
 let sincronizacionesAudienciaActivas = 0;
+let preparacionesEntregaActivas = 0;
 const sincronizacionesAppStateAudiencia = new WeakMap();
 const consultasPrivacidadIqAudiencia = new WeakMap();
+const operacionesPreparacionEntrega = new WeakMap();
 const historialPublicaciones = [];
 
 function describirLineaParaAgendamiento(linea) {
@@ -572,8 +574,25 @@ const MAXIMOS_INTENTOS_RECONEXION = 5;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
 const TAMANO_LOTE_PREPARACION_ENTREGA = 50;
-const TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS = 20000;
-const TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS = 2 * 60 * 1000;
+const tiempoAvisoPreparacionLentaConfigurado = Number(
+    process.env.ZEROONE_PREPARATION_SLOW_NOTICE_MS
+);
+const TIEMPO_AVISO_PREPARACION_LENTA_MS =
+    Number.isFinite(tiempoAvisoPreparacionLentaConfigurado) &&
+    tiempoAvisoPreparacionLentaConfigurado >= 20
+        ? Math.min(60000, Math.floor(tiempoAvisoPreparacionLentaConfigurado))
+        : 20000;
+const tiempoMaximoPreparacionEntregaConfigurado = Number(
+    process.env.ZEROONE_PREPARATION_TIMEOUT_MS
+);
+const TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS =
+    Number.isFinite(tiempoMaximoPreparacionEntregaConfigurado) &&
+    tiempoMaximoPreparacionEntregaConfigurado >= 50
+        ? Math.min(
+            10 * 60 * 1000,
+            Math.floor(tiempoMaximoPreparacionEntregaConfigurado)
+        )
+        : 5 * 60 * 1000;
 const demoraReintentoPreparacionTransitoriaConfigurada = Number(
     process.env.ZEROONE_TRANSIENT_PREPARATION_RETRY_MS
 );
@@ -2794,11 +2813,29 @@ function dividirPreparacionEnLotes(valores) {
     return lotes;
 }
 
+function describirTiempoPreparacionEntrega(milisegundos) {
+    const totalSegundos = Math.max(
+        1,
+        Math.ceil((Number(milisegundos) || 0) / 1000)
+    );
+    if (totalSegundos < 60) {
+        return totalSegundos === 1
+            ? '1 segundo'
+            : `${totalSegundos} segundos`;
+    }
+
+    const totalMinutos = Math.max(1, Math.ceil(totalSegundos / 60));
+    return totalMinutos === 1 ? '1 minuto' : `${totalMinutos} minutos`;
+}
+
 function crearErrorTiempoPreparacionEntrega(linea) {
     return crearErrorPublicacion(
         'PREPARACION_ENTREGA_AGOTADA',
         'preparacion_entrega',
-        `La preparación segura de ${linea.nombre} superó el límite de 2 minutos.`,
+        `La preparación segura de ${linea.nombre} superó el límite de ` +
+            `${describirTiempoPreparacionEntrega(
+                TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS
+            )}.`,
         {
             fasePublicacion: 'preparacion',
             reintentable: false,
@@ -2807,6 +2844,68 @@ function crearErrorTiempoPreparacionEntrega(linea) {
             reintentoSeguro: true
         }
     );
+}
+
+function crearClaveOperacionPreparacionEntrega(tipo, valores = []) {
+    const huella = crypto
+        .createHash('sha256')
+        .update(
+            [...new Set(
+                (Array.isArray(valores) ? valores : [])
+                    .map(valor => String(valor || '').trim())
+                    .filter(Boolean)
+            )]
+                .sort()
+                .join('\n')
+        )
+        .digest('hex')
+        .slice(0, 24);
+    return `${tipo}:${huella || 'vacio'}`;
+}
+
+function obtenerOperacionPreparacionEntregaUnica(
+    socket,
+    clave,
+    operacion
+) {
+    if (!socket || (typeof socket !== 'object' && typeof socket !== 'function')) {
+        return {
+            promesa: Promise.resolve().then(operacion),
+            iniciadaEn: Date.now(),
+            reutilizada: false
+        };
+    }
+
+    let porClave = operacionesPreparacionEntrega.get(socket);
+    if (!porClave) {
+        porClave = new Map();
+        operacionesPreparacionEntrega.set(socket, porClave);
+    }
+
+    const existente = porClave.get(clave);
+    if (existente) {
+        return {
+            ...existente,
+            reutilizada: true
+        };
+    }
+
+    const entrada = {
+        promesa: Promise.resolve().then(operacion),
+        iniciadaEn: Date.now()
+    };
+    porClave.set(clave, entrada);
+
+    const limpiar = () => {
+        if (porClave.get(clave) === entrada) porClave.delete(clave);
+        if (porClave.size === 0) operacionesPreparacionEntrega.delete(socket);
+    };
+    entrada.promesa.then(limpiar, limpiar);
+
+    return {
+        ...entrada,
+        reutilizada: false
+    };
 }
 
 function verificarSocketPreparacionEntrega(linea, socketEsperado) {
@@ -2844,6 +2943,47 @@ function tiempoRestantePreparacionEntrega(limite, linea) {
     return restante;
 }
 
+function liberarPrioridadPreparacionEntrega() {
+    let liberada = false;
+
+    return () => {
+        if (liberada) return;
+        liberada = true;
+        preparacionesEntregaActivas = Math.max(
+            0,
+            preparacionesEntregaActivas - 1
+        );
+        procesarColaSincronizacionesAudiencia();
+    };
+}
+
+async function adquirirPrioridadPreparacionEntrega(
+    linea,
+    socketEsperado,
+    limite
+) {
+    preparacionesEntregaActivas += 1;
+    const liberar = liberarPrioridadPreparacionEntrega();
+
+    try {
+        while (sincronizacionesAudienciaActivas > 0) {
+            verificarSocketPreparacionEntrega(linea, socketEsperado);
+            const restante = tiempoRestantePreparacionEntrega(limite, linea);
+            progresoPublicacion.estado = 'preparando_entrega';
+            progresoPublicacion.mensaje =
+                `Esperando que terminen ${sincronizacionesAudienciaActivas} ` +
+                `comprobación(es) de audiencia antes de preparar ${linea.nombre}.`;
+            await esperar(Math.min(250, restante));
+        }
+
+        verificarSocketPreparacionEntrega(linea, socketEsperado);
+        return liberar;
+    } catch (error) {
+        liberar();
+        throw error;
+    }
+}
+
 async function esperarReintentoPreparacionTransitoria(
     linea,
     socketEsperado,
@@ -2869,6 +3009,7 @@ async function ejecutarOperacionPreparacionEntrega({
     socketEsperado,
     limite,
     nombrePaso,
+    claveOperacion = nombrePaso,
     operacion,
     permitirReintento503 = true
 }) {
@@ -2876,31 +3017,72 @@ async function ejecutarOperacionPreparacionEntrega({
 
     while (true) {
         verificarSocketPreparacionEntrega(linea, socketEsperado);
-        const timeoutMs = Math.min(
-            TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS,
-            tiempoRestantePreparacionEntrega(limite, linea)
+        const entrada = obtenerOperacionPreparacionEntregaUnica(
+            socketEsperado,
+            claveOperacion,
+            operacion
         );
-        const agotaLimiteTotal =
-            timeoutMs < TIEMPO_MAXIMO_PASO_PREPARACION_ENTREGA_MS;
+        const limiteOperacion = Math.min(
+            limite,
+            entrada.iniciadaEn + TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS
+        );
+        const timeoutMs = tiempoRestantePreparacionEntrega(
+            limiteOperacion,
+            linea
+        );
+        let avisoLentoMostrado = false;
+        let temporizadorAviso = null;
+
+        if (timeoutMs > TIEMPO_AVISO_PREPARACION_LENTA_MS) {
+            temporizadorAviso = setTimeout(() => {
+                avisoLentoMostrado = true;
+                if (
+                    progresoPublicacion.activo &&
+                    progresoPublicacion.lineaActual?.id === linea.id
+                ) {
+                    progresoPublicacion.estado = 'preparando_entrega';
+                    progresoPublicacion.mensaje =
+                        `WhatsApp sigue preparando ${linea.nombre} en el paso ` +
+                        `${nombrePaso}. Se esperará la misma operación sin repetirla.`;
+                }
+                console.warn(
+                    `[Publicacion] ${linea.nombre}: fase=preparacion ` +
+                    `paso=${nombrePaso} aviso=lenta ` +
+                    `transcurrido_ms=${TIEMPO_AVISO_PREPARACION_LENTA_MS} ` +
+                    `consulta_repetida=no.`
+                );
+            }, TIEMPO_AVISO_PREPARACION_LENTA_MS);
+        }
 
         try {
             const resultado = await esperarOperacionPublicacion(
-                Promise.resolve().then(operacion),
+                entrada.promesa,
                 {
                     timeoutMs,
-                    codigoTimeout: agotaLimiteTotal
-                        ? 'PREPARACION_ENTREGA_AGOTADA'
-                        : 'PREPARACION_PASO_AGOTADA',
+                    codigoTimeout: 'PREPARACION_ENTREGA_AGOTADA',
                     tipoTimeout: 'preparacion_entrega',
-                    mensajeTimeout: agotaLimiteTotal
-                        ? `La preparación segura de ${linea.nombre} superó el límite de 2 minutos.`
-                        : `El paso ${nombrePaso} de la preparación segura de ` +
-                            `${linea.nombre} no respondió en 20 segundos.`
+                    mensajeTimeout:
+                        `La preparación segura de ${linea.nombre} superó el límite de ` +
+                        `${describirTiempoPreparacionEntrega(
+                            TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS
+                        )}.`
                 }
             );
             verificarSocketPreparacionEntrega(linea, socketEsperado);
+            if (avisoLentoMostrado) {
+                console.info(
+                    `[Publicacion] ${linea.nombre}: fase=preparacion ` +
+                    `paso=${nombrePaso} resultado=completado ` +
+                    `duracion_ms=${Date.now() - entrada.iniciadaEn} ` +
+                    `consulta_repetida=no.`
+                );
+            }
             return resultado;
         } catch (error) {
+            if (temporizadorAviso) {
+                clearTimeout(temporizadorAviso);
+                temporizadorAviso = null;
+            }
             if (
                 reintentoConsumido ||
                 !permitirReintento503 ||
@@ -2928,6 +3110,8 @@ async function ejecutarOperacionPreparacionEntrega({
                 limite
             );
             progresoPublicacion.estado = 'preparando_entrega';
+        } finally {
+            if (temporizadorAviso) clearTimeout(temporizadorAviso);
         }
     }
 }
@@ -2970,9 +3154,9 @@ function esCambioSocketDurantePreparacion(
 async function prepararEntregaEstado(
     linea,
     socketInicial,
-    destinatariosEstado
+    destinatariosEstado,
+    limite = Date.now() + TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS
 ) {
-    const limite = Date.now() + TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS;
     let socketPreparado = socketInicial;
 
     while (true) {
@@ -2993,6 +3177,7 @@ async function prepararEntregaEstado(
                     socketEsperado: socketPreparado,
                     limite,
                     nombrePaso: 'media_conn',
+                    claveOperacion: 'media_conn',
                     operacion: () => socketPreparado.refreshMediaConn(false),
                     permitirReintento503: false
                 });
@@ -3009,19 +3194,33 @@ async function prepararEntregaEstado(
             const lotesDestinatarios = dividirPreparacionEnLotes(
                 destinatariosEstado
             );
-            for (let indice = 0; indice < lotesDestinatarios.length; indice += 1) {
+            for (
+                let indice = 0;
+                indice < lotesDestinatarios.length;
+                indice += 1
+            ) {
                 const lote = lotesDestinatarios[indice];
                 progresoPublicacion.mensaje =
                     `Preparando ${linea.nombre}: tanda ${indice + 1} ` +
                     `de ${lotesDestinatarios.length}.`;
-                const encontrados = await ejecutarOperacionPreparacionEntrega({
-                    linea,
-                    socketEsperado: socketPreparado,
-                    limite,
-                    nombrePaso: `usync_${indice + 1}`,
-                    operacion: () =>
-                        socketPreparado.getUSyncDevices(lote, true, false)
-                });
+                const encontrados =
+                    await ejecutarOperacionPreparacionEntrega({
+                        linea,
+                        socketEsperado: socketPreparado,
+                        limite,
+                        nombrePaso: `usync_${indice + 1}`,
+                        claveOperacion:
+                            crearClaveOperacionPreparacionEntrega(
+                                'usync',
+                                lote
+                            ),
+                        operacion: () =>
+                            socketPreparado.getUSyncDevices(
+                                lote,
+                                true,
+                                false
+                            )
+                    });
                 const jidsDispositivos = [
                     ...new Set(
                         (Array.isArray(encontrados) ? encontrados : [])
@@ -3041,13 +3240,19 @@ async function prepararEntregaEstado(
                     indiceSesiones < lotesDispositivos.length;
                     indiceSesiones += 1
                 ) {
-                    const loteSesiones = lotesDispositivos[indiceSesiones];
+                    const loteSesiones =
+                        lotesDispositivos[indiceSesiones];
                     await ejecutarOperacionPreparacionEntrega({
                         linea,
                         socketEsperado: socketPreparado,
                         limite,
                         nombrePaso:
                             `sesiones_${indice + 1}_${indiceSesiones + 1}`,
+                        claveOperacion:
+                            crearClaveOperacionPreparacionEntrega(
+                                'sesiones',
+                                loteSesiones
+                            ),
                         operacion: () =>
                             socketPreparado.assertSessions(
                                 loteSesiones,
@@ -5874,6 +6079,7 @@ function obtenerLimiteSincronizacionesAudiencia() {
 
 function procesarColaSincronizacionesAudiencia() {
     while (
+        preparacionesEntregaActivas === 0 &&
         sincronizacionesAudienciaActivas <
             obtenerLimiteSincronizacionesAudiencia() &&
         colaSincronizacionesAudiencia.length > 0
@@ -5901,8 +6107,9 @@ function adquirirTurnoSincronizacionAudiencia() {
         };
 
         if (
+            preparacionesEntregaActivas === 0 &&
             sincronizacionesAudienciaActivas <
-            obtenerLimiteSincronizacionesAudiencia()
+                obtenerLimiteSincronizacionesAudiencia()
         ) {
             iniciar();
         } else {
@@ -10386,6 +10593,7 @@ async function ejecutarPublicacion({
                 let numeroUsado = null;
                 let fase = 'preparacion';
                 let contabilizarLinea = true;
+                let liberarPrioridadEntrega = null;
 
                 try {
                     await esperarRecuperacionLineaPublicacion(
@@ -10483,10 +10691,19 @@ async function ejecutarPublicacion({
 
                     verificarCorteDesconexion();
                     fase = 'preparacion';
+                    const limitePreparacion =
+                        Date.now() + TIEMPO_MAXIMO_PREPARACION_ENTREGA_MS;
+                    liberarPrioridadEntrega =
+                        await adquirirPrioridadPreparacionEntrega(
+                            linea,
+                            socketUsado,
+                            limitePreparacion
+                        );
                     socketUsado = await prepararEntregaEstado(
                         linea,
                         socketUsado,
-                        destinatariosEstado
+                        destinatariosEstado,
+                        limitePreparacion
                     );
                     verificarSocketPreparacionEntrega(linea, socketUsado);
                     progresoPublicacion.estado = 'publicando';
@@ -10641,6 +10858,10 @@ async function ejecutarPublicacion({
                     } finally {
                         progresoPublicacion.envioEnCurso = false;
                     }
+                    if (liberarPrioridadEntrega) {
+                        liberarPrioridadEntrega();
+                        liberarPrioridadEntrega = null;
+                    }
 
                     consumirCorteDesconexionConResultadoConfirmado(
                         linea.id
@@ -10689,6 +10910,10 @@ async function ejecutarPublicacion({
                         linea.id
                     );
                 } catch (error) {
+                    if (liberarPrioridadEntrega) {
+                        liberarPrioridadEntrega();
+                        liberarPrioridadEntrega = null;
+                    }
                     progresoPublicacion.sincronizacionAudienciaSegundos = 0;
                     if (
                         progresoPublicacion.estado ===
@@ -11021,6 +11246,10 @@ async function ejecutarPublicacion({
                         );
                     }
                 } finally {
+                    if (liberarPrioridadEntrega) {
+                        liberarPrioridadEntrega();
+                        liberarPrioridadEntrega = null;
+                    }
                     progresoPublicacion.sincronizacionAudienciaSegundos = 0;
                     if (contabilizarLinea) {
                         progresoPublicacion.procesadas += 1;
