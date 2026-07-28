@@ -1,4 +1,5 @@
         const lineasSeleccionadas = new Set();
+        const lineasSeleccionadasEdicionProgramacion = new Set();
         const lineasSeleccionadasEliminar = new Set();
         const programacionesCache = new Map();
 
@@ -24,6 +25,8 @@
         let direccionLineas = 'asc';
         let ordenLineasSubida = 'conexion';
         let direccionLineasSubida = 'asc';
+        let ordenLineasEdicionProgramacion = 'conexion';
+        let direccionLineasEdicionProgramacion = 'asc';
         let lineaEditandoId = null;
         let cargandoEstadosActivos = false;
         let proteccionMiddlewareActual = null;
@@ -54,6 +57,7 @@
         let agendaFirmaLineas = '';
         let agendaFirmaCuentas = '';
         let agendaBusquedaLineas = '';
+        let agendaBusquedaCuentas = '';
         let agendaOperacionIA = false;
         let cuentasGoogleDisponibles = [];
         let cuentasGoogleCargando = false;
@@ -190,7 +194,11 @@
                 radio.checked = radio.value === modo;
             });
 
-            const prefijo = nombre === 'config-modo-ritmo' ? 'config' : 'crear';
+            const prefijo = nombre === 'config-modo-ritmo'
+                ? 'config'
+                : nombre === 'editar-modo-ritmo'
+                    ? 'editar'
+                    : 'crear';
             const panelSecuencial = document.getElementById(`${prefijo}-ritmo-secuencial`);
             const panelGrupos = document.getElementById(`${prefijo}-ritmo-grupos`);
 

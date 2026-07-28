@@ -378,7 +378,7 @@
 
                     <div id="alerta-seguridad" class="security-alert">
                         <div>
-                            <strong class="title-with-icon"><svg class="icon"><use href="#i-alert"></use></svg><span>Corte automático de seguridad</span></strong>
+                            <strong class="title-with-icon"><svg class="icon"><use href="#i-alert"></use></svg><span id="titulo-alerta-seguridad">Corte automático de seguridad</span></strong>
                             <p id="detalle-seguridad">
                                 La publicación fue pausada al alcanzar la cantidad de fallos configurada.
                             </p>
@@ -391,7 +391,7 @@
                                 class="warning-button"
                             >
                                 <svg class="icon"><use href="#i-play"></use></svg>
-                                <span>Reanudar</span>
+                                <span id="texto-reanudar-seguridad">Reanudar</span>
                             </button>
                             <button
                                 type="button"
@@ -399,7 +399,7 @@
                                 class="small-danger"
                             >
                                 <svg class="icon"><use href="#i-stop"></use></svg>
-                                <span>Cancelar</span>
+                                <span id="texto-cancelar-seguridad">Cancelar</span>
                             </button>
                         </div>
                     </div>
@@ -762,7 +762,24 @@
                                     </span>
                                     <svg class="icon"><use href="#i-chevron-down"></use></svg>
                                 </button>
-                                <div id="agenda-account-menu" class="agenda-picker-menu" role="listbox"></div>
+                                <div id="agenda-account-menu" class="agenda-picker-menu">
+                                    <label class="agenda-picker-search" for="buscar-cuentas-agendamiento">
+                                        <svg class="icon"><use href="#i-search"></use></svg>
+                                        <input
+                                            type="search"
+                                            id="buscar-cuentas-agendamiento"
+                                            placeholder="Buscar cuenta o correo"
+                                            autocomplete="off"
+                                        >
+                                    </label>
+                                    <div
+                                        id="agenda-account-options"
+                                        class="agenda-picker-options"
+                                        role="listbox"
+                                        aria-label="Cuentas de Google disponibles"
+                                    ></div>
+                                    <p id="resultado-cuentas-agendamiento" class="agenda-picker-result"></p>
+                                </div>
                             </div>
 
                             <input type="file" id="agenda-google-credentials-file" accept="application/json,.json" hidden>
@@ -1516,106 +1533,262 @@
     </div>
 
     <div id="modal-editar" class="modal" aria-hidden="true">
-        <div class="modal-card" style="width: min(600px, 96vw);">
+        <div class="modal-card program-edit-modal-card">
             <div class="modal-header">
-                <h2 class="title-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Editar estado programado</span></h2>
+                <div>
+                    <span class="program-edit-eyebrow">Programación recurrente</span>
+                    <h2 class="title-with-icon"><svg class="icon"><use href="#i-edit"></use></svg><span>Editar estado programado</span></h2>
+                </div>
                 <button type="button" id="cerrar-modal-editar" class="icon-button" aria-label="Cerrar"><svg class="icon"><use href="#i-x"></use></svg></button>
             </div>
 
-            <div class="modal-body">
+            <div class="modal-body program-edit-layout">
                 <input type="hidden" id="editar-id">
 
-                <section class="edit-image-panel">
-                    <div class="edit-image-preview">
+                <aside class="program-edit-visual">
+                    <div class="program-edit-image">
                         <img
                             id="editar-imagen-actual"
                             alt="Imagen actualmente programada"
                         >
-                        <span class="edit-image-badge">
+                        <span class="program-edit-image-badge">
                             <svg class="icon"><use href="#i-image"></use></svg>
-                            <span>Vista previa</span>
+                            <span>Imagen programada</span>
                         </span>
                     </div>
+                </aside>
 
-                    <div class="edit-image-content">
-                        <div>
-                            <span class="edit-image-eyebrow">Contenido visual</span>
-                            <h3>Cambiar imagen</h3>
-                            <p>Elegí una imagen nueva o conservá la actual. La nueva se optimizará automáticamente.</p>
-                        </div>
+                <section class="program-edit-controls">
+                    <div class="program-edit-scroll">
+                        <section class="program-edit-section">
+                            <div class="program-edit-section-heading">
+                                <span class="program-edit-section-icon"><svg class="icon"><use href="#i-text"></use></svg></span>
+                                <div>
+                                    <span class="program-edit-section-kicker">Contenido</span>
+                                    <h3>Contenido del estado</h3>
+                                </div>
+                            </div>
 
-                        <input
-                            type="file"
-                            id="editar-foto"
-                            class="visually-hidden-file"
-                            accept="image/png, image/jpeg"
-                        >
+                            <div class="program-edit-image-actions">
+                                <div>
+                                    <span class="program-edit-section-kicker">Contenido visual</span>
+                                    <strong>Cambiar imagen</strong>
+                                    <p>Podés conservar la actual o elegir otra. ZeroOne la optimizará antes de guardarla.</p>
+                                </div>
 
-                        <div class="edit-file-stack">
-                            <label for="editar-foto" class="edit-file-button">
-                                <svg class="icon"><use href="#i-upload"></use></svg>
-                                <span>Seleccionar otra imagen</span>
+                                <input
+                                    type="file"
+                                    id="editar-foto"
+                                    class="visually-hidden-file"
+                                    accept="image/png, image/jpeg"
+                                >
+                                <label for="editar-foto" class="edit-file-button">
+                                    <svg class="icon"><use href="#i-upload"></use></svg>
+                                    <span>Seleccionar imagen</span>
+                                </label>
+                                <span id="editar-foto-nombre" class="edit-file-name">Se conservará la imagen actual</span>
+                            </div>
+
+                            <label for="editar-texto" class="label-with-icon">
+                                <svg class="icon"><use href="#i-text"></use></svg>
+                                <span>Texto opcional</span>
                             </label>
+                            <textarea
+                                id="editar-texto"
+                                class="textarea"
+                                placeholder="Podés dejarlo vacío para publicar solamente la imagen."
+                            ></textarea>
+                        </section>
 
-                            <span id="editar-foto-nombre" class="edit-file-name">Ningún archivo nuevo seleccionado</span>
-                        </div>
+                        <section class="program-edit-section">
+                            <div class="program-edit-section-heading">
+                                <span class="program-edit-section-icon"><svg class="icon"><use href="#i-calendar"></use></svg></span>
+                                <div>
+                                    <span class="program-edit-section-kicker">Calendario</span>
+                                    <h3>Cuándo se publicará</h3>
+                                </div>
+                            </div>
+
+                            <div class="program-edit-schedule-grid">
+                                <div class="field">
+                                    <label for="editar-hora" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora</span></label>
+                                    <input type="time" id="editar-hora" class="input">
+                                </div>
+
+                                <label class="toggle-field program-edit-active-toggle">
+                                    <input id="editar-activa" type="checkbox">
+                                    <span class="toggle-control"></span>
+                                    <span><strong>Programación activa</strong><small>Podés pausarla sin eliminarla.</small></span>
+                                </label>
+                            </div>
+
+                            <div class="weekday-field">
+                                <div class="weekday-field-header">
+                                    <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
+                                    <label class="all-days-check" for="editar-todos-dias">
+                                        <input type="checkbox" id="editar-todos-dias">
+                                        <span class="all-days-box"><svg class="icon"><use href="#i-check"></use></svg></span>
+                                        <span>Todos los días</span>
+                                    </label>
+                                </div>
+                                <div id="editar-dias-programados" class="weekday-picker">
+                                    <label><input type="checkbox" value="1"><span>Lun</span></label>
+                                    <label><input type="checkbox" value="2"><span>Mar</span></label>
+                                    <label><input type="checkbox" value="3"><span>Mié</span></label>
+                                    <label><input type="checkbox" value="4"><span>Jue</span></label>
+                                    <label><input type="checkbox" value="5"><span>Vie</span></label>
+                                    <label><input type="checkbox" value="6"><span>Sáb</span></label>
+                                    <label><input type="checkbox" value="0"><span>Dom</span></label>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="program-edit-section program-edit-pacing">
+                            <div class="program-edit-section-heading">
+                                <span class="program-edit-section-icon"><svg class="icon"><use href="#i-timer"></use></svg></span>
+                                <div>
+                                    <span class="program-edit-section-kicker">Ritmo</span>
+                                    <h3>Cómo se procesarán las líneas</h3>
+                                </div>
+                            </div>
+
+                            <div class="pacing-mode-selector" role="radiogroup" aria-label="Ritmo de la programación">
+                                <label class="pacing-mode-option">
+                                    <input type="radio" name="editar-modo-ritmo" value="secuencial">
+                                    <span class="pacing-mode-card">
+                                        <span class="pacing-mode-icon"><svg class="icon"><use href="#i-timer"></use></svg></span>
+                                        <span class="pacing-mode-copy">
+                                            <strong>Una línea a la vez</strong>
+                                            <small>Espera en segundos entre líneas.</small>
+                                        </span>
+                                        <span class="pacing-mode-check"></span>
+                                    </span>
+                                </label>
+                                <label class="pacing-mode-option">
+                                    <input type="radio" name="editar-modo-ritmo" value="grupos">
+                                    <span class="pacing-mode-card">
+                                        <span class="pacing-mode-icon"><svg class="icon"><use href="#i-layers"></use></svg></span>
+                                        <span class="pacing-mode-copy">
+                                            <strong>Publicar por grupos</strong>
+                                            <small>Tandas con pausa en minutos.</small>
+                                        </span>
+                                        <span class="pacing-mode-check"></span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div id="editar-ritmo-secuencial" class="pacing-fields">
+                                <div class="field">
+                                    <label for="editar-intervalo-segundos" class="label-with-icon"><svg class="icon"><use href="#i-timer"></use></svg><span>Segundos entre líneas</span></label>
+                                    <input type="number" id="editar-intervalo-segundos" class="input" min="10" max="3600" step="1">
+                                </div>
+                                <div class="field">
+                                    <label for="editar-variacion-segundos" class="label-with-icon"><svg class="icon"><use href="#i-activity"></use></svg><span>Variación adicional</span></label>
+                                    <input type="number" id="editar-variacion-segundos" class="input" min="0" max="30" step="1">
+                                </div>
+                            </div>
+
+                            <div id="editar-ritmo-grupos" class="pacing-fields" hidden>
+                                <div class="field">
+                                    <label for="editar-lineas-por-grupo" class="label-with-icon"><svg class="icon"><use href="#i-layers"></use></svg><span>Líneas por envío</span></label>
+                                    <input type="number" id="editar-lineas-por-grupo" class="input" min="1" max="10" step="1">
+                                </div>
+                                <div class="field">
+                                    <label for="editar-intervalo-minutos" class="label-with-icon"><svg class="icon"><use href="#i-timer"></use></svg><span>Minutos entre tandas</span></label>
+                                    <input type="number" id="editar-intervalo-minutos" class="input" min="0" max="1440" step="0.5">
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="program-edit-section program-edit-lines">
+                            <div class="program-edit-section-heading program-edit-lines-heading">
+                                <span class="program-edit-section-icon"><svg class="icon"><use href="#i-lines"></use></svg></span>
+                                <div>
+                                    <span class="program-edit-section-kicker">Destino</span>
+                                    <h3>Líneas de la programación</h3>
+                                </div>
+                                <span id="editar-cantidad-lineas" class="selected-count">0 seleccionadas</span>
+                            </div>
+
+                            <div class="program-edit-lines-toolbar">
+                                <label class="program-edit-search" for="editar-buscar-lineas">
+                                    <svg class="icon"><use href="#i-search"></use></svg>
+                                    <input
+                                        type="search"
+                                        id="editar-buscar-lineas"
+                                        placeholder="Buscar por nombre o número"
+                                        autocomplete="off"
+                                    >
+                                </label>
+
+                                <div id="editar-selector-orden-lineas" class="line-order-picker">
+                                    <button
+                                        type="button"
+                                        id="editar-btn-orden-lineas"
+                                        class="line-order-button"
+                                        aria-haspopup="listbox"
+                                        aria-expanded="false"
+                                    >
+                                        <span class="line-order-button-copy">
+                                            <small>Ordenar por</small>
+                                            <strong id="editar-texto-orden-lineas">Orden de conexión</strong>
+                                        </span>
+                                        <svg class="icon line-order-chevron"><use href="#i-chevron-down"></use></svg>
+                                    </button>
+                                    <div class="line-order-menu" role="listbox" aria-label="Ordenar líneas programadas por">
+                                        <button type="button" class="line-order-option active" data-edit-line-order="conexion" role="option" aria-selected="true">
+                                            <span class="line-order-option-mark"></span>
+                                            <span><strong>Orden de conexión</strong><small>Según el número asignado</small></span>
+                                        </button>
+                                        <button type="button" class="line-order-option" data-edit-line-order="alfabetico" role="option" aria-selected="false">
+                                            <span class="line-order-option-mark"></span>
+                                            <span><strong>Alfabético</strong><small>Ordenar por nombre</small></span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    id="editar-btn-direccion-lineas"
+                                    class="line-order-direction"
+                                    aria-label="Cambiar a orden descendente"
+                                    title="Cambiar a orden descendente"
+                                >
+                                    <svg class="icon" aria-hidden="true"><use href="#i-sort"></use></svg>
+                                    <span id="editar-texto-direccion-lineas">1 → 10</span>
+                                </button>
+
+                                <button type="button" id="editar-limpiar-busqueda-lineas" class="secondary-button program-edit-clear-search">
+                                    <svg class="icon"><use href="#i-clear"></use></svg>
+                                    <span>Limpiar</span>
+                                </button>
+                            </div>
+
+                            <div class="program-edit-lines-summary">
+                                <label class="check-all">
+                                    <input type="checkbox" id="editar-seleccionar-todas-lineas">
+                                    <span>Seleccionar visibles</span>
+                                </label>
+                                <span id="editar-resultado-lineas">Cargando líneas…</span>
+                            </div>
+
+                            <div id="editar-lista-lineas" class="selector-lines-list program-edit-lines-list"></div>
+                        </section>
+
+                        <p id="mensaje-edicion" class="modal-message"></p>
+                    </div>
+
+                    <div class="modal-actions program-edit-actions">
+                        <button type="button" id="btn-cancelar-edicion" class="secondary-button">
+                            <svg class="icon"><use href="#i-x"></use></svg>
+                            <span>Cancelar</span>
+                        </button>
+                        <button type="button" id="btn-guardar-edicion" class="primary-button">
+                            <svg class="icon"><use href="#i-save"></use></svg>
+                            <span>Guardar cambios</span>
+                        </button>
                     </div>
                 </section>
-
-                <div class="field" style="margin-top:14px;">
-                    <label for="editar-texto" class="label-with-icon"><svg class="icon"><use href="#i-text"></use></svg><span>Texto opcional</span></label>
-                    <textarea
-                        id="editar-texto"
-                        class="textarea"
-                        placeholder="Podés dejarlo vacío."
-                    ></textarea>
-                </div>
-
-                <div class="field" style="margin-top:14px;">
-                    <label for="editar-hora" class="label-with-icon"><svg class="icon"><use href="#i-clock"></use></svg><span>Hora de publicación</span></label>
-                    <input type="time" id="editar-hora" class="input">
-                </div>
-
-                <div class="field weekday-field" style="margin-top:18px;">
-                    <div class="weekday-field-header">
-                        <label class="label-with-icon"><svg class="icon"><use href="#i-calendar"></use></svg><span>Días de la semana</span></label>
-                        <label class="all-days-check" for="editar-todos-dias">
-                            <input type="checkbox" id="editar-todos-dias">
-                            <span class="all-days-box"><svg class="icon"><use href="#i-check"></use></svg></span>
-                            <span>Todos los días</span>
-                        </label>
-                    </div>
-                    <p class="weekday-helper">Marcá <strong>Todos los días</strong> para seleccionar la semana completa de una sola vez.</p>
-                    <div id="editar-dias-programados" class="weekday-picker">
-                        <label><input type="checkbox" value="1"><span>Lun</span></label>
-                        <label><input type="checkbox" value="2"><span>Mar</span></label>
-                        <label><input type="checkbox" value="3"><span>Mié</span></label>
-                        <label><input type="checkbox" value="4"><span>Jue</span></label>
-                        <label><input type="checkbox" value="5"><span>Vie</span></label>
-                        <label><input type="checkbox" value="6"><span>Sáb</span></label>
-                        <label><input type="checkbox" value="0"><span>Dom</span></label>
-                    </div>
-                </div>
-
-                <label class="toggle-field" style="margin-top:14px;">
-                    <input id="editar-activa" type="checkbox">
-                    <span class="toggle-control"></span>
-                    <span><strong>Programación activa</strong><small>Desactivala para conservarla sin ejecutarla.</small></span>
-                </label>
-
-                <p id="mensaje-edicion" class="modal-message"></p>
-
-                <div class="modal-actions">
-                    <button type="button" id="btn-guardar-edicion" class="primary-button">
-                        <svg class="icon"><use href="#i-save"></use></svg>
-                        <span>Guardar cambios</span>
-                    </button>
-
-                    <button type="button" id="btn-cancelar-edicion" class="secondary-button">
-                        <svg class="icon"><use href="#i-x"></use></svg>
-                        <span>Cancelar</span>
-                    </button>
-                </div>
             </div>
         </div>
     </div>

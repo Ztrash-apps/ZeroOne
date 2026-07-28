@@ -111,6 +111,14 @@
                     selector.__contenidoRenderizado = contenidoSelector;
                 }
 
+                if (
+                    document
+                        .getElementById('modal-editar')
+                        ?.classList.contains('open')
+                ) {
+                    renderizarLineasEditorProgramacion();
+                }
+
                 renderizarLineasConectadas(cacheLineasSeccion);
 
                 renderizarLineasPendientes(pendientes);
@@ -529,7 +537,14 @@
                 } else if (progreso.estado === 'completado_con_errores') {
                     proximo.textContent = 'Finalizado con errores';
                 } else if (progreso.estado === 'detenido_seguridad') {
-                    proximo.textContent = 'Detenido por seguridad';
+                    proximo.textContent = [
+                        'desconexion_previa',
+                        'lineas_no_disponibles'
+                    ].includes(
+                        progreso.decisionSeguridadPendiente?.tipo
+                    )
+                        ? 'Esperando tu decisión'
+                        : 'Detenido por seguridad';
                 } else if (progreso.estado === 'detenido_desconexion') {
                     proximo.textContent = 'Detenido por desconexión';
                 } else if (progreso.estado === 'detenido_limite_temporal') {
@@ -559,13 +574,44 @@
 
                 const alertaSeguridad = document.getElementById('alerta-seguridad');
                 const detalleSeguridad = document.getElementById('detalle-seguridad');
+                const tituloSeguridad =
+                    document.getElementById('titulo-alerta-seguridad');
+                const textoReanudarSeguridad =
+                    document.getElementById('texto-reanudar-seguridad');
+                const textoCancelarSeguridad =
+                    document.getElementById('texto-cancelar-seguridad');
+                const tipoDecisionSeguridad = String(
+                    progreso.decisionSeguridadPendiente?.tipo || ''
+                ).trim().toLowerCase();
+                const permiteOmitirYContinuar = [
+                    'desconexion_previa',
+                    'lineas_no_disponibles'
+                ].includes(tipoDecisionSeguridad);
+                const sonVariasLineasNoDisponibles =
+                    tipoDecisionSeguridad === 'lineas_no_disponibles';
                 const seguridadDetenida =
                     progreso.estado === 'detenido_seguridad';
 
                 alertaSeguridad.classList.toggle('visible', seguridadDetenida);
+                alertaSeguridad.dataset.tipoDecisionSeguridad =
+                    seguridadDetenida ? tipoDecisionSeguridad : '';
+                tituloSeguridad.textContent = permiteOmitirYContinuar
+                    ? (
+                        sonVariasLineasNoDisponibles
+                            ? 'Líneas no disponibles'
+                            : 'Línea sin conexión'
+                    )
+                    : 'Corte automático de seguridad';
+                textoReanudarSeguridad.textContent = permiteOmitirYContinuar
+                    ? 'Omitir y continuar'
+                    : 'Reanudar';
+                textoCancelarSeguridad.textContent = permiteOmitirYContinuar
+                    ? 'Detener campaña'
+                    : 'Cancelar';
 
                 if (seguridadDetenida) {
                     detalleSeguridad.textContent =
+                        progreso.decisionSeguridadPendiente?.mensaje ||
                         progreso.mensajeSeguridad ||
                         extraerCausaProgreso(progreso) ||
                         `Se alcanzó el límite configurado de ` +
@@ -718,6 +764,244 @@
             return formData;
         }
 
+        function obtenerLineasEditorProgramacion() {
+            const idProgramacion = document
+                .getElementById('editar-id')
+                ?.value;
+            const programacion = programacionesCache.get(idProgramacion);
+            const porId = new Map(
+                (cacheLineasAgendamiento || []).map(linea => [
+                    String(linea.id),
+                    {
+                        ...linea,
+                        id: String(linea.id),
+                        faltante: false
+                    }
+                ])
+            );
+            const idsProgramados = Array.isArray(programacion?.idsLineas)
+                ? programacion.idsLineas
+                : [];
+            const referencias = Array.isArray(
+                programacion?.lineasProgramadas
+            )
+                ? programacion.lineasProgramadas
+                : idsProgramados.map((id, indice) => ({
+                    id,
+                    nombre:
+                        programacion?.nombresLineas?.[indice] ||
+                        'Línea eliminada',
+                    existe: false
+                }));
+
+            for (const referencia of referencias) {
+                const id = String(referencia?.id || '');
+                if (!id || porId.has(id)) continue;
+                porId.set(id, {
+                    id,
+                    nombre:
+                        referencia?.nombre || 'Línea eliminada',
+                    numero: null,
+                    etiqueta: 'indefinida',
+                    estado: 'eliminada',
+                    ordenConexion: Number.MAX_SAFE_INTEGER,
+                    faltante: true
+                });
+            }
+
+            return [...porId.values()];
+        }
+
+        function compararLineasEditorProgramacion(a, b) {
+            if (a.faltante !== b.faltante) return a.faltante ? 1 : -1;
+            return compararLineasPor(
+                a,
+                b,
+                ordenLineasEdicionProgramacion,
+                direccionLineasEdicionProgramacion
+            );
+        }
+
+        function actualizarControlesOrdenEditorProgramacion() {
+            const nombreOrden =
+                ordenLineasEdicionProgramacion === 'alfabetico'
+                    ? 'Alfabético'
+                    : 'Orden de conexión';
+            const textoOrden = document.getElementById(
+                'editar-texto-orden-lineas'
+            );
+            if (textoOrden) textoOrden.textContent = nombreOrden;
+
+            document
+                .querySelectorAll('[data-edit-line-order]')
+                .forEach(opcion => {
+                    const activa =
+                        opcion.dataset.editLineOrder ===
+                        ordenLineasEdicionProgramacion;
+                    opcion.classList.toggle('active', activa);
+                    opcion.setAttribute(
+                        'aria-selected',
+                        String(activa)
+                    );
+                });
+
+            const esAscendente =
+                direccionLineasEdicionProgramacion === 'asc';
+            const esAlfabetico =
+                ordenLineasEdicionProgramacion === 'alfabetico';
+            const etiqueta = esAlfabetico
+                ? (esAscendente ? 'A → Z' : 'Z → A')
+                : (esAscendente ? '1 → 10' : '10 → 1');
+            const siguiente = esAscendente
+                ? 'descendente'
+                : 'ascendente';
+            const botonDireccion = document.getElementById(
+                'editar-btn-direccion-lineas'
+            );
+            const textoDireccion = document.getElementById(
+                'editar-texto-direccion-lineas'
+            );
+
+            if (textoDireccion) textoDireccion.textContent = etiqueta;
+            if (botonDireccion) {
+                botonDireccion.dataset.direction =
+                    direccionLineasEdicionProgramacion;
+                botonDireccion.title =
+                    `Cambiar a orden ${siguiente}`;
+                botonDireccion.setAttribute(
+                    'aria-label',
+                    `Cambiar a orden ${siguiente}`
+                );
+            }
+        }
+
+        function renderizarLineasEditorProgramacion() {
+            const contenedor = document.getElementById(
+                'editar-lista-lineas'
+            );
+            if (!contenedor) return;
+
+            const busqueda = String(
+                document.getElementById('editar-buscar-lineas')?.value || ''
+            )
+                .trim()
+                .toLocaleLowerCase('es');
+            const lineas = obtenerLineasEditorProgramacion();
+            const visibles = lineas
+                .filter(linea => {
+                    if (!busqueda) return true;
+                    return [
+                        linea.nombre,
+                        linea.numero,
+                        nombreEtiqueta(linea.etiqueta),
+                        linea.estado
+                    ].some(valor =>
+                        String(valor || '')
+                            .toLocaleLowerCase('es')
+                            .includes(busqueda)
+                    );
+                })
+                .sort(compararLineasEditorProgramacion);
+
+            contenedor.innerHTML = visibles.length
+                ? visibles.map(linea => {
+                    const id = String(linea.id);
+                    const seleccionada =
+                        lineasSeleccionadasEdicionProgramacion.has(id);
+                    const faltante = linea.faltante === true;
+                    const detalleEstado = faltante
+                        ? 'Esta línea fue eliminada. Podés quitarla de la programación.'
+                        : linea.estado === 'conectado'
+                            ? 'Disponible actualmente'
+                            : `Estado actual: ${String(
+                                linea.estado || 'desconectada'
+                            ).replaceAll('_', ' ')}`;
+                    return `
+                        <label class="selector-line program-edit-line ${faltante ? 'missing' : ''}">
+                            <input
+                                type="checkbox"
+                                class="line-check editar-seleccionar-linea"
+                                value="${escaparHTML(id)}"
+                                ${seleccionada ? 'checked' : ''}
+                                ${faltante && !seleccionada ? 'disabled' : ''}
+                            >
+                            <span class="selector-line-info">
+                                <strong>
+                                    ${escaparHTML(linea.nombre || 'Línea sin nombre')}
+                                    ${faltante
+                                        ? '<span class="program-edit-line-state missing">Eliminada</span>'
+                                        : etiquetaHTML(linea.etiqueta)}
+                                </strong>
+                                <span class="meta-with-icon">
+                                    ${iconoSVG(faltante ? 'alert' : 'phone-call')}
+                                    <span>${escaparHTML(
+                                        linea.numero ||
+                                        (faltante
+                                            ? `ID ${id.slice(0, 8)}`
+                                            : 'Número no disponible')
+                                    )}</span>
+                                </span>
+                                <span class="program-edit-line-status">
+                                    ${escaparHTML(detalleEstado)}
+                                </span>
+                            </span>
+                        </label>
+                    `;
+                }).join('')
+                : `
+                    <div class="empty-state program-edit-lines-empty">
+                        <strong>No se encontraron líneas</strong>
+                        <span>Probá con otro nombre o número.</span>
+                    </div>
+                `;
+
+            const seleccionablesVisibles = visibles.filter(
+                linea => linea.faltante !== true
+            );
+            const seleccionadasVisibles = seleccionablesVisibles.filter(
+                linea =>
+                    lineasSeleccionadasEdicionProgramacion.has(
+                        String(linea.id)
+                    )
+            ).length;
+            const seleccionarTodas = document.getElementById(
+                'editar-seleccionar-todas-lineas'
+            );
+            if (seleccionarTodas) {
+                seleccionarTodas.checked =
+                    seleccionablesVisibles.length > 0 &&
+                    seleccionadasVisibles ===
+                        seleccionablesVisibles.length;
+                seleccionarTodas.indeterminate =
+                    seleccionadasVisibles > 0 &&
+                    seleccionadasVisibles <
+                        seleccionablesVisibles.length;
+                seleccionarTodas.disabled =
+                    seleccionablesVisibles.length === 0;
+            }
+
+            const cantidad = document.getElementById(
+                'editar-cantidad-lineas'
+            );
+            if (cantidad) {
+                const total =
+                    lineasSeleccionadasEdicionProgramacion.size;
+                cantidad.textContent =
+                    `${total} ${total === 1 ? 'seleccionada' : 'seleccionadas'}`;
+            }
+
+            const resultado = document.getElementById(
+                'editar-resultado-lineas'
+            );
+            if (resultado) {
+                resultado.textContent = busqueda
+                    ? `${visibles.length} resultado(s) de ${lineas.length}.`
+                    : `${lineas.length} línea(s) disponibles para esta programación.`;
+            }
+
+            actualizarControlesOrdenEditorProgramacion();
+        }
+
         function abrirEditorProgramacion(id) {
             const item = programacionesCache.get(id);
             if (!item) return;
@@ -726,6 +1010,18 @@
             document.getElementById('editar-hora').value = item.hora;
             document.getElementById('editar-texto').value = item.texto || '';
             document.getElementById('editar-activa').checked = item.activa !== false;
+            document.getElementById('editar-intervalo-segundos').value =
+                Number(item.intervaloSegundos) || 45;
+            document.getElementById('editar-variacion-segundos').value =
+                Number(item.variacionSegundos) || 0;
+            document.getElementById('editar-lineas-por-grupo').value =
+                Number(item.lineasPorGrupo) || 10;
+            document.getElementById('editar-intervalo-minutos').value =
+                Number(item.intervaloMinutos) || 0;
+            establecerModoRitmo(
+                'editar-modo-ritmo',
+                item.modoRitmo
+            );
             marcarDiasSeleccionados('editar-dias-programados', item.diasSemana || [0,1,2,3,4,5,6]);
             if (urlPreviewEdicion) {
                 URL.revokeObjectURL(urlPreviewEdicion);
@@ -734,12 +1030,29 @@
 
             document.getElementById('editar-foto').value = '';
             document.getElementById('editar-foto-nombre').textContent =
-                'Ningún archivo nuevo seleccionado';
+                'Se conservará la imagen actual';
             document.getElementById('mensaje-edicion').textContent = '';
             document.getElementById('editar-imagen-actual').src =
                 `/programaciones/${item.id}/imagen?v=${Date.now()}`;
 
+            lineasSeleccionadasEdicionProgramacion.clear();
+            for (const lineaId of item.idsLineas || []) {
+                lineasSeleccionadasEdicionProgramacion.add(
+                    String(lineaId)
+                );
+            }
+            ordenLineasEdicionProgramacion = 'conexion';
+            direccionLineasEdicionProgramacion = 'asc';
+            document.getElementById('editar-buscar-lineas').value = '';
+            document
+                .getElementById('editar-selector-orden-lineas')
+                .classList.remove('open');
+            document
+                .getElementById('editar-btn-orden-lineas')
+                .setAttribute('aria-expanded', 'false');
+            renderizarLineasEditorProgramacion();
             abrirModal('modal-editar');
+            void actualizarLineas();
         }
 
         function cerrarEditorProgramacion() {
@@ -747,8 +1060,10 @@
             document.getElementById('editar-id').value = '';
             document.getElementById('editar-foto').value = '';
             document.getElementById('editar-foto-nombre').textContent =
-                'Ningún archivo nuevo seleccionado';
+                'Se conservará la imagen actual';
+            document.getElementById('editar-buscar-lineas').value = '';
             document.getElementById('mensaje-edicion').textContent = '';
+            lineasSeleccionadasEdicionProgramacion.clear();
 
             if (urlPreviewEdicion) {
                 URL.revokeObjectURL(urlPreviewEdicion);

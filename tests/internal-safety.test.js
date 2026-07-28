@@ -9,6 +9,9 @@ const sharp = require('sharp');
 
 const RAIZ_PROYECTO = path.resolve(__dirname, '..');
 const ID_LINEA = '11111111-1111-4111-8111-111111111111';
+const ID_LINEA_SEGUNDA = '22222222-2222-4222-8222-222222222222';
+const ID_LINEA_HISTORICA = '33333333-3333-4333-8333-333333333333';
+const ID_LINEA_DESCONOCIDA = '44444444-4444-4444-8444-444444444444';
 const ID_PROGRAMACION = 'programacion-prueba-interna';
 
 function escribirJSON(ruta, datos) {
@@ -29,6 +32,15 @@ function prepararDatos(rutaDatos) {
             requiereRevisionEnvio: true,
             motivoRevisionEnvio: 'Envío anterior sin confirmación.',
             revisionEnvioDesde: new Date().toISOString()
+        },
+        {
+            id: ID_LINEA_SEGUNDA,
+            nombre: 'Línea interna secundaria',
+            ordenConexion: 2,
+            etiqueta: 'caida',
+            intentosReconexion: 5,
+            conexionEnVerificacion: false,
+            reconexionBloqueada: true
         }
     ]);
 
@@ -40,7 +52,7 @@ function prepararDatos(rutaDatos) {
             activa: false,
             estado: 'pausado',
             texto: 'Prueba interna; nunca se envía.',
-            idsLineas: [],
+            idsLineas: [ID_LINEA_HISTORICA],
             modoRitmo: 'secuencial',
             intervaloSegundos: 45,
             variacionSegundos: 5,
@@ -342,6 +354,206 @@ test('middleware defensivo de ZeroOne (sin WhatsApp real)', async t => {
             );
             assert.equal(guardada.nombreArchivo, 'estado-grande.jpg');
         });
+
+        await t.test(
+            'expone y actualiza líneas y ritmo de una programación',
+            async () => {
+                const listaInicial = await solicitarJSON(
+                    servidor.baseURL,
+                    '/programaciones'
+                );
+                const inicial = listaInicial.datos.programaciones.find(
+                    item => item.id === ID_PROGRAMACION
+                );
+
+                assert.equal(listaInicial.respuesta.status, 200);
+                assert.deepEqual(inicial.idsLineas, [ID_LINEA_HISTORICA]);
+                assert.deepEqual(inicial.lineasProgramadas, [
+                    {
+                        id: ID_LINEA_HISTORICA,
+                        nombre: 'Línea eliminada',
+                        existe: false
+                    }
+                ]);
+
+                const formulario = new FormData();
+                formulario.append(
+                    'lineas',
+                    JSON.stringify([
+                        ID_LINEA_HISTORICA,
+                        ID_LINEA_SEGUNDA,
+                        ID_LINEA,
+                        ID_LINEA_SEGUNDA
+                    ])
+                );
+                formulario.append('modoRitmo', 'grupos');
+                formulario.append('intervaloSegundos', '60');
+                formulario.append('variacionSegundos', '8');
+                formulario.append('lineasPorGrupo', '2');
+                formulario.append('intervaloMinutos', '7');
+
+                const actualizacion = await solicitarJSON(
+                    servidor.baseURL,
+                    `/programaciones/${ID_PROGRAMACION}`,
+                    {
+                        method: 'PUT',
+                        body: formulario
+                    }
+                );
+                assert.equal(actualizacion.respuesta.status, 200);
+
+                const listaActualizada = await solicitarJSON(
+                    servidor.baseURL,
+                    '/programaciones'
+                );
+                const actualizada = listaActualizada.datos.programaciones.find(
+                    item => item.id === ID_PROGRAMACION
+                );
+
+                assert.deepEqual(actualizada.idsLineas, [
+                    ID_LINEA_HISTORICA,
+                    ID_LINEA_SEGUNDA,
+                    ID_LINEA
+                ]);
+                assert.deepEqual(actualizada.lineasProgramadas, [
+                    {
+                        id: ID_LINEA_HISTORICA,
+                        nombre: 'Línea eliminada',
+                        existe: false
+                    },
+                    {
+                        id: ID_LINEA_SEGUNDA,
+                        nombre: 'Línea interna secundaria',
+                        existe: true
+                    },
+                    {
+                        id: ID_LINEA,
+                        nombre: 'Línea interna bloqueada',
+                        existe: true
+                    }
+                ]);
+                assert.equal(actualizada.modoRitmo, 'grupos');
+                assert.equal(actualizada.intervaloSegundos, 60);
+                assert.equal(actualizada.variacionSegundos, 8);
+                assert.equal(actualizada.lineasPorGrupo, 2);
+                assert.equal(actualizada.intervaloMinutos, 7);
+
+                const persistidas = JSON.parse(
+                    fs.readFileSync(
+                        path.join(
+                            rutaDatos,
+                            'programados',
+                            'programaciones.json'
+                        ),
+                        'utf8'
+                    )
+                );
+                const persistida = persistidas.find(
+                    item => item.id === ID_PROGRAMACION
+                );
+                assert.deepEqual(
+                    persistida.idsLineas,
+                    actualizada.idsLineas
+                );
+                assert.equal(persistida.modoRitmo, 'grupos');
+                assert.equal(persistida.intervaloMinutos, 7);
+            }
+        );
+
+        await t.test(
+            'rechaza líneas nuevas desconocidas y ritmos inválidos sin mutar',
+            async () => {
+                const formularioLinea = new FormData();
+                formularioLinea.append(
+                    'lineas',
+                    JSON.stringify([ID_LINEA, ID_LINEA_DESCONOCIDA])
+                );
+                const lineaInvalida = await solicitarJSON(
+                    servidor.baseURL,
+                    `/programaciones/${ID_PROGRAMACION}`,
+                    {
+                        method: 'PUT',
+                        body: formularioLinea
+                    }
+                );
+
+                assert.equal(lineaInvalida.respuesta.status, 400);
+                assert.match(
+                    lineaInvalida.datos.error,
+                    /línea que ya no existe/i
+                );
+
+                const formularioRitmo = new FormData();
+                formularioRitmo.append('variacionSegundos', '31');
+                const ritmoInvalido = await solicitarJSON(
+                    servidor.baseURL,
+                    `/programaciones/${ID_PROGRAMACION}`,
+                    {
+                        method: 'PUT',
+                        body: formularioRitmo
+                    }
+                );
+
+                assert.equal(ritmoInvalido.respuesta.status, 400);
+
+                const lista = await solicitarJSON(
+                    servidor.baseURL,
+                    '/programaciones'
+                );
+                const programacion = lista.datos.programaciones.find(
+                    item => item.id === ID_PROGRAMACION
+                );
+                assert.deepEqual(programacion.idsLineas, [
+                    ID_LINEA_HISTORICA,
+                    ID_LINEA_SEGUNDA,
+                    ID_LINEA
+                ]);
+                assert.equal(programacion.variacionSegundos, 8);
+            }
+        );
+
+        await t.test(
+            'conserva líneas y ritmo cuando la edición no los incluye',
+            async () => {
+                const formulario = new FormData();
+                formulario.append(
+                    'texto',
+                    'Edición compatible sin selector de líneas.'
+                );
+
+                const actualizacion = await solicitarJSON(
+                    servidor.baseURL,
+                    `/programaciones/${ID_PROGRAMACION}`,
+                    {
+                        method: 'PUT',
+                        body: formulario
+                    }
+                );
+                assert.equal(actualizacion.respuesta.status, 200);
+
+                const lista = await solicitarJSON(
+                    servidor.baseURL,
+                    '/programaciones'
+                );
+                const programacion = lista.datos.programaciones.find(
+                    item => item.id === ID_PROGRAMACION
+                );
+                assert.deepEqual(programacion.idsLineas, [
+                    ID_LINEA_HISTORICA,
+                    ID_LINEA_SEGUNDA,
+                    ID_LINEA
+                ]);
+                assert.equal(programacion.modoRitmo, 'grupos');
+                assert.equal(programacion.intervaloSegundos, 60);
+                assert.equal(programacion.variacionSegundos, 8);
+                assert.equal(programacion.lineasPorGrupo, 2);
+                assert.equal(programacion.intervaloMinutos, 7);
+                assert.equal(
+                    programacion.texto,
+                    'Edición compatible sin selector de líneas.'
+                );
+            }
+        );
 
         await t.test('Alto total es seguro aunque no haya una publicación activa', async () => {
             const { respuesta, datos } = await solicitarJSON(

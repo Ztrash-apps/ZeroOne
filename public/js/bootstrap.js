@@ -118,7 +118,9 @@
             agendaLineaId = id;
             agendaCuentaId = null;
             agendaBusquedaLineas = '';
+            agendaBusquedaCuentas = '';
             document.getElementById('buscar-lineas-agendamiento').value = '';
+            document.getElementById('buscar-cuentas-agendamiento').value = '';
             agendaSecuencia += 1;
             agendaFirmaLineas = '';
             agendaFirmaCuentas = '';
@@ -142,6 +144,16 @@
                 agendaBusquedaLineas = evento.target.value;
                 agendaFirmaLineas = '';
                 renderizarSelectorLineasAgendamiento({ forzar: true });
+            });
+
+        document.getElementById('buscar-cuentas-agendamiento')
+            .addEventListener('input', evento => {
+                agendaBusquedaCuentas = evento.target.value;
+                agendaFirmaCuentas = '';
+                renderizarSelectorCuentasAgendamiento(
+                    cuentasGoogleDisponibles,
+                    { forzar: true }
+                );
             });
 
         document.getElementById('agenda-account-menu').addEventListener('click', evento => {
@@ -296,6 +308,21 @@
             evento.currentTarget.setAttribute('aria-expanded', String(abierto));
         });
 
+        document.getElementById('editar-btn-orden-lineas').addEventListener(
+            'click',
+            evento => {
+                evento.stopPropagation();
+                const selector = document.getElementById(
+                    'editar-selector-orden-lineas'
+                );
+                const abierto = selector.classList.toggle('open');
+                evento.currentTarget.setAttribute(
+                    'aria-expanded',
+                    String(abierto)
+                );
+            }
+        );
+
         document.querySelectorAll('[data-line-order]').forEach(opcion => {
             opcion.addEventListener('click', () => {
                 ordenLineas = opcion.dataset.lineOrder;
@@ -314,12 +341,28 @@
             });
         });
 
+        document.querySelectorAll('[data-edit-line-order]').forEach(opcion => {
+            opcion.addEventListener('click', () => {
+                ordenLineasEdicionProgramacion =
+                    opcion.dataset.editLineOrder;
+                document
+                    .getElementById('editar-selector-orden-lineas')
+                    .classList.remove('open');
+                document
+                    .getElementById('editar-btn-orden-lineas')
+                    .setAttribute('aria-expanded', 'false');
+                renderizarLineasEditorProgramacion();
+            });
+        });
+
         document.addEventListener('click', evento => {
             if (evento.target.closest('.line-order-picker')) return;
             document.getElementById('selector-orden-lineas').classList.remove('open');
             document.getElementById('btn-orden-lineas').setAttribute('aria-expanded', 'false');
             document.getElementById('selector-orden-lineas-subida').classList.remove('open');
             document.getElementById('btn-orden-lineas-subida').setAttribute('aria-expanded', 'false');
+            document.getElementById('editar-selector-orden-lineas').classList.remove('open');
+            document.getElementById('editar-btn-orden-lineas').setAttribute('aria-expanded', 'false');
         });
 
         document.getElementById('btn-direccion-lineas').onclick = () => {
@@ -330,6 +373,14 @@
         document.getElementById('btn-direccion-lineas-subida').onclick = () => {
             direccionLineasSubida = direccionLineasSubida === 'asc' ? 'desc' : 'asc';
             actualizarLineas();
+        };
+
+        document.getElementById('editar-btn-direccion-lineas').onclick = () => {
+            direccionLineasEdicionProgramacion =
+                direccionLineasEdicionProgramacion === 'asc'
+                    ? 'desc'
+                    : 'asc';
+            renderizarLineasEditorProgramacion();
         };
 
         document
@@ -472,7 +523,12 @@
             }
 
             if (!archivo) {
-                nombre.textContent = 'Ningún archivo nuevo seleccionado';
+                const id = document.getElementById('editar-id').value;
+                nombre.textContent = 'Se conservará la imagen actual';
+                if (id) {
+                    imagen.src =
+                        `/programaciones/${encodeURIComponent(id)}/imagen?v=${Date.now()}`;
+                }
                 return;
             }
 
@@ -612,6 +668,64 @@
                 actualizarCheckboxGeneral();
             }
         );
+
+        document.getElementById('editar-buscar-lineas').addEventListener(
+            'input',
+            debounce(renderizarLineasEditorProgramacion, 120)
+        );
+
+        document.getElementById('editar-lista-lineas').addEventListener(
+            'change',
+            evento => {
+                const checkbox = evento.target.closest(
+                    '.editar-seleccionar-linea'
+                );
+                if (!checkbox) return;
+                if (checkbox.checked) {
+                    lineasSeleccionadasEdicionProgramacion.add(
+                        checkbox.value
+                    );
+                } else {
+                    lineasSeleccionadasEdicionProgramacion.delete(
+                        checkbox.value
+                    );
+                }
+                renderizarLineasEditorProgramacion();
+            }
+        );
+
+        document
+            .getElementById('editar-seleccionar-todas-lineas')
+            .addEventListener('change', function () {
+                document
+                    .querySelectorAll(
+                        '#editar-lista-lineas .program-edit-line:not(.missing) ' +
+                        '.editar-seleccionar-linea:not(:disabled)'
+                    )
+                    .forEach(checkbox => {
+                        if (this.checked) {
+                            lineasSeleccionadasEdicionProgramacion.add(
+                                checkbox.value
+                            );
+                        } else {
+                            lineasSeleccionadasEdicionProgramacion.delete(
+                                checkbox.value
+                            );
+                        }
+                    });
+                renderizarLineasEditorProgramacion();
+            });
+
+        document.getElementById(
+            'editar-limpiar-busqueda-lineas'
+        ).onclick = () => {
+            const busqueda = document.getElementById(
+                'editar-buscar-lineas'
+            );
+            busqueda.value = '';
+            renderizarLineasEditorProgramacion();
+            busqueda.focus();
+        };
 
         document.getElementById('lista-estados-activos').addEventListener(
             'click',
@@ -801,6 +915,29 @@
             const archivo = document.getElementById('editar-foto').files[0];
             const diasSemana = obtenerDiasSeleccionados('editar-dias-programados');
             const activa = document.getElementById('editar-activa').checked;
+            const modoRitmo = obtenerModoRitmo(
+                'editar-modo-ritmo'
+            );
+            let intervaloSegundos = Number(
+                document.getElementById(
+                    'editar-intervalo-segundos'
+                ).value
+            );
+            let variacionSegundos = Number(
+                document.getElementById(
+                    'editar-variacion-segundos'
+                ).value
+            );
+            let lineasPorGrupo = Number(
+                document.getElementById(
+                    'editar-lineas-por-grupo'
+                ).value
+            );
+            let intervaloMinutos = Number(
+                document.getElementById(
+                    'editar-intervalo-minutos'
+                ).value
+            );
             const mensaje = document.getElementById('mensaje-edicion');
             const boton = document.getElementById('btn-guardar-edicion');
 
@@ -816,11 +953,97 @@
                 return;
             }
 
+            if (!lineasSeleccionadasEdicionProgramacion.size) {
+                mensaje.textContent =
+                    'Seleccioná al menos una línea para esta programación.';
+                mensaje.style.color = 'var(--danger)';
+                return;
+            }
+
+            const segundosValidos =
+                Number.isInteger(intervaloSegundos) &&
+                intervaloSegundos >= 10 &&
+                intervaloSegundos <= 3600;
+            const variacionValida =
+                Number.isInteger(variacionSegundos) &&
+                variacionSegundos >= 0 &&
+                variacionSegundos <= 30 &&
+                variacionSegundos <= intervaloSegundos;
+            const grupoValido =
+                Number.isInteger(lineasPorGrupo) &&
+                lineasPorGrupo >= 1 &&
+                lineasPorGrupo <= 10;
+            const minutosValidos =
+                Number.isFinite(intervaloMinutos) &&
+                intervaloMinutos >= 0 &&
+                intervaloMinutos <= 1440;
+
+            if (
+                modoRitmo === 'secuencial' &&
+                !segundosValidos
+            ) {
+                mensaje.textContent =
+                    'Indicá entre 10 y 3600 segundos entre líneas.';
+                mensaje.style.color = 'var(--danger)';
+                return;
+            }
+            if (
+                modoRitmo === 'secuencial' &&
+                !variacionValida
+            ) {
+                mensaje.textContent =
+                    'La variación debe estar entre 0 y 30 segundos y no superar el intervalo.';
+                mensaje.style.color = 'var(--danger)';
+                return;
+            }
+            if (modoRitmo === 'grupos' && !grupoValido) {
+                mensaje.textContent =
+                    'Indicá entre 1 y 10 líneas por envío.';
+                mensaje.style.color = 'var(--danger)';
+                return;
+            }
+            if (modoRitmo === 'grupos' && !minutosValidos) {
+                mensaje.textContent =
+                    'Indicá un intervalo entre 0 y 1440 minutos.';
+                mensaje.style.color = 'var(--danger)';
+                return;
+            }
+
+            if (!segundosValidos) intervaloSegundos = 45;
+            if (!variacionValida) variacionSegundos = 5;
+            if (!grupoValido) lineasPorGrupo = 10;
+            if (!minutosValidos) intervaloMinutos = 5;
+
             const formData = new FormData();
             formData.append('hora', hora);
             formData.append('texto', texto);
             formData.append('diasSemana', JSON.stringify(diasSemana));
             formData.append('activa', String(activa));
+            formData.append(
+                'lineas',
+                JSON.stringify(
+                    Array.from(
+                        lineasSeleccionadasEdicionProgramacion
+                    )
+                )
+            );
+            formData.append('modoRitmo', modoRitmo);
+            formData.append(
+                'intervaloSegundos',
+                String(intervaloSegundos)
+            );
+            formData.append(
+                'variacionSegundos',
+                String(variacionSegundos)
+            );
+            formData.append(
+                'lineasPorGrupo',
+                String(lineasPorGrupo)
+            );
+            formData.append(
+                'intervaloMinutos',
+                String(intervaloMinutos)
+            );
 
             if (archivo) {
                 formData.append('imagen', archivo);
@@ -1038,7 +1261,11 @@
             localStorage.getItem('zeroone-settings-tab') || 'general',
             false
         );
-        ['config-modo-ritmo', 'modo-ritmo'].forEach(nombre => {
+        [
+            'config-modo-ritmo',
+            'modo-ritmo',
+            'editar-modo-ritmo'
+        ].forEach(nombre => {
             document.querySelectorAll(`input[name="${nombre}"]`).forEach(radio => {
                 radio.addEventListener('change', () => {
                     if (radio.checked) establecerModoRitmo(nombre, radio.value);
@@ -1338,10 +1565,24 @@
         };
 
         document.getElementById('btn-cancelar-seguridad').onclick = async () => {
+            const tipoDecision = String(
+                document.getElementById('alerta-seguridad')
+                    .dataset.tipoDecisionSeguridad || ''
+            ).trim().toLowerCase();
+            const omisionDisponible = [
+                'desconexion_previa',
+                'lineas_no_disponibles'
+            ].includes(tipoDecision);
             const confirmado = await solicitarConfirmacion({
-                titulo: 'Cancelar líneas restantes',
-                mensaje: 'Las líneas que aún no se procesaron se cancelarán para esta publicación.',
-                textoConfirmar: 'Cancelar restantes',
+                titulo: omisionDisponible
+                    ? 'Detener campaña'
+                    : 'Cancelar líneas restantes',
+                mensaje: omisionDisponible
+                    ? 'La campaña se detendrá y las líneas que aún no se procesaron no recibirán este estado.'
+                    : 'Las líneas que aún no se procesaron se cancelarán para esta publicación.',
+                textoConfirmar: omisionDisponible
+                    ? 'Detener campaña'
+                    : 'Cancelar restantes',
                 icono: 'stop'
             });
             if (confirmado) ejecutarAccionSeguridad('cancelar');
@@ -1554,6 +1795,16 @@
 
         window.addEventListener('beforeunload', () => {
             for (const detener of [...tareasPeriodicasInterfaz]) detener();
+        });
+
+        const refrescarLineasAlRecuperarVentana = () => {
+            if (!document.hidden) void actualizarLineas();
+        };
+        window.addEventListener('focus', refrescarLineasAlRecuperarVentana);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                refrescarLineasAlRecuperarVentana();
+            }
         });
 
         const seccionInicial = location.hash.replace(/^#/, '') || 'dashboard';

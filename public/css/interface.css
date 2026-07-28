@@ -5641,7 +5641,8 @@
             animation: menuReveal .16s ease both;
         }
 
-        #agenda-line-menu {
+        #agenda-line-menu,
+        #agenda-account-menu {
             grid-template-rows: auto minmax(0, 1fr) auto;
             max-height: min(390px, calc(100vh - 180px));
             overflow: hidden;

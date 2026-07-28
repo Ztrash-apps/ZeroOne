@@ -106,6 +106,30 @@ test('el envío incierto se confirma por solicitud sin cerrar el progreso', () =
     );
 });
 
+test('la pausa por desconexión permite omitir la línea o detener la campaña', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const publicacion = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'publication.js'),
+        'utf8'
+    );
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+
+    assert.match(html, /id="titulo-alerta-seguridad"/u);
+    assert.match(html, /id="texto-reanudar-seguridad"/u);
+    assert.match(html, /id="texto-cancelar-seguridad"/u);
+    assert.match(
+        publicacion,
+        /decisionSeguridadPendiente\?\.tipo[\s\S]+Omitir y continuar/u
+    );
+    assert.match(
+        bootstrap,
+        /dataset\.tipoDecisionSeguridad[\s\S]+Detener campaña/u
+    );
+});
+
 test('agendamiento y visualizaciones conservan búsqueda y listas desplazables', () => {
     const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
     const agenda = fs.readFileSync(
@@ -127,14 +151,29 @@ test('agendamiento y visualizaciones conservan búsqueda y listas desplazables',
 
     assert.match(html, /id="buscar-lineas-agendamiento"/u);
     assert.match(html, /id="agenda-line-options"/u);
+    assert.match(html, /id="buscar-cuentas-agendamiento"/u);
+    assert.match(html, /id="agenda-account-options"/u);
+    assert.match(html, /id="resultado-cuentas-agendamiento"/u);
     assert.match(agenda, /normalizarBusquedaAgenda/u);
+    assert.match(
+        agenda,
+        /agendaBusquedaCuentas[\s\S]+No se encontraron cuentas con esa búsqueda/u
+    );
     assert.match(
         bootstrap,
         /buscar-lineas-agendamiento[\s\S]+addEventListener\('input'/u
     );
     assert.match(
+        bootstrap,
+        /buscar-cuentas-agendamiento[\s\S]+renderizarSelectorCuentasAgendamiento/u
+    );
+    assert.match(
         estilos,
         /\.agenda-picker-options[\s\S]+overflow-y:\s*auto/u
+    );
+    assert.match(
+        estilos,
+        /#agenda-line-menu,\s*#agenda-account-menu[\s\S]+overflow:\s*hidden/u
     );
 
     assert.match(html, /id="buscar-visualizaciones-lineas"/u);
@@ -439,5 +478,92 @@ test('la reparación de privacidad solo se ofrece con confirmación explícita',
     assert.match(
         backend,
         /function audienciaEstadosLista[\s\S]+verificacionPrivacidadForzadaPendiente\s*!==\s*true/u
+    );
+});
+
+test('el editor de programaciones permite elegir, buscar y ordenar sus líneas', () => {
+    const html = fs.readFileSync(
+        path.join(rutaPublica, 'index.html'),
+        'utf8'
+    );
+    const shell = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'shell.js'),
+        'utf8'
+    );
+    const publicacion = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'publication.js'),
+        'utf8'
+    );
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+    const diseno = fs.readFileSync(
+        path.join(rutaPublica, 'css', 'design-system.css'),
+        'utf8'
+    );
+
+    for (const id of [
+        'editar-buscar-lineas',
+        'editar-btn-orden-lineas',
+        'editar-btn-direccion-lineas',
+        'editar-seleccionar-todas-lineas',
+        'editar-lista-lineas',
+        'editar-cantidad-lineas',
+        'editar-intervalo-segundos',
+        'editar-variacion-segundos',
+        'editar-lineas-por-grupo',
+        'editar-intervalo-minutos'
+    ]) {
+        assert.match(html, new RegExp(`id="${id}"`, 'u'));
+    }
+
+    assert.match(
+        html,
+        /program-edit-layout[\s\S]+program-edit-visual[\s\S]+program-edit-controls/u
+    );
+    assert.match(
+        shell,
+        /lineasSeleccionadasEdicionProgramacion\s*=\s*new Set\(\)/u
+    );
+    assert.match(
+        publicacion,
+        /function renderizarLineasEditorProgramacion\(\)[\s\S]+compararLineasEditorProgramacion/u
+    );
+    assert.match(
+        publicacion,
+        /programacion\?\.lineasProgramadas[\s\S]+faltante:\s*true/u
+    );
+    assert.match(
+        publicacion,
+        /lineasSeleccionadasEdicionProgramacion\.has\(id\)/u
+    );
+    assert.match(
+        bootstrap,
+        /editar-buscar-lineas[\s\S]+debounce\(renderizarLineasEditorProgramacion,\s*120\)/u
+    );
+    assert.match(
+        bootstrap,
+        /formData\.append\(\s*'lineas',[\s\S]+lineasSeleccionadasEdicionProgramacion/u
+    );
+    assert.match(
+        bootstrap,
+        /formData\.append\('modoRitmo',\s*modoRitmo\)/u
+    );
+    assert.match(
+        bootstrap,
+        /program-edit-line:not\(\.missing\)[\s\S]+editar-seleccionar-linea:not\(:disabled\)/u
+    );
+    assert.match(
+        diseno,
+        /#modal-editar \.program-edit-layout\s*\{[\s\S]+grid-template-columns/u
+    );
+    assert.match(
+        diseno,
+        /#modal-editar \.program-edit-lines-list\s*\{[\s\S]+repeat\(2,\s*minmax\(0,\s*1fr\)\)/u
+    );
+    assert.match(
+        diseno,
+        /@media \(max-width:\s*820px\)[\s\S]+#modal-editar \.program-edit-layout/u
     );
 });

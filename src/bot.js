@@ -241,6 +241,10 @@ const upload = multer({
 const lineas = new Map();
 const programaciones = new Map();
 const trabajosProgramados = new Map();
+const colaIniciosWhatsApp = [];
+const turnosInicioWhatsAppActivos = new Map();
+let secuenciaInicioWhatsApp = 0;
+let procesamientoColaIniciosProgramado = false;
 const colaSincronizacionesAudiencia = [];
 let sincronizacionesAudienciaActivas = 0;
 const sincronizacionesAppStateAudiencia = new WeakMap();
@@ -562,6 +566,8 @@ const TIEMPO_MAXIMO_GOOGLE_AUDIENCIA_MS =
 const MAXIMOS_INTENTOS_RECONEXION = 5;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
+const MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS = 10;
+const JITTER_MAXIMO_RECONEXION_MS = 2500;
 const RETRASOS_RECONEXION_MS = [3000, 8000, 15000, 30000, 60000];
 const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
@@ -720,6 +726,7 @@ function crearProgresoVacio() {
         altoTotalSolicitadoEn: null,
         envioEnCurso: false,
         confirmacionEnvioPendiente: null,
+        decisionSeguridadPendiente: null,
         mensaje: ''
     };
 }
@@ -1341,7 +1348,10 @@ function procesarSiguienteSincronizacionHistorialAgendamiento() {
         return;
     }
 
-    iniciarWhatsApp(linea.id);
+    encolarInicioWhatsApp(linea.id, {
+        prioridad: 2,
+        motivo: 'preparación de agendamiento'
+    });
 }
 
 function cancelarSincronizacionHistorialAgendamiento(
@@ -2004,10 +2014,14 @@ function resolverCarpetaSesionSegura(lineaId) {
     return carpetaSesion;
 }
 
-function esperarDecisionSeguridad() {
+function esperarDecisionSeguridad(decisionPendiente = null) {
     return new Promise(resolve => {
         controlSeguridadPublicacion.pausada = true;
         controlSeguridadPublicacion.resolver = resolve;
+        controlSeguridadPublicacion.decisionSeguridadPendiente =
+            decisionPendiente;
+        progresoPublicacion.decisionSeguridadPendiente =
+            decisionPendiente;
     });
 }
 
@@ -2019,16 +2033,27 @@ function resolverDecisionSeguridad(decision) {
     const resolver = controlSeguridadPublicacion.resolver;
     controlSeguridadPublicacion.pausada = false;
     controlSeguridadPublicacion.resolver = null;
+    controlSeguridadPublicacion.decisionSeguridadPendiente = null;
+    progresoPublicacion.decisionSeguridadPendiente = null;
     resolver(decision);
     return true;
 }
 
-function crearControlSeguridadPublicacion(idsLineas = []) {
+function crearCanalCorteDesconexion() {
     let resolverCorte = null;
-    let resolverAltoTotal = null;
     const promesaCorte = new Promise(resolve => {
         resolverCorte = resolve;
     });
+
+    return {
+        promesaCorte,
+        resolverCorte
+    };
+}
+
+function crearControlSeguridadPublicacion(idsLineas = []) {
+    const canalCorte = crearCanalCorteDesconexion();
+    let resolverAltoTotal = null;
     const promesaAltoTotal = new Promise(resolve => {
         resolverAltoTotal = resolve;
     });
@@ -2037,13 +2062,16 @@ function crearControlSeguridadPublicacion(idsLineas = []) {
         pausada: false,
         resolver: null,
         idsLineas: new Set(idsLineas),
+        idsLineasCriticas: new Set(idsLineas),
+        recuperacionDesde: new Map(),
         corteDesconexion: null,
-        promesaCorte,
-        resolverCorte,
+        promesaCorte: canalCorte.promesaCorte,
+        resolverCorte: canalCorte.resolverCorte,
         altoTotal: null,
         promesaAltoTotal,
         resolverAltoTotal,
-        confirmacionEnvioPendiente: null
+        confirmacionEnvioPendiente: null,
+        decisionSeguridadPendiente: null
     };
 }
 
@@ -2600,6 +2628,8 @@ function solicitarAltoTotalPublicacion() {
         const resolver = controlSeguridadPublicacion.resolver;
         controlSeguridadPublicacion.pausada = false;
         controlSeguridadPublicacion.resolver = null;
+        controlSeguridadPublicacion.decisionSeguridadPendiente = null;
+        progresoPublicacion.decisionSeguridadPendiente = null;
         resolver('alto_total');
     }
 
@@ -2772,20 +2802,83 @@ function formatearCodigoCorte(codigo, respaldo = 'LINEA_DESCONECTADA') {
     return Number.isFinite(Number(codigo)) ? `WA_${Number(codigo)}` : String(codigo);
 }
 
-function registrarCorteDesconexion(linea, mensaje, codigo = null) {
+const CODIGOS_CONEXION_PREVIA_REANUDABLE = new Set([
+    'LINEA_NO_ENCONTRADA',
+    'LINEA_NO_RECUPERADA',
+    'LINEA_NO_CONECTADA',
+    'SOCKET_REEMPLAZADO',
+    'RECONEXION_BLOQUEADA',
+    'LINEA_VERIFICANDO_ESTABILIDAD',
+    'CONEXION_EN_PROCESO'
+]);
+
+function esDesconexionPreviaReanudable(
+    clasificacion,
+    fasePublicacion = 'preparacion'
+) {
+    return Boolean(
+        clasificacion &&
+        clasificacion.envioIncierto !== true &&
+        !['envio', 'registro', 'confirmacion_envio'].includes(
+            fasePublicacion
+        ) &&
+        (
+            clasificacion.tipoError === 'desconexion' ||
+            CODIGOS_CONEXION_PREVIA_REANUDABLE.has(
+                clasificacion.codigoError
+            )
+        )
+    );
+}
+
+function registrarCorteDesconexion(
+    linea,
+    mensaje,
+    codigo = null,
+    detalles = {}
+) {
     if (
         !progresoPublicacion.activo ||
-        !controlSeguridadPublicacion.idsLineas?.has(linea?.id) ||
+        !controlSeguridadPublicacion.idsLineasCriticas?.has(linea?.id) ||
         controlSeguridadPublicacion.corteDesconexion
     ) {
-        return;
+        return false;
+    }
+
+    const esLineaActual =
+        progresoPublicacion.lineaActual?.id === linea.id;
+    const lineaEnEnvio =
+        progresoPublicacion.envioEnCurso === true &&
+        esLineaActual;
+    const envioIncierto = detalles.envioIncierto === true || lineaEnEnvio;
+    const preflight = detalles.preflight === true ||
+        (
+            detalles.preflight !== false &&
+            !envioIncierto
+        );
+
+    // Una caída de una línea futura no debe interrumpir ni atribuirse al
+    // envío de la línea que se está procesando. Se evaluará cuando llegue
+    // su turno y podrá omitirse de forma explícita.
+    if (
+        preflight &&
+        !envioIncierto &&
+        !esLineaActual &&
+        Number(codigo) !== 429
+    ) {
+        return false;
     }
 
     controlSeguridadPublicacion.corteDesconexion = {
         lineaId: linea.id,
         nombre: linea.nombre,
         codigo,
-        mensaje: mensaje || 'La línea se desconectó durante la publicación.'
+        mensaje: mensaje || 'La línea se desconectó durante la publicación.',
+        fasePublicacion: detalles.fasePublicacion || (
+            envioIncierto ? 'envio' : 'preparacion'
+        ),
+        preflight,
+        envioIncierto
     };
 
     const esLimiteTemporal = Number(codigo) === 429;
@@ -2800,7 +2893,7 @@ function registrarCorteDesconexion(linea, mensaje, codigo = null) {
     progresoPublicacion.mensajeErrorCorte =
         controlSeguridadPublicacion.corteDesconexion.mensaje;
 
-    if (progresoPublicacion.envioEnCurso) {
+    if (lineaEnEnvio) {
         progresoPublicacion.estado = 'esperando_resultado_envio';
         progresoPublicacion.mensaje =
             `La conexión de ${linea.nombre} cambió durante el envío. ` +
@@ -2817,8 +2910,64 @@ function registrarCorteDesconexion(linea, mensaje, codigo = null) {
         const resolver = controlSeguridadPublicacion.resolver;
         controlSeguridadPublicacion.pausada = false;
         controlSeguridadPublicacion.resolver = null;
+        controlSeguridadPublicacion.decisionSeguridadPendiente = null;
+        progresoPublicacion.decisionSeguridadPendiente = null;
         resolver('desconexion');
     }
+
+    return true;
+}
+
+function consumirCorteDesconexionReanudable(corteEsperado = null) {
+    const corte = controlSeguridadPublicacion.corteDesconexion;
+    if (
+        !corte ||
+        (corteEsperado && corte !== corteEsperado) ||
+        corte.preflight !== true ||
+        corte.envioIncierto === true ||
+        Number(corte.codigo) === 429
+    ) {
+        return false;
+    }
+
+    controlSeguridadPublicacion.corteDesconexion = null;
+    const canalCorte = crearCanalCorteDesconexion();
+    controlSeguridadPublicacion.promesaCorte = canalCorte.promesaCorte;
+    controlSeguridadPublicacion.resolverCorte = canalCorte.resolverCorte;
+
+    if (progresoPublicacion.lineaCorte?.id === corte.lineaId) {
+        progresoPublicacion.tipoErrorCorte = null;
+        progresoPublicacion.codigoErrorCorte = null;
+        progresoPublicacion.lineaCorte = null;
+        progresoPublicacion.mensajeErrorCorte = null;
+    }
+
+    return true;
+}
+
+function consumirCorteDesconexionConResultadoConfirmado(lineaId) {
+    const corte = controlSeguridadPublicacion.corteDesconexion;
+    if (
+        !corte ||
+        corte.lineaId !== lineaId ||
+        Number(corte.codigo) === 429
+    ) {
+        return false;
+    }
+
+    controlSeguridadPublicacion.corteDesconexion = null;
+    const canalCorte = crearCanalCorteDesconexion();
+    controlSeguridadPublicacion.promesaCorte = canalCorte.promesaCorte;
+    controlSeguridadPublicacion.resolverCorte = canalCorte.resolverCorte;
+
+    if (progresoPublicacion.lineaCorte?.id === corte.lineaId) {
+        progresoPublicacion.tipoErrorCorte = null;
+        progresoPublicacion.codigoErrorCorte = null;
+        progresoPublicacion.lineaCorte = null;
+        progresoPublicacion.mensajeErrorCorte = null;
+    }
+
+    return true;
 }
 
 function verificarCorteDesconexion() {
@@ -2847,6 +2996,8 @@ function verificarCorteDesconexion() {
                 reintentable: false,
                 envioIncierto:
                     !esLimiteTemporal && corte.envioIncierto === true,
+                preflight: corte.preflight === true,
+                fasePublicacion: corte.fasePublicacion || null,
                 reintentoSeguro:
                     esLimiteTemporal || corte.envioIncierto !== true
             }
@@ -8082,7 +8233,33 @@ function lineaListaParaPublicar(linea, socketEsperado = null) {
     return evaluarLineaParaPublicar(linea, socketEsperado).lista;
 }
 
-function obtenerLineasDisponibles(idsLineas) {
+function lineaEnRecuperacion(linea) {
+    if (
+        !linea ||
+        linea.eliminando ||
+        linea.reconexionBloqueada ||
+        linea.requiereRevisionEnvio
+    ) {
+        return false;
+    }
+
+    if (
+        linea.iniciando ||
+        linea.reconexionManualEnCurso ||
+        linea.estado === 'iniciando' ||
+        linea.estado === 'reconectando'
+    ) {
+        return true;
+    }
+
+    return linea.estado === 'conectado' &&
+        linea.conexionEnVerificacion === true;
+}
+
+function obtenerLineasDisponibles(
+    idsLineas,
+    { incluirEnRecuperacion = false } = {}
+) {
     const correctas = [];
     const noDisponibles = [];
 
@@ -8090,7 +8267,10 @@ function obtenerLineasDisponibles(idsLineas) {
         const linea = lineas.get(id);
         const evaluacion = evaluarLineaParaPublicar(linea);
 
-        if (evaluacion.lista) {
+        if (
+            evaluacion.lista ||
+            (incluirEnRecuperacion && lineaEnRecuperacion(linea))
+        ) {
             correctas.push(linea);
         } else {
             noDisponibles.push({
@@ -8129,7 +8309,140 @@ function cancelarTemporizadorEstabilidadConexion(linea) {
     }
 }
 
+function prioridadInicioWhatsApp(lineaId, prioridadSolicitada = 0) {
+    let prioridad = Math.max(0, Number(prioridadSolicitada) || 0);
+
+    if (
+        progresoPublicacion.activo &&
+        controlSeguridadPublicacion.idsLineasCriticas?.has(lineaId)
+    ) {
+        prioridad = Math.max(
+            prioridad,
+            progresoPublicacion.lineaActual?.id === lineaId ? 3 : 2
+        );
+    }
+
+    return prioridad;
+}
+
+function programarProcesamientoColaIniciosWhatsApp() {
+    if (procesamientoColaIniciosProgramado) return;
+    procesamientoColaIniciosProgramado = true;
+
+    queueMicrotask(() => {
+        procesamientoColaIniciosProgramado = false;
+        procesarColaIniciosWhatsApp();
+    });
+}
+
+function liberarTurnoInicioWhatsApp(lineaId, turno = null) {
+    const activo = turnosInicioWhatsAppActivos.get(lineaId);
+    if (!activo || (turno && activo !== turno)) return false;
+
+    turnosInicioWhatsAppActivos.delete(lineaId);
+    programarProcesamientoColaIniciosWhatsApp();
+    return true;
+}
+
+function cancelarInicioWhatsAppPendiente(lineaId, { liberarActivo = false } = {}) {
+    for (let indice = colaIniciosWhatsApp.length - 1; indice >= 0; indice -= 1) {
+        if (colaIniciosWhatsApp[indice].lineaId === lineaId) {
+            colaIniciosWhatsApp.splice(indice, 1);
+        }
+    }
+
+    if (liberarActivo) {
+        liberarTurnoInicioWhatsApp(lineaId);
+    }
+}
+
+function encolarInicioWhatsApp(
+    lineaId,
+    { prioridad = 0, motivo = 'conexión' } = {}
+) {
+    const linea = lineas.get(lineaId);
+    if (
+        !linea ||
+        linea.eliminando ||
+        (linea.reconexionBloqueada && !linea.reconexionManualEnCurso)
+    ) {
+        return false;
+    }
+
+    const prioridadFinal = prioridadInicioWhatsApp(lineaId, prioridad);
+    const pendiente = colaIniciosWhatsApp.find(
+        item => item.lineaId === lineaId
+    );
+
+    if (pendiente) {
+        pendiente.prioridad = Math.max(pendiente.prioridad, prioridadFinal);
+        pendiente.motivo = motivo || pendiente.motivo;
+        colaIniciosWhatsApp.sort((a, b) =>
+            b.prioridad - a.prioridad ||
+            a.secuencia - b.secuencia
+        );
+        programarProcesamientoColaIniciosWhatsApp();
+        return false;
+    }
+
+    if (turnosInicioWhatsAppActivos.has(lineaId)) return false;
+
+    colaIniciosWhatsApp.push({
+        lineaId,
+        prioridad: prioridadFinal,
+        motivo,
+        secuencia: ++secuenciaInicioWhatsApp
+    });
+    colaIniciosWhatsApp.sort((a, b) =>
+        b.prioridad - a.prioridad ||
+        a.secuencia - b.secuencia
+    );
+    programarProcesamientoColaIniciosWhatsApp();
+    return true;
+}
+
+function procesarColaIniciosWhatsApp() {
+    while (
+        turnosInicioWhatsAppActivos.size <
+            MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS &&
+        colaIniciosWhatsApp.length > 0
+    ) {
+        const solicitud = colaIniciosWhatsApp.shift();
+        const linea = lineas.get(solicitud.lineaId);
+
+        if (
+            !linea ||
+            linea.eliminando ||
+            (linea.reconexionBloqueada && !linea.reconexionManualEnCurso)
+        ) {
+            continue;
+        }
+
+        const turno = {
+            token: ++secuenciaInicioWhatsApp,
+            lineaId: solicitud.lineaId,
+            motivo: solicitud.motivo
+        };
+        turnosInicioWhatsAppActivos.set(solicitud.lineaId, turno);
+
+        Promise.resolve(
+            iniciarWhatsApp(solicitud.lineaId, turno)
+        ).then(inicioPendiente => {
+            if (inicioPendiente !== true) {
+                liberarTurnoInicioWhatsApp(solicitud.lineaId, turno);
+            }
+        }).catch(error => {
+            liberarTurnoInicioWhatsApp(solicitud.lineaId, turno);
+            console.error(
+                `No se pudo iniciar el turno de conexión de ${linea.nombre}:`,
+                error
+            );
+        });
+    }
+}
+
 function invalidarConexionActual(linea) {
+    cancelarInicioWhatsAppPendiente(linea?.id, { liberarActivo: true });
     cancelarTemporizadorIntentoConexion(linea);
     cancelarTemporizadorEstabilidadConexion(linea);
     cancelarGuardadoActividadContactos(linea, true);
@@ -8171,6 +8484,7 @@ function programarConfirmacionEstabilidad(lineaId, linea, generacion, socket) {
         linea.temporizadorEstabilidadConexion = null;
         linea.intentosReconexion = 0;
         linea.conexionEnVerificacion = false;
+        limpiarRecuperacionPublicacion(lineaId);
         if (linea.ultimoError === mensajeAlProgramar) {
             linea.ultimoError = null;
         }
@@ -8178,7 +8492,13 @@ function programarConfirmacionEstabilidad(lineaId, linea, generacion, socket) {
     }, VENTANA_ESTABILIDAD_CONEXION_MS);
 }
 
-function programarWatchdogConexion(lineaId, linea, generacion, socket) {
+function programarWatchdogConexion(
+    lineaId,
+    linea,
+    generacion,
+    socket,
+    turnoInicio = null
+) {
     cancelarTemporizadorIntentoConexion(linea);
 
     linea.temporizadorIntentoConexion = setTimeout(() => {
@@ -8190,6 +8510,7 @@ function programarWatchdogConexion(lineaId, linea, generacion, socket) {
         }
 
         linea.temporizadorIntentoConexion = null;
+        liberarTurnoInicioWhatsApp(lineaId, turnoInicio);
         const mensaje =
             `La conexión no respondió en ${TIEMPO_MAXIMO_INTENTO_CONEXION_MS / 1000} segundos.`;
 
@@ -8284,11 +8605,16 @@ function programarReconexionAutomatica(
     const siguienteIntento = intentosRealizados + 1;
     const retrasoCalculado = RETRASOS_RECONEXION_MS[intentosRealizados] ||
         RETRASOS_RECONEXION_MS[RETRASOS_RECONEXION_MS.length - 1];
-    const retraso = retrasoForzadoMs !== null &&
+    const tieneRetrasoForzado = retrasoForzadoMs !== null &&
         retrasoForzadoMs !== undefined &&
-        Number.isFinite(Number(retrasoForzadoMs))
+        Number.isFinite(Number(retrasoForzadoMs));
+    const retrasoBase = tieneRetrasoForzado
         ? Math.max(0, Number(retrasoForzadoMs))
         : retrasoCalculado;
+    const jitter = tieneRetrasoForzado
+        ? 0
+        : crypto.randomInt(0, JITTER_MAXIMO_RECONEXION_MS + 1);
+    const retraso = retrasoBase + jitter;
     linea.estado = 'reconectando';
     linea.etiqueta = 'caida';
     linea.conexionEnVerificacion = false;
@@ -8310,7 +8636,10 @@ function programarReconexionAutomatica(
         actual.intentosReconexion = siguienteIntento;
         actual.conexionEnVerificacion = false;
         guardarLineas();
-        iniciarWhatsApp(lineaId);
+        encolarInicioWhatsApp(lineaId, {
+            prioridad: 1,
+            motivo: 'reconexión automática'
+        });
     }, retraso);
 
     guardarLineas();
@@ -8355,7 +8684,10 @@ function programarReinicioSolicitado(lineaId, mensaje) {
         actual.temporizadorReconexion = null;
         actual.proximoIntentoReconexion = null;
         guardarLineas();
-        iniciarWhatsApp(lineaId);
+        encolarInicioWhatsApp(lineaId, {
+            prioridad: 2,
+            motivo: 'reinicio solicitado por WhatsApp'
+        });
     }, retraso);
 
     guardarLineas();
@@ -8403,7 +8735,10 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
             !actual.reconexionManualEnCurso
         ) return;
 
-        iniciarWhatsApp(actual.id);
+        encolarInicioWhatsApp(actual.id, {
+            prioridad: 3,
+            motivo: 'reconexión manual'
+        });
     }, retrasoMs);
 
     return true;
@@ -8447,7 +8782,7 @@ function ponerLineaEnCuarentenaPorEnvio(linea, socket, mensaje) {
     );
 }
 
-async function iniciarWhatsApp(lineaId) {
+async function iniciarWhatsApp(lineaId, turnoInicio = null) {
     const linea = lineas.get(lineaId);
 
     if (
@@ -8455,7 +8790,7 @@ async function iniciarWhatsApp(lineaId) {
         linea.iniciando ||
         (linea.reconexionBloqueada && !linea.reconexionManualEnCurso)
     ) {
-        return;
+        return false;
     }
 
     cancelarTemporizadorIntentoConexion(linea);
@@ -8484,12 +8819,14 @@ async function iniciarWhatsApp(lineaId) {
         linea.estado = 'error';
         linea.ultimoError = 'El identificador guardado de la línea no es válido.';
         guardarLineas();
-        return;
+        return false;
     }
 
     try {
         const { state, saveCreds } = await useMultiFileAuthState(carpetaSesion);
-        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
+        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
+            return false;
+        }
 
         const sesionExistente = state.creds.registered === true;
         linea.sesionRegistrada = sesionExistente;
@@ -8517,7 +8854,8 @@ async function iniciarWhatsApp(lineaId) {
             lineaId,
             linea,
             generacionConexion,
-            sock
+            sock,
+            turnoInicio
         );
 
         const procesarContactos = (
@@ -8742,6 +9080,10 @@ async function iniciarWhatsApp(lineaId) {
         sock.ev.on('connection.update', async update => {
             const { connection, qr, lastDisconnect } = update;
 
+            if (qr || connection === 'open' || connection === 'close') {
+                liberarTurnoInicioWhatsApp(lineaId, turnoInicio);
+            }
+
             if (!lineas.has(lineaId)) return;
 
             // Si este evento pertenece a un socket viejo, lo ignoramos.
@@ -8924,6 +9266,7 @@ async function iniciarWhatsApp(lineaId) {
                 }
 
                 const codigoError = obtenerCodigoError(lastDisconnect?.error);
+                marcarInicioRecuperacionPublicacion(lineaId);
                 const mensajeDesconexion =
                     codigoError === DisconnectReason.connectionReplaced
                         ? 'WhatsApp reemplazó temporalmente la conexión (código 440).'
@@ -9102,8 +9445,12 @@ async function iniciarWhatsApp(lineaId) {
                 );
             });
         });
+        return true;
     } catch (error) {
-        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) return;
+        liberarTurnoInicioWhatsApp(lineaId, turnoInicio);
+        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
+            return false;
+        }
 
         if (
             sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
@@ -9150,6 +9497,7 @@ async function iniciarWhatsApp(lineaId) {
             );
         }
         console.error(`Error iniciando ${linea.nombre}:`, error);
+        return false;
     }
 }
 
@@ -9168,64 +9516,75 @@ async function esperarIntervaloPublicacion(ms, esSecuencial = false) {
     }
 }
 
-function obtenerLineasEnRecuperacion(idsLineas = []) {
-    return normalizarIdsLineas(idsLineas)
-        .map(id => lineas.get(id))
-        .filter(linea => {
-            if (
-                !linea ||
-                linea.eliminando ||
-                linea.reconexionBloqueada ||
-                linea.requiereRevisionEnvio
-            ) {
-                return false;
-            }
+function marcarInicioRecuperacionPublicacion(lineaId) {
+    if (
+        !progresoPublicacion.activo ||
+        !controlSeguridadPublicacion.idsLineasCriticas?.has(lineaId)
+    ) {
+        return null;
+    }
 
-            if (
-                linea.iniciando ||
-                linea.reconexionManualEnCurso ||
-                linea.estado === 'iniciando' ||
-                linea.estado === 'reconectando'
-            ) {
-                return true;
-            }
+    if (!(controlSeguridadPublicacion.recuperacionDesde instanceof Map)) {
+        controlSeguridadPublicacion.recuperacionDesde = new Map();
+    }
 
-            return linea.estado === 'conectado' &&
-                linea.conexionEnVerificacion === true;
-        });
+    if (!controlSeguridadPublicacion.recuperacionDesde.has(lineaId)) {
+        controlSeguridadPublicacion.recuperacionDesde.set(lineaId, Date.now());
+    }
+
+    return controlSeguridadPublicacion.recuperacionDesde.get(lineaId);
 }
 
-async function esperarRecuperacionLineasPublicacion(idsLineas, contexto = '') {
-    const inicio = Date.now();
+function limpiarRecuperacionPublicacion(lineaId) {
+    controlSeguridadPublicacion.recuperacionDesde?.delete(lineaId);
+}
 
+async function esperarRecuperacionLineaPublicacion(lineaId, contexto = '') {
     while (true) {
         verificarCorteDesconexion();
-        const pendientes = obtenerLineasEnRecuperacion(idsLineas);
-        if (!pendientes.length) return;
+        const linea = lineas.get(lineaId);
+
+        if (!lineaEnRecuperacion(linea)) {
+            limpiarRecuperacionPublicacion(lineaId);
+            return;
+        }
+
+        const inicio = marcarInicioRecuperacionPublicacion(lineaId) ||
+            Date.now();
+        if (
+            !linea.socket &&
+            !linea.iniciando &&
+            !linea.temporizadorReconexion
+        ) {
+            encolarInicioWhatsApp(lineaId, {
+                prioridad: 3,
+                motivo: 'línea en turno de publicación'
+            });
+        }
 
         const transcurrido = Date.now() - inicio;
         if (transcurrido >= TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS) {
-            const primera = pendientes[0];
             const mensaje =
-                `La línea ${primera.nombre} no recuperó una conexión estable ` +
+                `La línea ${linea.nombre} no recuperó una conexión estable ` +
                 'dentro del tiempo de seguridad.';
             registrarCorteDesconexion(
-                primera,
+                linea,
                 mensaje,
-                DisconnectReason.timedOut
+                DisconnectReason.timedOut,
+                {
+                    fasePublicacion: 'preparacion',
+                    preflight: true,
+                    envioIncierto: false
+                }
             );
             verificarCorteDesconexion();
         }
 
-        const primera = pendientes[0];
-        const adicionales = pendientes.length > 1
-            ? ` y ${pendientes.length - 1} más`
-            : '';
         progresoPublicacion.estado = 'esperando_reconexion';
         progresoPublicacion.proximoGrupoSegundos = 0;
         progresoPublicacion.proximaLineaSegundos = 0;
         progresoPublicacion.mensaje =
-            `Esperando que ${primera.nombre}${adicionales} recupere una conexión estable` +
+            `Esperando que ${linea.nombre} recupere una conexión estable` +
             `${contexto ? ` ${contexto}` : ''}.`;
 
         await esperar(500);
@@ -9342,12 +9701,10 @@ async function ejecutarPublicacion({
             idsLineas,
             registroHistorial.id
         );
-        await esperarRecuperacionLineasPublicacion(
-            idsLineas,
-            'antes de comenzar la publicación'
-        );
         const { correctas: lineasDisponibles, noDisponibles } =
-            obtenerLineasDisponibles(idsLineas);
+            obtenerLineasDisponibles(idsLineas, {
+                incluirEnRecuperacion: true
+            });
 
     const totalGrupos = Math.ceil(Math.max(total, 1) / tamanoGrupo);
     const fallosIniciales = noDisponibles.map(linea => ({
@@ -9393,32 +9750,77 @@ async function ejecutarPublicacion({
         altoTotalSolicitadoEn: null,
         envioEnCurso: false,
         confirmacionEnvioPendiente: null,
+        decisionSeguridadPendiente: null,
         mensaje: 'Preparando publicación...'
     };
 
         if (noDisponibles.length > 0) {
             const primera = noDisponibles[0];
-            const esDesconexion = primera.tipoError === 'desconexion';
-            progresoPublicacion.tipoErrorCorte = primera.tipoError || 'desconexion';
-            progresoPublicacion.codigoErrorCorte =
-                primera.codigoError || 'LINEA_NO_CONECTADA';
-            progresoPublicacion.lineaCorte = {
-                id: primera.id,
-                nombre: primera.nombre
-            };
-            throw crearErrorPublicacion(
-                esDesconexion
-                    ? 'DETENIDA_DESCONEXION'
-                    : 'DETENIDA_SEGURIDAD_LINEA',
-                progresoPublicacion.tipoErrorCorte,
-                `Publicación detenida antes de comenzar: ${primera.error}`,
-                {
-                    lineaId: primera.id,
-                    lineaNombre: primera.nombre,
-                    preflight: true,
-                    reintentable: false
-                }
-            );
+            if (lineasDisponibles.length === 0) {
+                const esDesconexion =
+                    primera.tipoError === 'desconexion';
+                progresoPublicacion.tipoErrorCorte =
+                    primera.tipoError || 'desconexion';
+                progresoPublicacion.codigoErrorCorte =
+                    primera.codigoError || 'LINEA_NO_CONECTADA';
+                progresoPublicacion.lineaCorte = {
+                    id: primera.id,
+                    nombre: primera.nombre
+                };
+                throw crearErrorPublicacion(
+                    esDesconexion
+                        ? 'DETENIDA_DESCONEXION'
+                        : 'DETENIDA_SEGURIDAD_LINEA',
+                    progresoPublicacion.tipoErrorCorte,
+                    `Publicación detenida antes de comenzar: ${primera.error}`,
+                    {
+                        lineaId: primera.id,
+                        lineaNombre: primera.nombre,
+                        preflight: true,
+                        reintentable: false
+                    }
+                );
+            }
+
+            progresoPublicacion.estado = 'detenido_seguridad';
+            progresoPublicacion.seguridadActiva = true;
+            progresoPublicacion.mensajeSeguridad =
+                `${noDisponibles.length} línea(s) no están disponibles y ` +
+                'no recibirán este estado. Podés omitirlas y continuar con las demás.';
+            progresoPublicacion.mensaje =
+                'Publicación pausada antes de comenzar para confirmar las líneas omitidas.';
+
+            const decisionInicial = await esperarDecisionSeguridad({
+                tipo: 'lineas_no_disponibles',
+                cantidad: noDisponibles.length,
+                lineaId: primera.id,
+                lineaNombre: primera.nombre,
+                codigo:
+                    primera.codigoError || 'LINEA_NO_CONECTADA'
+            });
+
+            if (decisionInicial === 'alto_total') {
+                verificarCorteDesconexion();
+            }
+            if (decisionInicial === 'cancelar') {
+                throw crearErrorPublicacion(
+                    'CANCELADA_SEGURIDAD',
+                    'cancelacion_manual',
+                    'Publicación cancelada antes de comenzar con las líneas disponibles.',
+                    { reintentable: false }
+                );
+            }
+
+            for (const lineaOmitida of noDisponibles) {
+                controlSeguridadPublicacion.idsLineasCriticas.delete(
+                    lineaOmitida.id
+                );
+            }
+            progresoPublicacion.estado = 'publicando';
+            progresoPublicacion.seguridadActiva = false;
+            progresoPublicacion.mensajeSeguridad = '';
+            progresoPublicacion.mensaje =
+                'Líneas no disponibles omitidas. Continuando con la publicación.';
         }
 
         const limitesSincronizacionAudiencia =
@@ -9432,10 +9834,6 @@ async function ejecutarPublicacion({
             inicio < lineasDisponibles.length;
             inicio += tamanoGrupo
         ) {
-            await esperarRecuperacionLineasPublicacion(
-                idsLineas,
-                'antes de continuar'
-            );
             verificarCorteDesconexion();
             const grupo = lineasDisponibles.slice(inicio, inicio + tamanoGrupo);
 
@@ -9477,8 +9875,8 @@ async function ejecutarPublicacion({
                 let contabilizarLinea = true;
 
                 try {
-                    await esperarRecuperacionLineasPublicacion(
-                        idsLineas,
+                    await esperarRecuperacionLineaPublicacion(
+                        linea.id,
                         `antes de publicar en ${linea.nombre}`
                     );
                     progresoPublicacion.estado = 'publicando';
@@ -9540,8 +9938,8 @@ async function ejecutarPublicacion({
                     progresoPublicacion.sincronizacionAudienciaSegundos = 0;
                     verificarCorteDesconexion();
 
-                    await esperarRecuperacionLineasPublicacion(
-                        idsLineas,
+                    await esperarRecuperacionLineaPublicacion(
+                        linea.id,
                         `antes de enviar el estado de ${linea.nombre}`
                     );
                     progresoPublicacion.estado = 'publicando';
@@ -9660,6 +10058,9 @@ async function ejecutarPublicacion({
                             } else if (
                                 decision.resultado === 'no_publicado'
                             ) {
+                                consumirCorteDesconexionConResultadoConfirmado(
+                                    linea.id
+                                );
                                 throw crearErrorPublicacion(
                                     'ENVIO_OMITIDO_MANUAL',
                                     'envio_omitido_manual',
@@ -9692,6 +10093,9 @@ async function ejecutarPublicacion({
                         progresoPublicacion.envioEnCurso = false;
                     }
 
+                    consumirCorteDesconexionConResultadoConfirmado(
+                        linea.id
+                    );
                     fase = 'registro';
 
                     progresoPublicacion.correctas += 1;
@@ -9732,6 +10136,9 @@ async function ejecutarPublicacion({
                     linea.ultimaPublicacion = new Date().toISOString();
                     linea.ultimoError = null;
                     linea.fallosRecientes = 0;
+                    consumirCorteDesconexionConResultadoConfirmado(
+                        linea.id
+                    );
                 } catch (error) {
                     progresoPublicacion.sincronizacionAudienciaSegundos = 0;
                     if (
@@ -9754,6 +10161,11 @@ async function ejecutarPublicacion({
                         socketUsado,
                         faseFallo
                     );
+                    const desconexionPreviaReanudable =
+                        esDesconexionPreviaReanudable(
+                            clasificacion,
+                            faseFallo
+                        );
                     const reintentosPreparacion =
                         reintentosPreparacionConexion.get(linea.id) || 0;
                     const conexionEnRecuperacion =
@@ -9774,6 +10186,7 @@ async function ejecutarPublicacion({
                             'registro',
                             'confirmacion_envio'
                         ].includes(faseFallo) &&
+                        !desconexionPreviaReanudable &&
                         conexionEnRecuperacion &&
                         reintentosPreparacion <
                             MAXIMOS_REINTENTOS_PREPARACION_CONEXION;
@@ -9789,8 +10202,8 @@ async function ejecutarPublicacion({
                         progresoPublicacion.mensaje =
                             `La conexión de ${linea.nombre} cambió durante la preparación. ` +
                             'Se repetirá la selección de audiencia cuando quede estable.';
-                        await esperarRecuperacionLineasPublicacion(
-                            idsLineas,
+                        await esperarRecuperacionLineaPublicacion(
+                            linea.id,
                             `antes de reintentar ${linea.nombre}`
                         );
                         continue;
@@ -9820,9 +10233,18 @@ async function ejecutarPublicacion({
                         console.info(
                             `[Publicación] ${linea.nombre}: envío omitido por confirmación manual.`
                         );
+                    } else if (desconexionPreviaReanudable) {
+                        console.warn(
+                            `[Publicación] ${linea.nombre}: ${fallo.error} ` +
+                            'La campaña esperará una decisión antes de continuar.'
+                        );
                     } else {
                         console.error(`Error publicando en ${linea.nombre}:`, error);
                     }
+
+                    const quedanLineas =
+                        inicio + indiceEnGrupo + 1 <
+                        lineasDisponibles.length;
 
                     if (clasificacion.tipoError === 'desconexion') {
                         if (clasificacion.envioIncierto) {
@@ -9835,7 +10257,14 @@ async function ejecutarPublicacion({
                         registrarCorteDesconexion(
                             linea,
                             fallo.error,
-                            obtenerCodigoError(error)
+                            obtenerCodigoError(error),
+                            {
+                                fasePublicacion: faseFallo,
+                                envioIncierto:
+                                    clasificacion.envioIncierto,
+                                preflight:
+                                    clasificacion.envioIncierto !== true
+                            }
                         );
                         if (
                             clasificacion.envioIncierto &&
@@ -9850,7 +10279,9 @@ async function ejecutarPublicacion({
                             nombre: linea.nombre
                         };
                         progresoPublicacion.mensajeErrorCorte ||= fallo.error;
-                        verificarCorteDesconexion();
+                        if (!desconexionPreviaReanudable) {
+                            verificarCorteDesconexion();
+                        }
                     }
 
                     if (clasificacion.tipoError === 'limite_temporal') {
@@ -9913,6 +10344,11 @@ async function ejecutarPublicacion({
                     // resolviendo, no debemos entrar después en una nueva
                     // pausa de seguridad que ya no tendría quién resolver.
                     if (controlSeguridadPublicacion.altoTotal) {
+                        if (desconexionPreviaReanudable) {
+                            consumirCorteDesconexionReanudable(
+                                controlSeguridadPublicacion.corteDesconexion
+                            );
+                        }
                         verificarCorteDesconexion();
                     }
 
@@ -9923,14 +10359,19 @@ async function ejecutarPublicacion({
                     ].includes(clasificacion.tipoError)) {
                         fallosEvaluablesDesdeCorte += 1;
 
-                        const quedanLineas =
-                            inicio + indiceEnGrupo + 1 < lineasDisponibles.length;
-
                         if (
                             quedanLineas &&
-                            fallosEvaluablesDesdeCorte >=
-                                configuracion.limiteFallosSeguridad
+                            (
+                                desconexionPreviaReanudable ||
+                                fallosEvaluablesDesdeCorte >=
+                                    configuracion.limiteFallosSeguridad
+                            )
                         ) {
+                            const corteReanudable =
+                                desconexionPreviaReanudable
+                                    ? controlSeguridadPublicacion
+                                        .corteDesconexion
+                                    : null;
                             progresoPublicacion.estado = 'detenido_seguridad';
                             progresoPublicacion.seguridadActiva = true;
                             progresoPublicacion.proximoGrupoSegundos = 0;
@@ -9941,18 +10382,45 @@ async function ejecutarPublicacion({
                             progresoPublicacion.limiteFallosSeguridad =
                                 configuracion.limiteFallosSeguridad;
                             progresoPublicacion.mensajeSeguridad =
-                                `Se alcanzó el límite de ` +
-                                `${configuracion.limiteFallosSeguridad} línea(s) con fallos. ` +
-                                `El último error ocurrió en ${linea.nombre}.`;
+                                desconexionPreviaReanudable
+                                    ? `${linea.nombre} no recuperó una conexión estable. ` +
+                                        'El estado no se envió en esta línea. Podés omitirla ' +
+                                        'y continuar con las demás o detener la campaña.'
+                                    : `Se alcanzó el límite de ` +
+                                        `${configuracion.limiteFallosSeguridad} línea(s) con fallos. ` +
+                                        `El último error ocurrió en ${linea.nombre}.`;
                             progresoPublicacion.mensaje =
-                                'Publicación pausada por seguridad antes de continuar con otra línea.';
+                                desconexionPreviaReanudable
+                                    ? 'Publicación pausada antes de iniciar otra línea.'
+                                    : 'Publicación pausada por seguridad antes de continuar con otra línea.';
                             notificarEscritorio(
                                 'Publicación pausada',
                                 progresoPublicacion.mensajeSeguridad
                             );
                             guardarLineas();
 
-                            const decision = await esperarDecisionSeguridad();
+                            const decision = await esperarDecisionSeguridad({
+                                tipo: desconexionPreviaReanudable
+                                    ? 'desconexion_previa'
+                                    : 'limite_fallos',
+                                lineaId: linea.id,
+                                lineaNombre: linea.nombre,
+                                codigo: fallo.codigoError,
+                                mensaje:
+                                    progresoPublicacion.mensajeSeguridad
+                            });
+
+                            if (
+                                corteReanudable ||
+                                desconexionPreviaReanudable
+                            ) {
+                                consumirCorteDesconexionReanudable(
+                                    corteReanudable ||
+                                        controlSeguridadPublicacion
+                                            .corteDesconexion
+                                );
+                            }
+
                             verificarCorteDesconexion();
 
                             if (decision === 'cancelar') {
@@ -9972,10 +10440,23 @@ async function ejecutarPublicacion({
                                 'Control de seguridad confirmado. Continuando con la próxima línea.';
                         }
                     }
+
+                    if (
+                        desconexionPreviaReanudable &&
+                        !quedanLineas
+                    ) {
+                        consumirCorteDesconexionReanudable(
+                            controlSeguridadPublicacion.corteDesconexion
+                        );
+                    }
                 } finally {
                     progresoPublicacion.sincronizacionAudienciaSegundos = 0;
                     if (contabilizarLinea) {
                         progresoPublicacion.procesadas += 1;
+                        controlSeguridadPublicacion.idsLineasCriticas.delete(
+                            linea.id
+                        );
+                        limpiarRecuperacionPublicacion(linea.id);
                     }
                     guardarLineas();
                 }
@@ -10027,6 +10508,7 @@ async function ejecutarPublicacion({
         progresoPublicacion.sincronizacionAudienciaSegundos = 0;
         progresoPublicacion.lineaActual = null;
         progresoPublicacion.confirmacionEnvioPendiente = null;
+        progresoPublicacion.decisionSeguridadPendiente = null;
         progresoPublicacion.mensaje =
             `Publicación completada: ${progresoPublicacion.correctas} correctas ` +
             `y ${progresoPublicacion.fallidas} fallidas.`;
@@ -10048,6 +10530,7 @@ async function ejecutarPublicacion({
         progresoPublicacion.sincronizacionAudienciaSegundos = 0;
         progresoPublicacion.envioEnCurso = false;
         progresoPublicacion.confirmacionEnvioPendiente = null;
+        progresoPublicacion.decisionSeguridadPendiente = null;
         progresoPublicacion.lineaActual = null;
         registrarLineasOmitidasPorCorte(idsLineas, error);
 
@@ -10632,6 +11115,135 @@ function validarConfiguracionComun(req, rutaTemporalFoto, imagenObligatoria = tr
 
     return {
         idsLineas,
+        modoRitmo,
+        intervaloSegundos,
+        variacionSegundos,
+        lineasPorGrupo,
+        intervaloMinutos
+    };
+}
+
+function validarLineasEdicionProgramacion(programacion, valorLineas) {
+    const idsLineasActuales = normalizarIdsLineas(programacion.idsLineas);
+
+    if (valorLineas === undefined) {
+        return { idsLineas: idsLineasActuales };
+    }
+
+    let idsLineasRecibidos;
+
+    try {
+        idsLineasRecibidos = Array.isArray(valorLineas)
+            ? valorLineas
+            : JSON.parse(String(valorLineas));
+    } catch {
+        return { error: 'La selección de líneas no es válida.' };
+    }
+
+    if (!Array.isArray(idsLineasRecibidos) || idsLineasRecibidos.length === 0) {
+        return { error: 'Seleccioná al menos una línea.' };
+    }
+
+    if (
+        idsLineasRecibidos.some(
+            id => typeof id !== 'string' || !esIdLineaValido(id)
+        )
+    ) {
+        return { error: 'La selección contiene una línea no válida.' };
+    }
+
+    const idsLineas = normalizarIdsLineas(idsLineasRecibidos);
+    if (!idsLineas.length) {
+        return { error: 'Seleccioná al menos una línea.' };
+    }
+
+    const idsHistoricos = new Set(idsLineasActuales);
+    const idsDesconocidosNuevos = idsLineas.filter(
+        id => !lineas.has(id) && !idsHistoricos.has(id)
+    );
+
+    if (idsDesconocidosNuevos.length) {
+        return {
+            error:
+                'La selección contiene una línea que ya no existe. ' +
+                'Actualizá la lista y volvé a intentarlo.'
+        };
+    }
+
+    return { idsLineas };
+}
+
+function validarRitmoEdicionProgramacion(programacion, cuerpo = {}) {
+    const modoRitmoActual = normalizarModoRitmo(
+        programacion.modoRitmo,
+        'grupos'
+    );
+    const modoRitmo = cuerpo.modoRitmo === undefined
+        ? modoRitmoActual
+        : String(cuerpo.modoRitmo);
+
+    if (!MODOS_RITMO_PUBLICACION.has(modoRitmo)) {
+        return { error: 'El modo de ritmo seleccionado no es válido.' };
+    }
+
+    const intervaloSegundos = Number(
+        cuerpo.intervaloSegundos ?? programacion.intervaloSegundos
+    );
+    const variacionSegundos = Number(
+        cuerpo.variacionSegundos ?? programacion.variacionSegundos
+    );
+    const lineasPorGrupo = Number(
+        cuerpo.lineasPorGrupo ?? programacion.lineasPorGrupo
+    );
+    const intervaloMinutos = Number(
+        cuerpo.intervaloMinutos ?? programacion.intervaloMinutos
+    );
+
+    if (
+        !Number.isInteger(lineasPorGrupo) ||
+        lineasPorGrupo < 1 ||
+        lineasPorGrupo > 10
+    ) {
+        return {
+            error: 'La cantidad de líneas por grupo debe estar entre 1 y 10.'
+        };
+    }
+
+    if (
+        !Number.isFinite(intervaloMinutos) ||
+        intervaloMinutos < 0 ||
+        intervaloMinutos > 1440
+    ) {
+        return {
+            error: 'El intervalo debe estar entre 0 y 1440 minutos.'
+        };
+    }
+
+    if (
+        !Number.isInteger(intervaloSegundos) ||
+        intervaloSegundos < 10 ||
+        intervaloSegundos > 3600
+    ) {
+        return {
+            error:
+                'El intervalo secuencial debe estar entre 10 y 3600 segundos.'
+        };
+    }
+
+    if (
+        !Number.isInteger(variacionSegundos) ||
+        variacionSegundos < 0 ||
+        variacionSegundos > 30 ||
+        variacionSegundos > intervaloSegundos
+    ) {
+        return {
+            error:
+                'La distribución de carga debe estar entre 0 y 30 segundos ' +
+                'y no superar el intervalo base.'
+        };
+    }
+
+    return {
         modoRitmo,
         intervaloSegundos,
         variacionSegundos,
@@ -11494,7 +12106,10 @@ app.post('/lineas', (req, res) => {
     }
 
     guardarLineas();
-    iniciarWhatsApp(id);
+    encolarInicioWhatsApp(id, {
+        prioridad: 3,
+        motivo: 'nueva línea'
+    });
 
     res.status(201).json({
         id,
@@ -11925,6 +12540,8 @@ app.post('/progreso/reanudar', (req, res) => {
         });
     }
 
+    const tipoDecision =
+        progresoPublicacion.decisionSeguridadPendiente?.tipo || null;
     if (!resolverDecisionSeguridad('reanudar')) {
         return res.status(409).json({
             error: 'La publicación ya no está esperando una decisión.'
@@ -11932,7 +12549,11 @@ app.post('/progreso/reanudar', (req, res) => {
     }
 
     res.json({
-        mensaje: 'Publicación reanudada. Se continuará con la próxima línea.'
+        mensaje: tipoDecision === 'lineas_no_disponibles'
+            ? 'Líneas no disponibles omitidas. La publicación continuará con las demás.'
+            : tipoDecision === 'desconexion_previa'
+                ? 'Línea omitida. La publicación continuará con las líneas disponibles.'
+                : 'Publicación reanudada. Se continuará con la próxima línea.'
     });
 });
 
@@ -11943,6 +12564,8 @@ app.post('/progreso/cancelar', (req, res) => {
         });
     }
 
+    const tipoDecision =
+        progresoPublicacion.decisionSeguridadPendiente?.tipo || null;
     if (!resolverDecisionSeguridad('cancelar')) {
         return res.status(409).json({
             error: 'La publicación ya no está esperando una decisión.'
@@ -11950,7 +12573,12 @@ app.post('/progreso/cancelar', (req, res) => {
     }
 
     res.json({
-        mensaje: 'Publicación cancelada por seguridad.'
+        mensaje: [
+            'desconexion_previa',
+            'lineas_no_disponibles'
+        ].includes(tipoDecision)
+            ? 'Campaña detenida. Las líneas restantes no se procesarán.'
+            : 'Publicación cancelada por seguridad.'
     });
 });
 
@@ -12164,6 +12792,43 @@ app.put(
         return res.status(400).json({ error: 'Seleccioná una hora válida.' });
     }
 
+    const validacionLineas = validarLineasEdicionProgramacion(
+        programacion,
+        req.body.lineas
+    );
+    if (validacionLineas.error) {
+        eliminarArchivoSeguro(rutaTemporalFoto);
+        return res.status(400).json({ error: validacionLineas.error });
+    }
+
+    const validacionRitmo = validarRitmoEdicionProgramacion(
+        programacion,
+        req.body
+    );
+    if (validacionRitmo.error) {
+        eliminarArchivoSeguro(rutaTemporalFoto);
+        return res.status(400).json({ error: validacionRitmo.error });
+    }
+
+    const datosAnteriores = {
+        hora: programacion.hora,
+        diasSemana: [
+            ...normalizarDiasSemana(programacion.diasSemana)
+        ],
+        activa: programacion.activa !== false,
+        texto: programacion.texto,
+        idsLineas: [...normalizarIdsLineas(programacion.idsLineas)],
+        modoRitmo: programacion.modoRitmo,
+        intervaloSegundos: programacion.intervaloSegundos,
+        variacionSegundos: programacion.variacionSegundos,
+        lineasPorGrupo: programacion.lineasPorGrupo,
+        intervaloMinutos: programacion.intervaloMinutos,
+        rutaImagen: programacion.rutaImagen,
+        nombreArchivo: programacion.nombreArchivo,
+        estado: programacion.estado,
+        mensaje: programacion.mensaje,
+        actualizadoEn: programacion.actualizadoEn
+    };
     let nuevaRutaImagen = programacion.rutaImagen;
     let nuevoNombreArchivo = programacion.nombreArchivo;
 
@@ -12175,21 +12840,35 @@ app.put(
             `${id}-${Date.now()}${extension}`
         );
         nuevoNombreArchivo = req.file.originalname;
-        moverArchivo(rutaTemporalFoto, nuevaRutaImagen);
     }
 
-    const rutaImagenAnterior = programacion.rutaImagen;
-    const horaAnterior = programacion.hora;
-    const diasAnteriores = [...normalizarDiasSemana(programacion.diasSemana)];
-    const activaAnterior = programacion.activa !== false;
+    const requiereReprogramar =
+        datosAnteriores.hora !== hora ||
+        JSON.stringify(datosAnteriores.diasSemana) !==
+            JSON.stringify(diasSemana) ||
+        datosAnteriores.activa !== activa;
+    let intentoReprogramacion = false;
 
     try {
+        if (req.file) {
+            moverArchivo(rutaTemporalFoto, nuevaRutaImagen);
+        }
+
         programacion.hora = hora;
         programacion.diasSemana = diasSemana;
         programacion.activa = activa;
         programacion.texto = req.body.texto !== undefined
             ? String(req.body.texto)
             : programacion.texto;
+        programacion.idsLineas = validacionLineas.idsLineas;
+        programacion.modoRitmo = validacionRitmo.modoRitmo;
+        programacion.intervaloSegundos =
+            validacionRitmo.intervaloSegundos;
+        programacion.variacionSegundos =
+            validacionRitmo.variacionSegundos;
+        programacion.lineasPorGrupo = validacionRitmo.lineasPorGrupo;
+        programacion.intervaloMinutos =
+            validacionRitmo.intervaloMinutos;
         programacion.rutaImagen = nuevaRutaImagen;
         programacion.nombreArchivo = nuevoNombreArchivo;
         programacion.estado = activa ? 'programado' : 'pausado';
@@ -12198,33 +12877,41 @@ app.put(
             : 'Programación pausada.';
         programacion.actualizadoEn = new Date().toISOString();
 
-        if (
-            horaAnterior !== hora ||
-            JSON.stringify(diasAnteriores) !== JSON.stringify(diasSemana) ||
-            activaAnterior !== activa
-        ) {
+        if (requiereReprogramar) {
+            intentoReprogramacion = true;
             programarTrabajo(programacion);
         }
 
         guardarProgramaciones();
 
-        if (req.file && rutaImagenAnterior !== nuevaRutaImagen) {
-            eliminarArchivoSeguro(rutaImagenAnterior);
+        if (req.file && datosAnteriores.rutaImagen !== nuevaRutaImagen) {
+            eliminarArchivoSeguro(datosAnteriores.rutaImagen);
         }
 
         res.json({
             mensaje: 'Programación actualizada correctamente.'
         });
     } catch (error) {
-        if (req.file && nuevaRutaImagen !== rutaImagenAnterior) {
+        if (req.file && nuevaRutaImagen !== datosAnteriores.rutaImagen) {
             eliminarArchivoSeguro(nuevaRutaImagen);
         }
 
-        programacion.rutaImagen = rutaImagenAnterior;
-        programacion.hora = horaAnterior;
-        programacion.diasSemana = diasAnteriores;
-        programacion.activa = activaAnterior;
-        programarTrabajo(programacion);
+        Object.assign(programacion, {
+            ...datosAnteriores,
+            diasSemana: [...datosAnteriores.diasSemana],
+            idsLineas: [...datosAnteriores.idsLineas]
+        });
+
+        if (intentoReprogramacion) {
+            try {
+                programarTrabajo(programacion);
+            } catch (errorRestauracion) {
+                console.error(
+                    `No se pudo restaurar la programación ${id}:`,
+                    errorRestauracion.message
+                );
+            }
+        }
 
         res.status(500).json({
             error: error.message || 'No se pudo actualizar la programación.'
@@ -12242,9 +12929,18 @@ app.get('/programaciones', (req, res) => {
             activa: item.activa !== false,
             texto: item.texto,
             cantidadLineas: item.idsLineas.length,
+            idsLineas: [...item.idsLineas],
             nombresLineas: item.idsLineas.map(id =>
                 lineas.get(id)?.nombre || 'Línea eliminada'
             ),
+            lineasProgramadas: item.idsLineas.map(id => {
+                const linea = lineas.get(id);
+                return {
+                    id,
+                    nombre: linea?.nombre || 'Línea eliminada',
+                    existe: Boolean(linea)
+                };
+            }),
             modoRitmo: normalizarModoRitmo(item.modoRitmo, 'grupos'),
             intervaloSegundos: item.intervaloSegundos,
             variacionSegundos: item.variacionSegundos,
@@ -12915,7 +13611,10 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
                     Math.max(0, proximoIntento - Date.now())
                 );
             } else {
-                iniciarWhatsApp(linea.id);
+                encolarInicioWhatsApp(linea.id, {
+                    prioridad: 0,
+                    motivo: 'inicio de la aplicación'
+                });
             }
         }
 

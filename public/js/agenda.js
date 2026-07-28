@@ -313,6 +313,11 @@
                     document.getElementById('buscar-lineas-agendamiento')
                         ?.focus({ preventScroll: true });
                 });
+            } else if (abrir && picker.id === 'agenda-account-picker') {
+                requestAnimationFrame(() => {
+                    document.getElementById('buscar-cuentas-agendamiento')
+                        ?.focus({ preventScroll: true });
+                });
             }
         }
 
@@ -415,9 +420,14 @@
         function renderizarSelectorCuentasAgendamiento(cuentas = [], { forzar = false } = {}) {
             const picker = document.getElementById('agenda-account-picker');
             const boton = document.getElementById('agenda-account-button');
-            const menu = document.getElementById('agenda-account-menu');
+            const opciones = document.getElementById('agenda-account-options');
+            const resultado = document.getElementById(
+                'resultado-cuentas-agendamiento'
+            );
             const etiqueta = document.getElementById('agenda-account-label');
-            if (!picker || !boton || !menu || !etiqueta) return;
+            if (!picker || !boton || !opciones || !resultado || !etiqueta) {
+                return;
+            }
 
             const lista = Array.isArray(cuentas) ? cuentas : [];
             const seleccionada = lista.find(cuenta => idCuentaAgenda(cuenta) === String(agendaCuentaId));
@@ -429,33 +439,55 @@
 
             const firma = JSON.stringify({
                 seleccionada: String(agendaCuentaId || ''),
+                busqueda: agendaBusquedaCuentas,
                 cuentas: lista.map(cuenta => [idCuentaAgenda(cuenta), nombreCuentaAgenda(cuenta)])
             });
             const interactuando = picker.classList.contains('open') || picker.contains(document.activeElement);
             if (!forzar && (firma === agendaFirmaCuentas || interactuando)) return;
             agendaFirmaCuentas = firma;
 
-            menu.innerHTML = lista.map(cuenta => {
-                const id = idCuentaAgenda(cuenta);
-                const nombre = nombreCuentaAgenda(cuenta);
-                const activa = id === String(agendaCuentaId);
-                return `
-                    <button
-                        type="button"
-                        class="agenda-picker-option ${activa ? 'active' : ''}"
-                        data-agenda-cuenta-id="${escaparHTML(id)}"
-                        role="option"
-                        aria-selected="${activa}"
-                    >
-                        <span class="agenda-picker-avatar">G</span>
-                        <span class="agenda-picker-option-copy">
-                            <strong>${escaparHTML(nombre)}</strong>
-                            <small>Google Contacts</small>
-                        </span>
-                        ${activa ? iconoSVG('check') : '<span></span>'}
-                    </button>
-                `;
-            }).join('');
+            const busqueda = normalizarBusquedaAgenda(
+                agendaBusquedaCuentas
+            );
+            const visibles = lista.filter(cuenta => {
+                if (!busqueda) return true;
+                return [
+                    nombreCuentaAgenda(cuenta),
+                    idCuentaAgenda(cuenta),
+                    cuenta.email,
+                    cuenta.correo,
+                    cuenta.nombre,
+                    cuenta.displayName
+                ].some(valor =>
+                    normalizarBusquedaAgenda(valor).includes(busqueda)
+                );
+            });
+
+            opciones.innerHTML = visibles.length
+                ? visibles.map(cuenta => {
+                    const id = idCuentaAgenda(cuenta);
+                    const nombre = nombreCuentaAgenda(cuenta);
+                    const activa = id === String(agendaCuentaId);
+                    return `
+                        <button
+                            type="button"
+                            class="agenda-picker-option ${activa ? 'active' : ''}"
+                            data-agenda-cuenta-id="${escaparHTML(id)}"
+                            role="option"
+                            aria-selected="${activa}"
+                        >
+                            <span class="agenda-picker-avatar">G</span>
+                            <span class="agenda-picker-option-copy">
+                                <strong>${escaparHTML(nombre)}</strong>
+                                <small>Google Contacts</small>
+                            </span>
+                            ${activa ? iconoSVG('check') : '<span></span>'}
+                        </button>
+                    `;
+                }).join('')
+                : '<div class="agenda-picker-empty">No se encontraron cuentas con esa búsqueda.</div>';
+            resultado.textContent =
+                `${visibles.length} de ${lista.length} cuenta(s)`;
         }
 
         function numeroAgenda(valor) {
@@ -1151,6 +1183,10 @@
                     'No se pudo asignar la cuenta Google.'
                 );
                 agendaCuentaId = String(cuentaId);
+                agendaBusquedaCuentas = '';
+                document.getElementById(
+                    'buscar-cuentas-agendamiento'
+                ).value = '';
                 agendaFirmaCuentas = '';
                 cerrarSelectoresAgendamiento();
                 toast(data.mensaje || 'Cuenta asignada a la línea.', 'success');

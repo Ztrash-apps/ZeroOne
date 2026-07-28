@@ -153,3 +153,755 @@
         animation-iteration-count: 1 !important;
     }
 }
+
+/* ===== Editor de programaciones =====
+ * Esta capa se carga al final para sustituir el modal heredado sin depender
+ * de colores fijos de EVA-01.
+ */
+#modal-editar {
+    padding: 16px;
+}
+
+#modal-editar .program-edit-modal-card {
+    display: flex;
+    flex-direction: column;
+    width: min(1180px, calc(100vw - 32px)) !important;
+    height: min(850px, calc(100vh - 32px));
+    max-height: calc(100vh - 32px) !important;
+    overflow: hidden !important;
+    border-color: var(--border) !important;
+    border-radius: 24px;
+    background:
+        radial-gradient(
+            circle at 88% 4%,
+            rgba(var(--accent-rgb), .14),
+            transparent 30%
+        ),
+        var(--theme-panel) !important;
+    box-shadow: var(--zo-elevation-panel) !important;
+}
+
+#modal-editar .program-edit-modal-card > .modal-header {
+    flex: 0 0 auto;
+    min-height: 76px;
+    padding: 15px 20px;
+    border-bottom-color: var(--border-soft) !important;
+    background: var(--theme-subpanel) !important;
+}
+
+#modal-editar .program-edit-modal-card > .modal-header > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+#modal-editar .program-edit-modal-card > .modal-header h2 {
+    margin: 0;
+    font-size: clamp(21px, 2.1vw, 27px);
+    line-height: 1.15;
+}
+
+.program-edit-eyebrow,
+.program-edit-section-kicker {
+    color: var(--accent-bright);
+    font-size: 9px;
+    font-weight: 850;
+    letter-spacing: .085em;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+
+#modal-editar .program-edit-layout {
+    display: grid !important;
+    flex: 1 1 auto;
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    gap: 0 !important;
+    min-height: 0;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+.program-edit-visual {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+    padding: 18px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-right: 1px solid var(--border-soft);
+    background:
+        linear-gradient(
+            155deg,
+            rgba(var(--accent-rgb), .07),
+            rgba(var(--signal-rgb), .025)
+        ),
+        var(--theme-inset);
+    scrollbar-gutter: stable;
+}
+
+.program-edit-image {
+    position: relative;
+    flex: 0 1 500px;
+    width: 100%;
+    height: min(64vh, 500px);
+    min-height: 300px;
+    max-height: 500px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 19px;
+    background:
+        radial-gradient(
+            circle at 50% 20%,
+            rgba(var(--accent-rgb), .12),
+            transparent 52%
+        ),
+        rgba(var(--bg-rgb), .58);
+    box-shadow:
+        0 16px 34px rgba(0, 0, 0, .22),
+        inset 0 1px 0 rgba(255, 255, 255, .035);
+}
+
+#modal-editar .program-edit-image #editar-imagen-actual {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 300px;
+    object-fit: contain;
+    background: transparent;
+}
+
+.program-edit-image-badge {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid rgba(var(--signal-rgb), .23);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 760;
+    backdrop-filter: blur(12px);
+}
+
+.program-edit-image-badge .icon {
+    width: 13px;
+    height: 13px;
+    color: var(--signal);
+}
+
+.program-edit-image-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 14px;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--zo-radius-card);
+    background: var(--theme-control);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+.program-edit-image-actions > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.program-edit-image-actions > div > strong {
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.2;
+}
+
+.program-edit-image-actions > div > p {
+    margin: 0 0 3px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.program-edit-image-actions .edit-file-button,
+.program-edit-image-actions .edit-file-name {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+}
+
+.program-edit-image-actions .edit-file-button {
+    width: auto;
+    min-height: 42px;
+    white-space: nowrap;
+}
+
+.program-edit-image-actions .edit-file-name {
+    grid-column: 1 / -1;
+    min-height: 38px;
+    padding: 9px 10px;
+}
+
+.program-edit-controls {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--surface) 68%, transparent);
+}
+
+.program-edit-scroll {
+    display: grid;
+    align-content: start;
+    gap: 13px;
+    min-width: 0;
+    min-height: 0;
+    padding: 16px 18px 18px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.program-edit-section {
+    display: grid;
+    gap: 13px;
+    min-width: 0;
+    padding: 15px;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--zo-radius-card);
+    background: var(--theme-inset);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+.program-edit-section-heading {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    min-width: 0;
+}
+
+.program-edit-section-heading > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.program-edit-section-heading h3 {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 15px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.program-edit-section-icon {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border: 1px solid rgba(var(--signal-rgb), .19);
+    border-radius: 11px;
+    background:
+        linear-gradient(
+            145deg,
+            rgba(var(--accent-rgb), .20),
+            rgba(var(--signal-rgb), .07)
+        );
+    color: var(--accent-bright);
+}
+
+.program-edit-section-icon .icon {
+    width: 15px;
+    height: 15px;
+}
+
+#modal-editar .program-edit-section > .textarea {
+    min-height: 88px;
+    resize: vertical;
+}
+
+.program-edit-schedule-grid {
+    display: grid;
+    grid-template-columns: minmax(150px, .72fr) minmax(230px, 1.28fr);
+    gap: 10px;
+    align-items: stretch;
+}
+
+#modal-editar .program-edit-section .field {
+    min-width: 0;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+#modal-editar .program-edit-section .field .label-with-icon {
+    margin-bottom: 7px;
+}
+
+#modal-editar .program-edit-active-toggle {
+    min-height: 67px;
+    margin: 0 !important;
+    padding: 11px 13px !important;
+    border-color: var(--border-soft) !important;
+    border-radius: 13px !important;
+    background: var(--theme-control) !important;
+}
+
+#modal-editar .program-edit-section > .weekday-field {
+    gap: 9px;
+    margin: 0 !important;
+    padding: 12px !important;
+    border-color: var(--border-soft) !important;
+    border-radius: 14px !important;
+    background: var(--theme-control) !important;
+}
+
+#modal-editar .program-edit-section .weekday-picker {
+    gap: 6px;
+}
+
+#modal-editar .program-edit-section .weekday-picker span {
+    min-height: 38px;
+    border-radius: 11px;
+}
+
+#modal-editar .program-edit-section .all-days-check {
+    min-height: 36px;
+    padding-inline: 11px;
+    border-radius: 11px;
+}
+
+.program-edit-pacing .pacing-mode-selector {
+    gap: 8px;
+}
+
+.program-edit-pacing .pacing-mode-card {
+    min-height: 72px;
+    padding: 10px;
+}
+
+.program-edit-pacing .pacing-fields {
+    gap: 10px;
+}
+
+.program-edit-lines-heading {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+}
+
+.program-edit-lines-heading .selected-count {
+    align-self: center;
+    white-space: nowrap;
+}
+
+.program-edit-lines-toolbar {
+    display: grid;
+    grid-template-columns:
+        minmax(190px, 1fr)
+        minmax(172px, .72fr)
+        minmax(92px, auto)
+        auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.program-edit-search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border-soft);
+    border-radius: 13px;
+    background: var(--theme-control);
+    color: var(--muted);
+    transition:
+        border-color var(--zo-motion-fast) var(--zo-ease),
+        box-shadow var(--zo-motion-fast) var(--zo-ease),
+        background var(--zo-motion-fast) var(--zo-ease);
+}
+
+.program-edit-search:focus-within {
+    border-color: rgba(var(--signal-rgb), .52);
+    background: var(--theme-control-hover);
+    box-shadow: var(--zo-focus-ring);
+}
+
+.program-edit-search > .icon {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    color: var(--accent-bright);
+}
+
+#modal-editar .program-edit-search > input {
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    padding: 0;
+    border: 0 !important;
+    outline: 0;
+    background: transparent !important;
+    color: var(--text);
+    box-shadow: none !important;
+}
+
+#modal-editar .program-edit-search > input::placeholder {
+    color: var(--muted);
+    opacity: .8;
+}
+
+.program-edit-lines-toolbar .line-order-picker {
+    min-width: 0;
+}
+
+.program-edit-lines-toolbar .line-order-button,
+.program-edit-lines-toolbar .line-order-direction,
+.program-edit-clear-search {
+    min-height: 44px;
+}
+
+.program-edit-lines-toolbar .line-order-direction {
+    min-width: 92px;
+}
+
+.program-edit-clear-search {
+    min-width: 88px;
+    padding-inline: 12px;
+}
+
+.program-edit-lines-toolbar .line-order-menu {
+    z-index: 180;
+}
+
+.program-edit-lines-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.program-edit-lines-summary > span {
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#modal-editar .program-edit-lines-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    gap: 7px;
+    max-height: 265px !important;
+    padding: 1px 4px 1px 1px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
+.program-edit-line {
+    align-items: flex-start;
+    min-width: 0;
+    min-height: 82px;
+    padding: 10px;
+    border-color: var(--border-soft);
+    border-radius: 12px;
+    background: var(--theme-control);
+}
+
+.program-edit-line > .line-check {
+    flex: 0 0 auto;
+    margin-top: 2px;
+}
+
+.program-edit-line .selector-line-info,
+.program-edit-line .selector-line-info > * {
+    min-width: 0;
+}
+
+.program-edit-line .selector-line-info > strong {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: center;
+}
+
+.program-edit-line-status {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 9px;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.program-edit-line-state {
+    display: inline-flex;
+    align-items: center;
+    min-height: 19px;
+    padding: 0 7px;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    font-size: 8px;
+    font-weight: 820;
+}
+
+.program-edit-line.missing {
+    border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+    background: color-mix(in srgb, var(--danger) 7%, var(--theme-control));
+}
+
+.program-edit-line-state.missing {
+    border-color: color-mix(in srgb, var(--danger) 38%, transparent);
+    background: color-mix(in srgb, var(--danger) 11%, transparent);
+    color: var(--danger);
+}
+
+.program-edit-lines-empty {
+    grid-column: 1 / -1;
+    min-height: 110px;
+}
+
+#modal-editar .program-edit-scroll > .modal-message {
+    min-height: 18px;
+    margin: 0;
+}
+
+#modal-editar .program-edit-actions {
+    position: relative !important;
+    bottom: auto !important;
+    z-index: 4 !important;
+    display: grid !important;
+    grid-template-columns: minmax(140px, .55fr) minmax(190px, 1fr) !important;
+    gap: 10px !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 13px 18px !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-top: 1px solid var(--border-soft) !important;
+    border-radius: 0 !important;
+    background: var(--theme-subpanel) !important;
+    box-shadow: 0 -12px 30px rgba(0, 0, 0, .10) !important;
+}
+
+#modal-editar .program-edit-actions::before {
+    display: none !important;
+}
+
+#modal-editar .program-edit-actions > button {
+    min-height: 46px !important;
+    border-radius: 13px !important;
+}
+
+@media (max-width: 1080px) and (min-width: 821px) {
+    #modal-editar .program-edit-layout {
+        grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
+    }
+
+    .program-edit-lines-toolbar {
+        grid-template-columns: minmax(0, 1fr) minmax(170px, .72fr) 92px;
+    }
+
+    .program-edit-search {
+        grid-column: 1 / -1;
+    }
+
+    .program-edit-clear-search {
+        grid-column: auto;
+    }
+}
+
+@media (max-width: 820px) {
+    #modal-editar {
+        align-items: flex-start;
+        padding: 8px;
+    }
+
+    #modal-editar .program-edit-modal-card {
+        width: calc(100vw - 16px) !important;
+        height: calc(100vh - 16px);
+        max-height: calc(100vh - 16px) !important;
+        border-radius: 20px;
+    }
+
+    #modal-editar .program-edit-layout {
+        display: block !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+        scrollbar-gutter: stable;
+    }
+
+    .program-edit-visual {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: visible;
+        border-right: 0;
+        border-bottom: 1px solid var(--border-soft);
+    }
+
+    .program-edit-image {
+        flex-basis: 330px;
+        width: min(280px, 100%);
+        height: 330px;
+        min-height: 280px;
+        max-height: 330px;
+    }
+
+    #modal-editar .program-edit-image #editar-imagen-actual {
+        min-height: 280px;
+    }
+
+    .program-edit-controls {
+        display: block;
+        overflow: visible;
+    }
+
+    .program-edit-scroll {
+        overflow: visible;
+    }
+
+    #modal-editar .program-edit-actions {
+        position: sticky !important;
+        bottom: 0 !important;
+    }
+}
+
+@media (max-width: 620px) {
+    #modal-editar .program-edit-modal-card > .modal-header {
+        min-height: 68px;
+        padding: 12px 14px;
+    }
+
+    .program-edit-visual {
+        padding: 14px;
+    }
+
+    .program-edit-image {
+        flex-basis: 390px;
+        width: min(250px, 100%);
+        height: 390px;
+        min-height: 330px;
+        max-height: 390px;
+        margin-inline: auto;
+    }
+
+    #modal-editar .program-edit-image #editar-imagen-actual {
+        min-height: 330px;
+    }
+
+    .program-edit-scroll {
+        gap: 11px;
+        padding: 12px;
+    }
+
+    .program-edit-section {
+        gap: 11px;
+        padding: 12px;
+    }
+
+    .program-edit-image-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .program-edit-image-actions .edit-file-button {
+        width: 100%;
+    }
+
+    .program-edit-schedule-grid,
+    .program-edit-pacing .pacing-mode-selector,
+    .program-edit-pacing .pacing-fields {
+        grid-template-columns: 1fr;
+    }
+
+    .program-edit-lines-toolbar {
+        grid-template-columns: minmax(0, 1fr) 92px;
+    }
+
+    .program-edit-search,
+    .program-edit-lines-toolbar .line-order-picker {
+        grid-column: 1 / -1;
+    }
+
+    .program-edit-clear-search {
+        min-width: 0;
+    }
+
+    #modal-editar .program-edit-lines-list {
+        grid-template-columns: 1fr;
+        max-height: 320px !important;
+    }
+
+    .program-edit-lines-heading {
+        grid-template-columns: 34px minmax(0, 1fr);
+    }
+
+    .program-edit-lines-heading .selected-count {
+        grid-column: 1 / -1;
+        justify-self: start;
+    }
+
+    #modal-editar .program-edit-actions {
+        grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr) !important;
+        padding: 10px 12px !important;
+    }
+}
+
+@media (max-width: 440px) {
+    .program-edit-lines-summary {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .program-edit-lines-summary > span {
+        width: 100%;
+        text-align: left;
+    }
+
+    #modal-editar .program-edit-actions {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+@media (min-width: 821px) and (max-height: 720px) {
+    #modal-editar .program-edit-modal-card {
+        height: calc(100vh - 20px);
+        max-height: calc(100vh - 20px) !important;
+    }
+
+    .program-edit-visual {
+        padding: 14px;
+    }
+
+    .program-edit-image {
+        min-height: 240px;
+        max-height: 330px;
+    }
+
+    #modal-editar .program-edit-image #editar-imagen-actual {
+        min-height: 240px;
+    }
+
+    .program-edit-image-actions {
+        padding: 11px;
+    }
+}

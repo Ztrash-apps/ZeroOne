@@ -30,7 +30,14 @@ function datosLinea(id, nombre, ordenConexion) {
     };
 }
 
-function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
+function cargarBackendAislado(
+    rutaDatos,
+    sesionesRegistradas = new Map(),
+    lineasGuardadas = [
+        datosLinea(ID_UNO, 'Línea uno', 1),
+        datosLinea(ID_DOS, 'Línea dos', 2)
+    ]
+) {
     for (const carpeta of ['sesiones', 'programados', 'uploads', 'historial']) {
         const ruta = path.join(rutaDatos, carpeta);
         fs.mkdirSync(ruta, { recursive: true });
@@ -38,10 +45,7 @@ function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
     }
     fs.writeFileSync(
         path.join(rutaDatos, 'sesiones', 'lineas.json'),
-        JSON.stringify([
-            datosLinea(ID_UNO, 'Línea uno', 1),
-            datosLinea(ID_DOS, 'Línea dos', 2)
-        ]),
+        JSON.stringify(lineasGuardadas),
         'utf8'
     );
 
@@ -104,12 +108,17 @@ function cargarBackendAislado(rutaDatos, sesionesRegistradas = new Map()) {
         const fuente = original.slice(0, corte) + `
             module.exports = {
                 cargarLineasGuardadas,
+                colaIniciosWhatsApp,
+                encolarInicioWhatsApp,
                 iniciarWhatsApp,
                 invalidarConexionActual,
                 lineas,
+                maximosIniciosWhatsAppSimultaneos:
+                    MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS,
                 reanalizarMensajesRecientesAgendamiento,
                 seleccionarMensajesContextualesIA,
                 servicioAgendamiento,
+                turnosInicioWhatsAppActivos,
                 cerrar: () => servicioAgendamiento.cerrar()
             };
         `;
@@ -159,12 +168,132 @@ function mensajesChatIA(indice, timestampBase) {
 async function cerrarBackendAislado(backend, rutaDatos) {
     for (const linea of backend.lineas.values()) {
         linea.eliminando = true;
+        for (const nombreTemporizador of [
+            'temporizadorReconexion',
+            'temporizadorIntentoConexion',
+            'temporizadorEstabilidadConexion',
+            'temporizadorAudiencia',
+            'temporizadorActividadContactos',
+            'temporizadorResolverPendientesAgendamiento'
+        ]) {
+            if (linea[nombreTemporizador]) {
+                clearTimeout(linea[nombreTemporizador]);
+                linea[nombreTemporizador] = null;
+            }
+        }
         backend.invalidarConexionActual(linea);
     }
     backend.cerrar();
     await new Promise(resolve => setTimeout(resolve, 120));
     fs.rmSync(rutaDatos, { recursive: true, force: true });
 }
+
+async function esperarHasta(condicion, mensaje, limiteMs = 1500) {
+    const limite = Date.now() + limiteMs;
+
+    while (Date.now() < limite) {
+        if (condicion()) return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+    }
+
+    assert.fail(mensaje);
+}
+
+test('la cola limita a 10 sockets y avanza con QR, open o close sin consultar /estado', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-cola-inicios-whatsapp-')
+    );
+    const lineasGuardadas = Array.from({ length: 13 }, (_, indice) => {
+        const numero = indice + 1;
+        const sufijo = numero.toString(16).padStart(12, '0');
+        return datosLinea(
+            `10000000-0000-4000-8000-${sufijo}`,
+            `Línea cola ${numero}`,
+            numero
+        );
+    });
+    const sesionesRegistradas = new Map(
+        lineasGuardadas.map(linea => [linea.id, true])
+    );
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        sesionesRegistradas,
+        lineasGuardadas
+    );
+    const fetchAnterior = global.fetch;
+    let consultasHttp = 0;
+    global.fetch = async () => {
+        consultasHttp += 1;
+        throw new Error('La cola backend no debe depender de HTTP.');
+    };
+
+    t.after(async () => {
+        global.fetch = fetchAnterior;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    for (const linea of lineasGuardadas) {
+        assert.equal(
+            backend.encolarInicioWhatsApp(linea.id, {
+                motivo: 'prueba de límite'
+            }),
+            true
+        );
+    }
+
+    await esperarHasta(
+        () => backend.sockets.length === 10,
+        'La cola no inició los primeros 10 sockets.'
+    );
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    assert.equal(
+        backend.maximosIniciosWhatsAppSimultaneos,
+        10
+    );
+    assert.equal(backend.sockets.length, 10);
+    assert.equal(backend.turnosInicioWhatsAppActivos.size, 10);
+    assert.equal(backend.colaIniciosWhatsApp.length, 3);
+
+    backend.sockets[0].ev.emit('connection.update', {
+        qr: 'QR-DE-PRUEBA'
+    });
+    await esperarHasta(
+        () => backend.sockets.length === 11,
+        'Un QR no liberó el siguiente turno de conexión.'
+    );
+    assert.equal(backend.colaIniciosWhatsApp.length, 2);
+
+    backend.sockets[1].ev.emit('connection.update', {
+        connection: 'open'
+    });
+    await esperarHasta(
+        () => backend.sockets.length === 12,
+        'Un evento open no liberó el siguiente turno de conexión.'
+    );
+    assert.equal(backend.colaIniciosWhatsApp.length, 1);
+
+    backend.sockets[2].ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: {
+            error: {
+                output: {
+                    statusCode:
+                        baileysReal.DisconnectReason.connectionClosed
+                }
+            }
+        }
+    });
+    await esperarHasta(
+        () => backend.sockets.length === 13,
+        'Un evento close no liberó el siguiente turno de conexión.'
+    );
+
+    assert.equal(backend.colaIniciosWhatsApp.length, 0);
+    assert.equal(backend.turnosInicioWhatsAppActivos.size, 10);
+    assert.equal(consultasHttp, 0);
+});
 
 test('todas las conexiones aceptan solo historial reciente y nunca solicitan FULL', async t => {
     const rutaDatos = fs.mkdtempSync(
