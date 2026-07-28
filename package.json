@@ -1,6 +1,6 @@
 {
   "name": "zeroone",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "private": true,
   "description": "ZeroOne, CRM de escritorio para gestionar estados y contactos de WhatsApp",
   "main": "main.js",
@@ -8,7 +8,7 @@
     "start": "electron .",
     "dev": "electron .",
     "start:demo": "electron . --zeroone-ui-fixtures",
-    "test:internal": "node --test --test-force-exit tests/internal-safety.test.js tests/emergency-stop.test.js tests/image-compression.test.js tests/agendamiento.test.js tests/history-sync-queue.test.js tests/ai-username-detector.test.js tests/local-ai-runtime.test.js tests/recent-message-store.test.js tests/audience-sync.test.js tests/frontend-structure.test.js tests/ui-fixtures.test.js tests/desktop-logs.test.js",
+    "test:internal": "node --test --test-force-exit tests/internal-safety.test.js tests/emergency-stop.test.js tests/image-compression.test.js tests/agendamiento.test.js tests/history-sync-queue.test.js tests/ai-username-detector.test.js tests/local-ai-runtime.test.js tests/recent-message-store.test.js tests/audience-sync.test.js tests/frontend-structure.test.js tests/ui-fixtures.test.js tests/desktop-logs.test.js tests/crash-safe-json-store.test.js tests/publication-history-checkpoint.test.js tests/publication-recovery-integration.test.js",
     "build:icon": "node scripts/build-icon.js",
     "prebuild": "npm run build:icon",
     "build": "electron-builder --win --x64",
