@@ -99,6 +99,10 @@ const ARCHIVO_PROTECCION_CONEXION_405 = path.join(
     CARPETA_DATOS,
     'proteccion-conexion-405.json'
 );
+const ARCHIVO_MIGRACION_RECONEXION_AGOTADA = path.join(
+    CARPETA_DATOS,
+    'migracion-reconexion-agotada-v1.json'
+);
 const ARCHIVO_IDEMPOTENCIA_PUBLICACION = path.join(
     CARPETA_DATOS,
     'idempotencia-publicacion.json'
@@ -709,6 +713,14 @@ const PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS = Math.max(
 );
 const ESPACIADO_RECUPERACION_405_MS = 10 * 1000;
 const EXITOS_PARA_CERRAR_CIRCUITO_405 = 3;
+const RETRASOS_LINEA_CONEXION_405_MS = [
+    30 * 1000,
+    2 * 60 * 1000,
+    5 * 60 * 1000,
+    15 * 60 * 1000,
+    30 * 60 * 1000
+];
+const VERSION_MIGRACION_RECONEXION_AGOTADA = 1;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
 const TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS =
     RETRASOS_RECONEXION_MS.reduce((total, retraso) => total + retraso, 0) +
@@ -1493,14 +1505,26 @@ function procesarSiguienteSincronizacionHistorialAgendamiento() {
     }
 
     if (solicitud.reiniciarConexion) {
-        if (obtenerEstadoProteccionConexion405().pausada) {
+        const estadoProteccion405 =
+            obtenerEstadoProteccionConexion405();
+        if (
+            estadoProteccion405.pausada ||
+            (
+                estadoProteccion405.recuperacion &&
+                proteccionConexion405.estadoLineas.has(linea.id)
+            )
+        ) {
             cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
                 estado: 'pausada',
                 progreso: 0,
                 motivo:
-                    'WhatsApp está rechazando conexiones temporalmente. ' +
-                    'ZeroOne conservará la sesión y retomará la preparación ' +
-                    'cuando termine la recuperación protegida.'
+                    estadoProteccion405.pausada
+                        ? 'WhatsApp está rechazando conexiones temporalmente. ' +
+                            'ZeroOne conservará la sesión y retomará la preparación ' +
+                            'cuando termine la recuperación protegida.'
+                        : 'Esta línea todavía está dentro de la recuperación protegida. ' +
+                            'ZeroOne la probará automáticamente y las demás líneas ' +
+                            'podrán continuar.'
             });
             return;
         }
@@ -1592,6 +1616,58 @@ function guardarJSONAtomico(ruta, datos, espacios = 2) {
         }
         throw error;
     }
+}
+
+function migracionReconexionAgotadaYaAplicada() {
+    if (!fs.existsSync(ARCHIVO_MIGRACION_RECONEXION_AGOTADA)) {
+        return false;
+    }
+
+    try {
+        const marca = JSON.parse(
+            fs.readFileSync(
+                ARCHIVO_MIGRACION_RECONEXION_AGOTADA,
+                'utf8'
+            )
+        );
+        if (
+            marca?.completada === true &&
+            Number(marca.version) >=
+                VERSION_MIGRACION_RECONEXION_AGOTADA
+        ) {
+            return true;
+        }
+    } catch {
+        // La presencia de una marca dañada se trata de forma conservadora.
+    }
+
+    console.warn(
+        '[Conexión] La marca de rehabilitación única no es válida. ' +
+        'No se desbloquearán líneas automáticamente para evitar repetirla.'
+    );
+    return true;
+}
+
+function guardarMarcaMigracionReconexionAgotada({
+    lineasEvaluadas = 0,
+    lineasRehabilitadas = 0
+} = {}) {
+    guardarJSONAtomico(
+        ARCHIVO_MIGRACION_RECONEXION_AGOTADA,
+        {
+            version: VERSION_MIGRACION_RECONEXION_AGOTADA,
+            completada: true,
+            completadaEn: new Date().toISOString(),
+            lineasEvaluadas: Math.max(
+                0,
+                Number(lineasEvaluadas) || 0
+            ),
+            lineasRehabilitadas: Math.max(
+                0,
+                Number(lineasRehabilitadas) || 0
+            )
+        }
+    );
 }
 
 function notificarEscritorio(titulo, cuerpo) {
@@ -1738,6 +1814,7 @@ function crearProteccionConexion405Vacia() {
         recuperacionConfirmada: false,
         motivo: null,
         eventosRecientes: new Map(),
+        estadoLineas: new Map(),
         exitosRecuperacion: 0,
         proximoInicioPermitidoEn: 0,
         epoch: 0
@@ -1750,7 +1827,30 @@ function serializarProteccionConexion405() {
         bloqueadaHasta: proteccionConexion405.bloqueadaHasta,
         nivel: Math.max(0, Number(proteccionConexion405.nivel) || 0),
         recuperacion: proteccionConexion405.recuperacion === true,
-        motivo: proteccionConexion405.motivo || null
+        motivo: proteccionConexion405.motivo || null,
+        estadoLineas: [...proteccionConexion405.estadoLineas.entries()]
+            .filter(([lineaId]) => esIdLineaValido(lineaId))
+            .slice(0, 1000)
+            .map(([lineaId, estado]) => [
+                lineaId,
+                {
+                    ultimoRechazo: Math.max(
+                        0,
+                        Number(estado?.ultimoRechazo) || 0
+                    ),
+                    diferidaHasta: Math.max(
+                        0,
+                        Number(estado?.diferidaHasta) || 0
+                    ),
+                    fallosConsecutivos: Math.max(
+                        0,
+                        Math.min(
+                            RETRASOS_LINEA_CONEXION_405_MS.length,
+                            Number(estado?.fallosConsecutivos) || 0
+                        )
+                    )
+                }
+            ])
     };
 }
 
@@ -1795,6 +1895,44 @@ function cargarProteccionConexion405() {
         const habiaProteccion =
             datos?.recuperacion === true ||
             Number.isFinite(bloqueadaHastaOriginalMs);
+        const estadoLineas = new Map();
+        for (
+            const entrada of Array.isArray(datos?.estadoLineas)
+                ? datos.estadoLineas.slice(0, 1000)
+                : []
+        ) {
+            if (
+                !Array.isArray(entrada) ||
+                !esIdLineaValido(entrada[0]) ||
+                !entrada[1] ||
+                typeof entrada[1] !== 'object'
+            ) {
+                continue;
+            }
+            estadoLineas.set(entrada[0], {
+                ultimoRechazo: Math.max(
+                    0,
+                    Math.min(
+                        ahora,
+                        Number(entrada[1].ultimoRechazo) || 0
+                    )
+                ),
+                diferidaHasta: Math.max(
+                    0,
+                    Math.min(
+                        ahora + PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS,
+                        Number(entrada[1].diferidaHasta) || 0
+                    )
+                ),
+                fallosConsecutivos: Math.max(
+                    0,
+                    Math.min(
+                        RETRASOS_LINEA_CONEXION_405_MS.length,
+                        Number(entrada[1].fallosConsecutivos) || 0
+                    )
+                )
+            });
+        }
 
         proteccionConexion405 = {
             ...crearProteccionConexion405Vacia(),
@@ -1810,6 +1948,9 @@ function cargarProteccionConexion405() {
             ),
             recuperacion: !pausaVigente && habiaProteccion,
             recuperacionConfirmada: false,
+            estadoLineas: habiaProteccion
+                ? estadoLineas
+                : new Map(),
             motivo: pausaVigente
                 ? String(datos?.motivo || 'rechazo_405')
                 : (habiaProteccion ? 'recuperacion' : null)
@@ -8276,6 +8417,10 @@ function guardarLineas() {
         ),
         conexionEnVerificacion: linea.conexionEnVerificacion === true,
         reconexionBloqueada: linea.reconexionBloqueada === true,
+        versionMigracionReconexionAgotada: Math.max(
+            0,
+            Number(linea.versionMigracionReconexionAgotada) || 0
+        ),
         origenBloqueoReconexion:
             ['agotamiento', 'fatal', 'manual', 'desconocido'].includes(
                 linea.origenBloqueoReconexion
@@ -8308,6 +8453,20 @@ function guardarLineas() {
 function cargarLineasGuardadas() {
     if (!fs.existsSync(archivoLineas)) {
         console.log('No existe lineas.json todavía.');
+        if (!migracionReconexionAgotadaYaAplicada()) {
+            try {
+                guardarMarcaMigracionReconexionAgotada({
+                    lineasEvaluadas: 0,
+                    lineasRehabilitadas: 0
+                });
+            } catch (error) {
+                console.error(
+                    '[Conexión] No se pudo guardar la marca global de ' +
+                    'rehabilitación única:',
+                    error.message
+                );
+            }
+        }
         return;
     }
 
@@ -8317,6 +8476,8 @@ function cargarLineasGuardadas() {
             throw new Error('El archivo no contiene una lista de líneas válida.');
         }
 
+        const migracionReconexionAgotadaAplicada =
+            migracionReconexionAgotadaYaAplicada();
         const ordenesReservados = new Set(
             datos
                 .map(item => Number(item?.ordenConexion))
@@ -8324,6 +8485,8 @@ function cargarLineasGuardadas() {
         );
         const ordenesAsignados = new Set();
         const idsRecuperacionConexion405 = [];
+        const bloqueosRehabilitadosPorActualizacion = new Map();
+        let lineasRehabilitadasPorActualizacion = 0;
         let ordenAlternativo = 1;
 
         for (const datosLinea of datos) {
@@ -8368,29 +8531,38 @@ function cargarLineasGuardadas() {
                     : null;
             const origenBloqueoCrudo =
                 datosLinea.origenBloqueoReconexion;
-            const origenBloqueoAusente =
-                origenBloqueoCrudo === null ||
-                origenBloqueoCrudo === undefined ||
-                String(origenBloqueoCrudo).trim() === '';
             const origenBloqueoGuardado =
                 ['agotamiento', 'fatal', 'manual'].includes(
                     origenBloqueoCrudo
                 )
                     ? origenBloqueoCrudo
-                    : (origenBloqueoAusente ? null : 'desconocido');
-            const migrarBloqueoLegacy405 =
-                origenBloqueoAusente &&
+                    : 'desconocido';
+            const versionMigracionReconexionAgotada = Math.max(
+                0,
+                Number(
+                    datosLinea.versionMigracionReconexionAgotada
+                ) || 0
+            );
+            const migrarBloqueoAgotadoAnterior =
+                !migracionReconexionAgotadaAplicada &&
+                versionMigracionReconexionAgotada <
+                    VERSION_MIGRACION_RECONEXION_AGOTADA &&
                 datosLinea.reconexionBloqueada === true &&
-                ultimoCodigoDesconexion === CODIGO_RECHAZO_CONEXION_405 &&
+                origenBloqueoGuardado === 'agotamiento' &&
                 intentosGuardados === MAXIMOS_INTENTOS_RECONEXION &&
-                conexionEnVerificacion === false;
-            const intentosReconexion = migrarBloqueoLegacy405
+                conexionEnVerificacion === false &&
+                !CODIGOS_DESCONEXION_FATAL.has(
+                    ultimoCodigoDesconexion
+                );
+            const rehabilitarBloqueoAnterior =
+                migrarBloqueoAgotadoAnterior;
+            const intentosReconexion = rehabilitarBloqueoAnterior
                 ? 0
                 : intentosGuardados;
             const reconexionBloqueada =
                 (
                     datosLinea.reconexionBloqueada === true &&
-                    !migrarBloqueoLegacy405
+                    !rehabilitarBloqueoAnterior
                 ) ||
                 (
                     intentosReconexion >= MAXIMOS_INTENTOS_RECONEXION &&
@@ -8460,6 +8632,11 @@ function cargarLineasGuardadas() {
                 intentosReconexion,
                 conexionEnVerificacion,
                 reconexionBloqueada,
+                versionMigracionReconexionAgotada:
+                    Math.max(
+                        versionMigracionReconexionAgotada,
+                        VERSION_MIGRACION_RECONEXION_AGOTADA
+                    ),
                 origenBloqueoReconexion,
                 requiereRevisionEnvio: datosLinea.requiereRevisionEnvio === true,
                 motivoRevisionEnvio: datosLinea.motivoRevisionEnvio || null,
@@ -8502,23 +8679,108 @@ function cargarLineasGuardadas() {
                         ? datosLinea.etiquetaAntesHistorialAgendamiento
                         : null
             });
+            if (migrarBloqueoAgotadoAnterior) {
+                lineasRehabilitadasPorActualizacion += 1;
+                bloqueosRehabilitadosPorActualizacion.set(id, {
+                    intentosReconexion: intentosGuardados,
+                    reconexionBloqueada: true,
+                    versionMigracionReconexionAgotada,
+                    origenBloqueoReconexion:
+                        origenBloqueoGuardado,
+                    estado: 'requiere_intervencion',
+                    etiqueta: 'caida',
+                    proximoIntentoReconexion: null,
+                    ultimoError: datosLinea.ultimoError || null
+                });
+            }
             if (
-                ultimoCodigoDesconexion === CODIGO_RECHAZO_CONEXION_405 &&
-                !reconexionBloqueada
+                rehabilitarBloqueoAnterior ||
+                (
+                    ultimoCodigoDesconexion ===
+                        CODIGO_RECHAZO_CONEXION_405 &&
+                    !reconexionBloqueada
+                )
             ) {
                 idsRecuperacionConexion405.push(id);
             }
         }
 
-        prepararRecuperacionInicialConexion405(
-            idsRecuperacionConexion405
-        );
-
+        let lineasPersistidasAntesDeReconectar = false;
         try {
-            // Persiste la migración de orden para instalaciones anteriores.
+            // Confirma los marcadores por línea antes de iniciar sockets.
             guardarLineas();
+            lineasPersistidasAntesDeReconectar = true;
         } catch (error) {
-            console.error('No se pudo guardar el orden de las líneas:', error.message);
+            for (
+                const [
+                    lineaId,
+                    estadoAnterior
+                ] of bloqueosRehabilitadosPorActualizacion
+            ) {
+                const linea = lineas.get(lineaId);
+                if (!linea) continue;
+
+                linea.intentosReconexion =
+                    estadoAnterior.intentosReconexion;
+                linea.reconexionBloqueada =
+                    estadoAnterior.reconexionBloqueada;
+                linea.versionMigracionReconexionAgotada =
+                    estadoAnterior.versionMigracionReconexionAgotada;
+                linea.origenBloqueoReconexion =
+                    estadoAnterior.origenBloqueoReconexion;
+                linea.estado = estadoAnterior.estado;
+                linea.etiqueta = estadoAnterior.etiqueta;
+                linea.proximoIntentoReconexion =
+                    estadoAnterior.proximoIntentoReconexion;
+                linea.ultimoError = estadoAnterior.ultimoError;
+            }
+            lineasRehabilitadasPorActualizacion = 0;
+            console.error(
+                '[Conexión] No se pudo confirmar la rehabilitación única; ' +
+                'las líneas agotadas continuarán bloqueadas:',
+                error.message
+            );
+        }
+
+        if (
+            lineasPersistidasAntesDeReconectar &&
+            !migracionReconexionAgotadaAplicada
+        ) {
+            try {
+                guardarMarcaMigracionReconexionAgotada({
+                    lineasEvaluadas: lineas.size,
+                    lineasRehabilitadas:
+                        lineasRehabilitadasPorActualizacion
+                });
+            } catch (error) {
+                // Los marcadores por línea ya quedaron confirmados. La marca
+                // global se volverá a intentar en el siguiente inicio.
+                console.error(
+                    '[Conexión] No se pudo guardar la marca global de ' +
+                    'rehabilitación única:',
+                    error.message
+                );
+            }
+        }
+
+        const idsRecuperacionConfirmados =
+            lineasPersistidasAntesDeReconectar
+                ? idsRecuperacionConexion405
+                : idsRecuperacionConexion405.filter(
+                    lineaId =>
+                        !bloqueosRehabilitadosPorActualizacion.has(
+                            lineaId
+                        )
+                );
+        prepararRecuperacionInicialConexion405(
+            idsRecuperacionConfirmados
+        );
+        if (lineasRehabilitadasPorActualizacion > 0) {
+            console.log(
+                `[Conexión] Actualización: ` +
+                `${lineasRehabilitadasPorActualizacion} línea(s) agotada(s) ` +
+                'se rehabilitaron una sola vez y volverán gradualmente a la cola.'
+            );
         }
 
         console.log(`${lineas.size} línea(s) cargada(s).`);
@@ -9900,13 +10162,18 @@ function obtenerEstadoProteccionConexion405() {
     depurarEventosConexion405();
     const bloqueadaHastaMs = obtenerBloqueoProteccionConexion405Ms();
     const enfriamiento = bloqueadaHastaMs > Date.now();
+    const recuperacion = proteccionConexion405.recuperacion === true;
+    const recuperacionConfirmada =
+        proteccionConexion405.recuperacionConfirmada === true;
 
     return {
-        pausada: enfriamiento || proteccionConexion405.recuperacion === true,
+        pausada:
+            enfriamiento ||
+            (recuperacion && !recuperacionConfirmada),
         enfriamiento,
-        recuperacion: proteccionConexion405.recuperacion === true,
-        recuperacionConfirmada:
-            proteccionConexion405.recuperacionConfirmada === true,
+        recuperacion,
+        recuperacionConfirmada,
+        degradada: recuperacion && recuperacionConfirmada,
         bloqueadaHasta: enfriamiento
             ? new Date(bloqueadaHastaMs).toISOString()
             : null,
@@ -9915,7 +10182,12 @@ function obtenerEstadoProteccionConexion405() {
         eventosRecientes: proteccionConexion405.eventosRecientes.size,
         exitosRecuperacion:
             Math.max(0, Number(proteccionConexion405.exitosRecuperacion) || 0),
-        pendientes: lineasPendientesConexion405.size
+        pendientes: lineasPendientesConexion405.size,
+        lineasDiferidas: [...proteccionConexion405.estadoLineas.values()]
+            .filter(estado =>
+                Number(estado?.diferidaHasta) > Date.now()
+            )
+            .length
     };
 }
 
@@ -9931,7 +10203,7 @@ function programarTemporizadorProteccionConexion405(vencimiento) {
     const destino = Math.max(Date.now(), Number(vencimiento) || Date.now());
     if (
         temporizadorProteccionConexion405 &&
-        Math.abs(vencimientoTemporizadorProteccionConexion405 - destino) < 10
+        vencimientoTemporizadorProteccionConexion405 <= destino + 10
     ) {
         return;
     }
@@ -9946,9 +10218,112 @@ function programarTemporizadorProteccionConexion405(vencimiento) {
     temporizadorProteccionConexion405.unref?.();
 }
 
+function obtenerEstadoLineaConexion405(lineaId) {
+    return proteccionConexion405.estadoLineas.get(lineaId) || {
+        ultimoRechazo: 0,
+        diferidaHasta: 0,
+        fallosConsecutivos: 0
+    };
+}
+
+function registrarFalloLineaConexion405(
+    lineaId,
+    ahora = Date.now(),
+    { diferir = false } = {}
+) {
+    const anterior = obtenerEstadoLineaConexion405(lineaId);
+    const fallosConsecutivos = Math.min(
+        RETRASOS_LINEA_CONEXION_405_MS.length,
+        Math.max(0, Number(anterior.fallosConsecutivos) || 0) + 1
+    );
+    const indiceRetraso = Math.min(
+        fallosConsecutivos - 1,
+        RETRASOS_LINEA_CONEXION_405_MS.length - 1
+    );
+    const estado = {
+        ultimoRechazo: ahora,
+        diferidaHasta: diferir
+            ? ahora + RETRASOS_LINEA_CONEXION_405_MS[indiceRetraso]
+            : 0,
+        fallosConsecutivos
+    };
+    proteccionConexion405.estadoLineas.set(lineaId, estado);
+    return estado;
+}
+
+function limpiarEstadoLineaConexion405(lineaId) {
+    return proteccionConexion405.estadoLineas.delete(lineaId);
+}
+
+function obtenerIndiceSolicitudRecuperacion405() {
+    const ahora = Date.now();
+    let indiceElegido = -1;
+    let solicitudElegida = null;
+    let estadoElegido = null;
+    let proximoVencimiento = Infinity;
+
+    for (
+        let indice = 0;
+        indice < colaIniciosWhatsApp.length;
+        indice += 1
+    ) {
+        const solicitud = colaIniciosWhatsApp[indice];
+        const estado = obtenerEstadoLineaConexion405(solicitud.lineaId);
+        const diferidaHasta = Math.max(
+            0,
+            Number(estado.diferidaHasta) || 0
+        );
+        if (diferidaHasta > ahora) {
+            proximoVencimiento = Math.min(
+                proximoVencimiento,
+                diferidaHasta
+            );
+            continue;
+        }
+
+        if (
+            !solicitudElegida ||
+            Number(estado.ultimoRechazo || 0) <
+                Number(estadoElegido.ultimoRechazo || 0) ||
+            (
+                Number(estado.ultimoRechazo || 0) ===
+                    Number(estadoElegido.ultimoRechazo || 0) &&
+                (
+                    solicitud.prioridad > solicitudElegida.prioridad ||
+                    (
+                        solicitud.prioridad === solicitudElegida.prioridad &&
+                        solicitud.secuencia < solicitudElegida.secuencia
+                    )
+                )
+            )
+        ) {
+            indiceElegido = indice;
+            solicitudElegida = solicitud;
+            estadoElegido = estado;
+        }
+    }
+
+    if (
+        indiceElegido < 0 &&
+        Number.isFinite(proximoVencimiento)
+    ) {
+        programarTemporizadorProteccionConexion405(proximoVencimiento);
+    }
+    return indiceElegido;
+}
+
 function encolarLineasPendientesConexion405() {
     for (const lineaId of [...lineasPendientesConexion405]) {
         const linea = lineas.get(lineaId);
+        const verificandoEstabilidad405 =
+            linea?.estado === 'conectado' &&
+            linea?.conexionEnVerificacion === true &&
+            linea?.sondaConexion405?.epoch === proteccionConexion405.epoch &&
+            proteccionConexion405.estadoLineas.has(lineaId);
+
+        if (verificandoEstabilidad405) {
+            continue;
+        }
         if (
             !linea ||
             linea.eliminando ||
@@ -10020,9 +10395,11 @@ function abrirProteccionConexion405({
     guardarProteccionConexion405();
     programarTemporizadorProteccionConexion405(ahora + duracion);
 
-    const descripcion = sistemica
-        ? `ráfaga sistémica; pausa global de ${Math.ceil(duracion / 60000)} minuto(s)`
-        : `rechazo aislado; observación de ${Math.ceil(duracion / 1000)} segundos`;
+    const descripcion = motivo === 'fallo_sonda_405'
+        ? `sonda de recuperación rechazada; pausa preventiva de ${Math.ceil(duracion / 60000)} minuto(s)`
+        : sistemica
+            ? `ráfaga sistémica; pausa global de ${Math.ceil(duracion / 60000)} minuto(s)`
+            : `rechazo aislado; observación de ${Math.ceil(duracion / 1000)} segundos`;
     console.warn(
         `[Conexión] Protección 405 activada: ${descripcion}. ` +
         'Las sesiones se conservaron y no se pedirán códigos QR.'
@@ -10031,11 +10408,23 @@ function abrirProteccionConexion405({
 
 function registrarRechazoConexion405(linea, generacionConexion) {
     const ahora = Date.now();
+    const enRecuperacion = proteccionConexion405.recuperacion === true;
+    const recuperacionConfirmada =
+        proteccionConexion405.recuperacionConfirmada === true;
     depurarEventosConexion405(ahora);
     proteccionConexion405.eventosRecientes.set(linea.id, {
         fecha: ahora,
         generacion: Number(generacionConexion) || 0
     });
+    const estadoFalloLinea = registrarFalloLineaConexion405(
+        linea.id,
+        ahora,
+        {
+            diferir:
+                enRecuperacion &&
+                recuperacionConfirmada
+        }
+    );
     lineasPendientesConexion405.add(linea.id);
     cancelarTemporizadorReconexion(linea);
     linea.intentosReconexion = 0;
@@ -10051,17 +10440,39 @@ function registrarRechazoConexion405(linea, generacionConexion) {
         'ZeroOne conservará la sesión y esperará antes de probarla nuevamente.';
     linea.sondaConexion405 = null;
 
-    const enRecuperacion = proteccionConexion405.recuperacion === true;
     const enEnfriamiento = proteccionConexion405EnEnfriamiento();
     const rafaga =
         proteccionConexion405.eventosRecientes.size >=
         UMBRAL_RAFAGA_CONEXION_405;
 
-    if (enRecuperacion) {
+    if (enRecuperacion && !recuperacionConfirmada) {
         abrirProteccionConexion405({
             sistemica: true,
             motivo: 'fallo_sonda_405'
         });
+    } else if (
+        enRecuperacion &&
+        recuperacionConfirmada &&
+        rafaga
+    ) {
+        abrirProteccionConexion405({
+            sistemica: true,
+            motivo: 'rafaga_405'
+        });
+    } else if (enRecuperacion && recuperacionConfirmada) {
+        proteccionConexion405.motivo = 'linea_405_diferida';
+        proteccionConexion405.proximoInicioPermitidoEn = Math.max(
+            Number(
+                proteccionConexion405.proximoInicioPermitidoEn
+            ) || 0,
+            ahora + ESPACIADO_RECUPERACION_405_MS
+        );
+        console.warn(
+            `[Conexión] ${linea.nombre} seguirá en espera por código 405 ` +
+            `durante ${Math.ceil(
+                (estadoFalloLinea.diferidaHasta - ahora) / 1000
+            )} segundo(s); las demás líneas continuarán.`
+        );
     } else if (!enEnfriamiento) {
         abrirProteccionConexion405({
             sistemica: false,
@@ -10078,9 +10489,10 @@ function registrarRechazoConexion405(linea, generacionConexion) {
     }
 
     encolarInicioWhatsApp(linea.id, {
-        prioridad: 2,
+        prioridad: enRecuperacion ? 0 : 2,
         motivo: 'reintento protegido después de 405'
     });
+    guardarProteccionConexion405();
     guardarLineas();
 }
 
@@ -10104,18 +10516,21 @@ function registrarSondaEstableConexion405(
 
     linea.sondaConexion405 = null;
     lineasPendientesConexion405.delete(lineaId);
-    proteccionConexion405.exitosRecuperacion += 1;
-    proteccionConexion405.proximoInicioPermitidoEn = Date.now();
+    limpiarEstadoLineaConexion405(lineaId);
+    if (proteccionConexion405.recuperacionConfirmada !== true) {
+        proteccionConexion405.exitosRecuperacion += 1;
+        proteccionConexion405.proximoInicioPermitidoEn = Date.now();
 
-    if (
-        proteccionConexion405.exitosRecuperacion >=
-        EXITOS_PARA_CERRAR_CIRCUITO_405
-    ) {
-        proteccionConexion405.recuperacionConfirmada = true;
-        console.log(
-            '[Conexión] Protección 405: la recuperación fue confirmada; ' +
-            'la cola continuará gradualmente.'
-        );
+        if (
+            proteccionConexion405.exitosRecuperacion >=
+            EXITOS_PARA_CERRAR_CIRCUITO_405
+        ) {
+            proteccionConexion405.recuperacionConfirmada = true;
+            console.log(
+                '[Conexión] Protección 405: la recuperación fue confirmada; ' +
+                'la cola continuará gradualmente.'
+            );
+        }
     }
 
     guardarProteccionConexion405();
@@ -10127,8 +10542,10 @@ function descartarSondaConexion405(linea) {
     if (!linea) return false;
     const teniaSonda = Boolean(linea.sondaConexion405);
     const estabaPendiente = lineasPendientesConexion405.delete(linea.id);
+    const teniaEstado = limpiarEstadoLineaConexion405(linea.id);
     linea.sondaConexion405 = null;
-    if (teniaSonda || estabaPendiente) {
+    if (teniaSonda || estabaPendiente || teniaEstado) {
+        guardarProteccionConexion405();
         programarProcesamientoColaIniciosWhatsApp();
         return true;
     }
@@ -10165,6 +10582,27 @@ function prepararRecuperacionInicialConexion405(idsLineas) {
     for (const lineaId of ids) {
         lineasPendientesConexion405.add(lineaId);
         const linea = lineas.get(lineaId);
+        if (!proteccionConexion405.estadoLineas.has(lineaId)) {
+            const ultimaDesconexion = Date.parse(
+                linea.ultimaDesconexion || ''
+            );
+            const tuvoRechazo405 =
+                Number(linea.ultimoCodigoDesconexion) ===
+                CODIGO_RECHAZO_CONEXION_405;
+            proteccionConexion405.estadoLineas.set(lineaId, {
+                ultimoRechazo:
+                    tuvoRechazo405 &&
+                    Number.isFinite(ultimaDesconexion)
+                    ? Math.min(Date.now(), ultimaDesconexion)
+                    : 0,
+                diferidaHasta: 0,
+                fallosConsecutivos:
+                    tuvoRechazo405 &&
+                    Number.isFinite(ultimaDesconexion)
+                        ? 1
+                        : 0
+            });
+        }
         linea.reconexionBloqueada = false;
         linea.origenBloqueoReconexion = null;
         linea.intentosReconexion = 0;
@@ -10180,9 +10618,9 @@ function prepararRecuperacionInicialConexion405(idsLineas) {
         proteccionConexion405.motivo = 'recuperacion_restaurada';
         proteccionConexion405.exitosRecuperacion = 0;
         proteccionConexion405.proximoInicioPermitidoEn = Date.now();
-        guardarProteccionConexion405();
     }
 
+    guardarProteccionConexion405();
     return true;
 }
 
@@ -10205,7 +10643,12 @@ function permitirProcesarColaConexion405() {
             linea.estado === 'conectado' &&
             linea.conexionEnVerificacion === true
         );
-        if (sondaEnVerificacion) return false;
+        if (
+            proteccionConexion405.recuperacionConfirmada !== true &&
+            sondaEnVerificacion
+        ) {
+            return false;
+        }
 
         const siguiente = Math.max(
             0,
@@ -10333,7 +10776,15 @@ function procesarColaIniciosWhatsApp() {
             obtenerLimiteIniciosWhatsApp() &&
         colaIniciosWhatsApp.length > 0
     ) {
-        const solicitud = colaIniciosWhatsApp.shift();
+        const indiceSolicitud =
+            proteccionConexion405.recuperacion === true
+                ? obtenerIndiceSolicitudRecuperacion405()
+                : 0;
+        if (indiceSolicitud < 0) break;
+        const [solicitud] = colaIniciosWhatsApp.splice(
+            indiceSolicitud,
+            1
+        );
         const linea = lineas.get(solicitud.lineaId);
 
         if (
@@ -10350,7 +10801,12 @@ function procesarColaIniciosWhatsApp() {
             motivo: solicitud.motivo,
             sondaConexion405:
                 proteccionConexion405.recuperacion === true &&
-                proteccionConexion405.recuperacionConfirmada !== true,
+                (
+                    proteccionConexion405.recuperacionConfirmada !== true ||
+                    proteccionConexion405.estadoLineas.has(
+                        solicitud.lineaId
+                    )
+                ),
             epochConexion405: proteccionConexion405.epoch
         };
         turnosInicioWhatsAppActivos.set(solicitud.lineaId, turno);
@@ -10711,6 +11167,11 @@ function bloquearReconexionAutomatica(
 ) {
     cancelarTemporizadorReconexion(linea);
     invalidarConexionActual(linea);
+    // Una sonda puede agotar su watchdog sin recibir `open` ni `close`.
+    // Al detener definitivamente esa línea, también debe salir del circuito
+    // 405; de lo contrario queda como pendiente para siempre e impide
+    // finalizar la recuperación global.
+    descartarSondaConexion405(linea);
     linea.socket = null;
     linea.jid = null;
     linea.qr = null;
@@ -10867,7 +11328,10 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
     if (lineaParticipaEnPublicacionActiva(linea)) {
         return false;
     }
-    if (obtenerEstadoProteccionConexion405().pausada) {
+    if (
+        obtenerEstadoProteccionConexion405().pausada ||
+        proteccionConexion405.estadoLineas.has(linea.id)
+    ) {
         return false;
     }
 
@@ -11390,13 +11854,6 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 const jidConectado = jidNormalizedUser(sock.user.id);
                 actualizarIdentidadAgendamientoLinea(linea, jidConectado);
                 linea.jid = jidConectado;
-                if (
-                    proteccionConexion405.recuperacion === true &&
-                    proteccionConexion405.recuperacionConfirmada === true
-                ) {
-                    linea.sondaConexion405 = null;
-                    lineasPendientesConexion405.delete(lineaId);
-                }
                 guardarLineas();
                 programarConfirmacionEstabilidad(
                     lineaId,
@@ -14460,6 +14917,8 @@ app.post('/lineas', (req, res) => {
         intentosReconexion: 0,
         conexionEnVerificacion: false,
         reconexionBloqueada: false,
+        versionMigracionReconexionAgotada:
+            VERSION_MIGRACION_RECONEXION_AGOTADA,
         origenBloqueoReconexion: null,
         requiereRevisionEnvio: false,
         motivoRevisionEnvio: null,
@@ -15772,7 +16231,10 @@ registrarRutasConfiguracion(app, {
 
 app.post('/lineas/reconectar-todas', (req, res) => {
     const estadoProteccion405 = obtenerEstadoProteccionConexion405();
-    if (estadoProteccion405.pausada) {
+    if (
+        estadoProteccion405.pausada ||
+        estadoProteccion405.recuperacion
+    ) {
         return res.status(409).json({
             codigo: 'CIRCUITO_405_ABIERTO',
             error:
@@ -15883,6 +16345,22 @@ app.post('/lineas/:id/reconectar', (req, res) => {
                 'cuando sea seguro volver a probar.',
             bloqueadaHasta: estadoProteccion405.bloqueadaHasta,
             recuperacion: estadoProteccion405.recuperacion
+        });
+    }
+    if (
+        estadoProteccion405.recuperacion &&
+        proteccionConexion405.estadoLineas.has(linea.id)
+    ) {
+        const estadoLinea405 =
+            obtenerEstadoLineaConexion405(linea.id);
+        return res.status(409).json({
+            codigo: 'LINEA_405_DIFERIDA',
+            error:
+                `${linea.nombre} está dentro de la recuperación protegida. ` +
+                'ZeroOne la volverá a probar automáticamente sin afectar a las demás líneas.',
+            reintentarDespuesDe: Number(estadoLinea405.diferidaHasta) > Date.now()
+                ? new Date(estadoLinea405.diferidaHasta).toISOString()
+                : null
         });
     }
 
@@ -16010,8 +16488,14 @@ app.delete('/lineas/:id', async (req, res) => {
     }
 
     linea.socket = null;
-    lineasPendientesConexion405.delete(id);
+    const estabaPendienteConexion405 =
+        lineasPendientesConexion405.delete(id);
+    const teniaEstadoConexion405 =
+        limpiarEstadoLineaConexion405(id);
     linea.sondaConexion405 = null;
+    if (estabaPendienteConexion405 || teniaEstadoConexion405) {
+        guardarProteccionConexion405();
+    }
     lineas.delete(id);
     try {
         obtenerAlmacenMensajesRecientes()?.eliminarLinea(id);
