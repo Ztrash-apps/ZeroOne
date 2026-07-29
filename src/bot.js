@@ -95,6 +95,10 @@ const ARCHIVO_PROTECCION_PUBLICACION = path.join(
     CARPETA_DATOS,
     'proteccion-publicacion.json'
 );
+const ARCHIVO_PROTECCION_CONEXION_405 = path.join(
+    CARPETA_DATOS,
+    'proteccion-conexion-405.json'
+);
 const ARCHIVO_IDEMPOTENCIA_PUBLICACION = path.join(
     CARPETA_DATOS,
     'idempotencia-publicacion.json'
@@ -260,8 +264,11 @@ const trabajosProgramados = new Map();
 const colaIniciosWhatsApp = [];
 const turnosInicioWhatsAppActivos = new Map();
 const preparacionesEstadoAutenticacion = new Map();
+const lineasPendientesConexion405 = new Set();
 let secuenciaInicioWhatsApp = 0;
 let procesamientoColaIniciosProgramado = false;
+let temporizadorProteccionConexion405 = null;
+let vencimientoTemporizadorProteccionConexion405 = 0;
 const colaSincronizacionesAudiencia = [];
 let sincronizacionesAudienciaActivas = 0;
 let preparacionesEntregaActivas = 0;
@@ -687,6 +694,21 @@ const JITTER_MAXIMO_RECONEXION_MS = 2500;
 const RETRASOS_RECONEXION_MS = [3000, 8000, 15000, 30000, 60000];
 const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
 const TIEMPO_MAXIMO_PREPARACION_CONEXION_MS = 45000;
+const CODIGO_RECHAZO_CONEXION_405 = 405;
+const UMBRAL_RAFAGA_CONEXION_405 = 3;
+const VENTANA_CONEXION_405_MS = 30 * 1000;
+const PAUSA_INICIAL_CONEXION_405_MS = 30 * 1000;
+const PAUSAS_SISTEMICAS_CONEXION_405_MS = [
+    5 * 60 * 1000,
+    15 * 60 * 1000,
+    30 * 60 * 1000
+];
+const PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS = Math.max(
+    PAUSA_INICIAL_CONEXION_405_MS,
+    ...PAUSAS_SISTEMICAS_CONEXION_405_MS
+);
+const ESPACIADO_RECUPERACION_405_MS = 10 * 1000;
+const EXITOS_PARA_CERRAR_CIRCUITO_405 = 3;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
 const TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS =
     RETRASOS_RECONEXION_MS.reduce((total, retraso) => total + retraso, 0) +
@@ -818,6 +840,7 @@ const controladorRendimiento = crearControladorRendimiento({
 });
 
 let proteccionMiddlewarePublicacion = crearProteccionMiddlewareVacia();
+let proteccionConexion405 = crearProteccionConexion405Vacia();
 const solicitudesIdempotentes = new Map();
 
 let controlSeguridadPublicacion = crearControlSeguridadPublicacion();
@@ -1470,6 +1493,17 @@ function procesarSiguienteSincronizacionHistorialAgendamiento() {
     }
 
     if (solicitud.reiniciarConexion) {
+        if (obtenerEstadoProteccionConexion405().pausada) {
+            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
+                estado: 'pausada',
+                progreso: 0,
+                motivo:
+                    'WhatsApp está rechazando conexiones temporalmente. ' +
+                    'ZeroOne conservará la sesión y retomará la preparación ' +
+                    'cuando termine la recuperación protegida.'
+            });
+            return;
+        }
         if (!solicitarReconexionManual(linea, 500)) {
             cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
                 estado: 'pausada',
@@ -1693,6 +1727,108 @@ function cargarConfiguracion() {
 
 function guardarConfiguracion() {
     guardarJSONAtomico(ARCHIVO_CONFIGURACION, configuracion);
+}
+
+function crearProteccionConexion405Vacia() {
+    return {
+        version: 1,
+        bloqueadaHasta: null,
+        nivel: 0,
+        recuperacion: false,
+        recuperacionConfirmada: false,
+        motivo: null,
+        eventosRecientes: new Map(),
+        exitosRecuperacion: 0,
+        proximoInicioPermitidoEn: 0,
+        epoch: 0
+    };
+}
+
+function serializarProteccionConexion405() {
+    return {
+        version: 1,
+        bloqueadaHasta: proteccionConexion405.bloqueadaHasta,
+        nivel: Math.max(0, Number(proteccionConexion405.nivel) || 0),
+        recuperacion: proteccionConexion405.recuperacion === true,
+        motivo: proteccionConexion405.motivo || null
+    };
+}
+
+function guardarProteccionConexion405() {
+    try {
+        guardarJSONAtomico(
+            ARCHIVO_PROTECCION_CONEXION_405,
+            serializarProteccionConexion405()
+        );
+    } catch (error) {
+        console.error(
+            '[Conexión] No se pudo guardar la protección 405:',
+            error.message
+        );
+    }
+}
+
+function cargarProteccionConexion405() {
+    proteccionConexion405 = crearProteccionConexion405Vacia();
+    if (!fs.existsSync(ARCHIVO_PROTECCION_CONEXION_405)) return;
+
+    try {
+        const datos = JSON.parse(
+            fs.readFileSync(ARCHIVO_PROTECCION_CONEXION_405, 'utf8')
+        );
+        const ahora = Date.now();
+        const bloqueadaHastaOriginalMs = Date.parse(
+            datos?.bloqueadaHasta || ''
+        );
+        const bloqueadaHastaMs = Number.isFinite(bloqueadaHastaOriginalMs)
+            ? Math.min(
+                bloqueadaHastaOriginalMs,
+                ahora + PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS
+            )
+            : NaN;
+        const pausaFueAcotada =
+            Number.isFinite(bloqueadaHastaOriginalMs) &&
+            bloqueadaHastaOriginalMs > bloqueadaHastaMs;
+        const pausaVigente =
+            Number.isFinite(bloqueadaHastaMs) &&
+            bloqueadaHastaMs > ahora;
+        const habiaProteccion =
+            datos?.recuperacion === true ||
+            Number.isFinite(bloqueadaHastaOriginalMs);
+
+        proteccionConexion405 = {
+            ...crearProteccionConexion405Vacia(),
+            bloqueadaHasta: pausaVigente
+                ? new Date(bloqueadaHastaMs).toISOString()
+                : null,
+            nivel: Math.max(
+                0,
+                Math.min(
+                    PAUSAS_SISTEMICAS_CONEXION_405_MS.length,
+                    Number(datos?.nivel) || 0
+                )
+            ),
+            recuperacion: !pausaVigente && habiaProteccion,
+            recuperacionConfirmada: false,
+            motivo: pausaVigente
+                ? String(datos?.motivo || 'rechazo_405')
+                : (habiaProteccion ? 'recuperacion' : null)
+        };
+        if (pausaFueAcotada) {
+            guardarProteccionConexion405();
+        }
+    } catch (error) {
+        proteccionConexion405 = {
+            ...crearProteccionConexion405Vacia(),
+            recuperacion: true,
+            motivo: 'archivo_proteccion_invalido',
+            epoch: 1
+        };
+        console.error(
+            '[Conexión] No se pudo recuperar la protección 405:',
+            error.message
+        );
+    }
 }
 
 function crearProteccionMiddlewareVacia() {
@@ -8140,6 +8276,12 @@ function guardarLineas() {
         ),
         conexionEnVerificacion: linea.conexionEnVerificacion === true,
         reconexionBloqueada: linea.reconexionBloqueada === true,
+        origenBloqueoReconexion:
+            ['agotamiento', 'fatal', 'manual', 'desconocido'].includes(
+                linea.origenBloqueoReconexion
+            )
+                ? linea.origenBloqueoReconexion
+                : null,
         requiereRevisionEnvio: linea.requiereRevisionEnvio === true,
         motivoRevisionEnvio: linea.motivoRevisionEnvio || null,
         revisionEnvioDesde: linea.revisionEnvioDesde || null,
@@ -8181,6 +8323,7 @@ function cargarLineasGuardadas() {
                 .filter(orden => Number.isInteger(orden) && orden > 0)
         );
         const ordenesAsignados = new Set();
+        const idsRecuperacionConexion405 = [];
         let ordenAlternativo = 1;
 
         for (const datosLinea of datos) {
@@ -8211,23 +8354,58 @@ function cargarLineasGuardadas() {
 
             ordenesAsignados.add(ordenConexion);
 
-            const intentosReconexion = Math.min(
+            const intentosGuardados = Math.min(
                 MAXIMOS_INTENTOS_RECONEXION,
                 Math.max(0, Number(datosLinea.intentosReconexion) || 0)
             );
             const conexionEnVerificacion =
                 datosLinea.conexionEnVerificacion === true;
+            const ultimoCodigoDesconexion =
+                datosLinea.ultimoCodigoDesconexion !== null &&
+                datosLinea.ultimoCodigoDesconexion !== undefined &&
+                Number.isFinite(Number(datosLinea.ultimoCodigoDesconexion))
+                    ? Number(datosLinea.ultimoCodigoDesconexion)
+                    : null;
+            const origenBloqueoCrudo =
+                datosLinea.origenBloqueoReconexion;
+            const origenBloqueoAusente =
+                origenBloqueoCrudo === null ||
+                origenBloqueoCrudo === undefined ||
+                String(origenBloqueoCrudo).trim() === '';
+            const origenBloqueoGuardado =
+                ['agotamiento', 'fatal', 'manual'].includes(
+                    origenBloqueoCrudo
+                )
+                    ? origenBloqueoCrudo
+                    : (origenBloqueoAusente ? null : 'desconocido');
+            const migrarBloqueoLegacy405 =
+                origenBloqueoAusente &&
+                datosLinea.reconexionBloqueada === true &&
+                ultimoCodigoDesconexion === CODIGO_RECHAZO_CONEXION_405 &&
+                intentosGuardados === MAXIMOS_INTENTOS_RECONEXION &&
+                conexionEnVerificacion === false;
+            const intentosReconexion = migrarBloqueoLegacy405
+                ? 0
+                : intentosGuardados;
             const reconexionBloqueada =
-                datosLinea.reconexionBloqueada === true ||
+                (
+                    datosLinea.reconexionBloqueada === true &&
+                    !migrarBloqueoLegacy405
+                ) ||
                 (
                     intentosReconexion >= MAXIMOS_INTENTOS_RECONEXION &&
                     !conexionEnVerificacion
                 );
+            const origenBloqueoReconexion = reconexionBloqueada
+                ? origenBloqueoGuardado
+                : null;
             const proximoIntentoGuardado = Date.parse(
                 datosLinea.proximoIntentoReconexion || ''
             );
             const proximoIntentoReconexion =
-                !reconexionBloqueada && Number.isFinite(proximoIntentoGuardado)
+                !reconexionBloqueada &&
+                ultimoCodigoDesconexion !== CODIGO_RECHAZO_CONEXION_405 &&
+                Number.isFinite(proximoIntentoGuardado)
                     ? new Date(proximoIntentoGuardado).toISOString()
                     : null;
 
@@ -8260,6 +8438,7 @@ function cargarLineasGuardadas() {
                 generacionConexion: 0,
                 reiniciosRequeridos: 0,
                 reconexionManualEnCurso: false,
+                sondaConexion405: null,
                 fallosPrivacidadPersonalizada: 0,
                 modoPrivacidadEstadosInformado: null,
                 reparacionPrivacidadDisponible: false,
@@ -8281,15 +8460,12 @@ function cargarLineasGuardadas() {
                 intentosReconexion,
                 conexionEnVerificacion,
                 reconexionBloqueada,
+                origenBloqueoReconexion,
                 requiereRevisionEnvio: datosLinea.requiereRevisionEnvio === true,
                 motivoRevisionEnvio: datosLinea.motivoRevisionEnvio || null,
                 revisionEnvioDesde: datosLinea.revisionEnvioDesde || null,
                 ultimaDesconexion: datosLinea.ultimaDesconexion || null,
-                ultimoCodigoDesconexion: datosLinea.ultimoCodigoDesconexion !== null &&
-                    datosLinea.ultimoCodigoDesconexion !== undefined &&
-                    Number.isFinite(Number(datosLinea.ultimoCodigoDesconexion))
-                    ? Number(datosLinea.ultimoCodigoDesconexion)
-                    : null,
+                ultimoCodigoDesconexion,
                 proximoIntentoReconexion,
                 contactosEstado: new Set(),
                 contactosEstadoWhatsApp: new Set(),
@@ -8326,7 +8502,17 @@ function cargarLineasGuardadas() {
                         ? datosLinea.etiquetaAntesHistorialAgendamiento
                         : null
             });
+            if (
+                ultimoCodigoDesconexion === CODIGO_RECHAZO_CONEXION_405 &&
+                !reconexionBloqueada
+            ) {
+                idsRecuperacionConexion405.push(id);
+            }
         }
+
+        prepararRecuperacionInicialConexion405(
+            idsRecuperacionConexion405
+        );
 
         try {
             // Persiste la migración de orden para instalaciones anteriores.
@@ -9690,6 +9876,350 @@ function cancelarTemporizadorEstabilidadConexion(linea) {
     }
 }
 
+function obtenerBloqueoProteccionConexion405Ms() {
+    const valor = Date.parse(proteccionConexion405.bloqueadaHasta || '');
+    return Number.isFinite(valor) ? valor : 0;
+}
+
+function proteccionConexion405EnEnfriamiento() {
+    return obtenerBloqueoProteccionConexion405Ms() > Date.now();
+}
+
+function depurarEventosConexion405(ahora = Date.now()) {
+    for (const [lineaId, evento] of proteccionConexion405.eventosRecientes) {
+        if (
+            !evento ||
+            ahora - Number(evento.fecha || 0) > VENTANA_CONEXION_405_MS
+        ) {
+            proteccionConexion405.eventosRecientes.delete(lineaId);
+        }
+    }
+}
+
+function obtenerEstadoProteccionConexion405() {
+    depurarEventosConexion405();
+    const bloqueadaHastaMs = obtenerBloqueoProteccionConexion405Ms();
+    const enfriamiento = bloqueadaHastaMs > Date.now();
+
+    return {
+        pausada: enfriamiento || proteccionConexion405.recuperacion === true,
+        enfriamiento,
+        recuperacion: proteccionConexion405.recuperacion === true,
+        recuperacionConfirmada:
+            proteccionConexion405.recuperacionConfirmada === true,
+        bloqueadaHasta: enfriamiento
+            ? new Date(bloqueadaHastaMs).toISOString()
+            : null,
+        nivel: Math.max(0, Number(proteccionConexion405.nivel) || 0),
+        motivo: proteccionConexion405.motivo || null,
+        eventosRecientes: proteccionConexion405.eventosRecientes.size,
+        exitosRecuperacion:
+            Math.max(0, Number(proteccionConexion405.exitosRecuperacion) || 0),
+        pendientes: lineasPendientesConexion405.size
+    };
+}
+
+function cancelarTemporizadorProteccionConexion405() {
+    if (temporizadorProteccionConexion405) {
+        clearTimeout(temporizadorProteccionConexion405);
+        temporizadorProteccionConexion405 = null;
+    }
+    vencimientoTemporizadorProteccionConexion405 = 0;
+}
+
+function programarTemporizadorProteccionConexion405(vencimiento) {
+    const destino = Math.max(Date.now(), Number(vencimiento) || Date.now());
+    if (
+        temporizadorProteccionConexion405 &&
+        Math.abs(vencimientoTemporizadorProteccionConexion405 - destino) < 10
+    ) {
+        return;
+    }
+
+    cancelarTemporizadorProteccionConexion405();
+    vencimientoTemporizadorProteccionConexion405 = destino;
+    temporizadorProteccionConexion405 = setTimeout(() => {
+        temporizadorProteccionConexion405 = null;
+        vencimientoTemporizadorProteccionConexion405 = 0;
+        programarProcesamientoColaIniciosWhatsApp();
+    }, Math.max(0, destino - Date.now()));
+    temporizadorProteccionConexion405.unref?.();
+}
+
+function encolarLineasPendientesConexion405() {
+    for (const lineaId of [...lineasPendientesConexion405]) {
+        const linea = lineas.get(lineaId);
+        if (
+            !linea ||
+            linea.eliminando ||
+            linea.estado === 'conectado' ||
+            linea.estado === 'esperando_qr'
+        ) {
+            lineasPendientesConexion405.delete(lineaId);
+            continue;
+        }
+
+        if (
+            linea.iniciando ||
+            linea.temporizadorReconexion ||
+            turnosInicioWhatsAppActivos.has(lineaId) ||
+            colaIniciosWhatsApp.some(item => item.lineaId === lineaId)
+        ) {
+            continue;
+        }
+        encolarInicioWhatsApp(lineaId, {
+            prioridad: 2,
+            motivo: 'recuperación gradual después de rechazo 405'
+        });
+    }
+}
+
+function iniciarRecuperacionConexion405(motivo = 'fin del enfriamiento') {
+    cancelarTemporizadorProteccionConexion405();
+    proteccionConexion405.epoch += 1;
+    proteccionConexion405.bloqueadaHasta = null;
+    proteccionConexion405.recuperacion = true;
+    proteccionConexion405.recuperacionConfirmada = false;
+    proteccionConexion405.motivo = 'recuperacion';
+    proteccionConexion405.exitosRecuperacion = 0;
+    proteccionConexion405.proximoInicioPermitidoEn = Date.now();
+    guardarProteccionConexion405();
+    encolarLineasPendientesConexion405();
+    console.log(
+        `[Conexión] Protección 405: ${motivo}; se probará una línea por vez.`
+    );
+}
+
+function abrirProteccionConexion405({
+    sistemica = false,
+    motivo = 'rechazo_405'
+} = {}) {
+    const ahora = Date.now();
+    let duracion = PAUSA_INICIAL_CONEXION_405_MS;
+
+    if (sistemica) {
+        const indice = Math.min(
+            Math.max(0, Number(proteccionConexion405.nivel) || 0),
+            PAUSAS_SISTEMICAS_CONEXION_405_MS.length - 1
+        );
+        duracion = PAUSAS_SISTEMICAS_CONEXION_405_MS[indice];
+        proteccionConexion405.nivel = Math.min(
+            PAUSAS_SISTEMICAS_CONEXION_405_MS.length,
+            indice + 1
+        );
+    }
+
+    proteccionConexion405.epoch += 1;
+    proteccionConexion405.bloqueadaHasta =
+        new Date(ahora + duracion).toISOString();
+    proteccionConexion405.recuperacion = false;
+    proteccionConexion405.recuperacionConfirmada = false;
+    proteccionConexion405.motivo = motivo;
+    proteccionConexion405.exitosRecuperacion = 0;
+    proteccionConexion405.proximoInicioPermitidoEn = 0;
+    guardarProteccionConexion405();
+    programarTemporizadorProteccionConexion405(ahora + duracion);
+
+    const descripcion = sistemica
+        ? `ráfaga sistémica; pausa global de ${Math.ceil(duracion / 60000)} minuto(s)`
+        : `rechazo aislado; observación de ${Math.ceil(duracion / 1000)} segundos`;
+    console.warn(
+        `[Conexión] Protección 405 activada: ${descripcion}. ` +
+        'Las sesiones se conservaron y no se pedirán códigos QR.'
+    );
+}
+
+function registrarRechazoConexion405(linea, generacionConexion) {
+    const ahora = Date.now();
+    depurarEventosConexion405(ahora);
+    proteccionConexion405.eventosRecientes.set(linea.id, {
+        fecha: ahora,
+        generacion: Number(generacionConexion) || 0
+    });
+    lineasPendientesConexion405.add(linea.id);
+    cancelarTemporizadorReconexion(linea);
+    linea.intentosReconexion = 0;
+    linea.reconexionBloqueada = false;
+    linea.origenBloqueoReconexion = null;
+    linea.estado = 'reconectando';
+    linea.etiqueta = 'caida';
+    linea.conexionEnVerificacion = false;
+    linea.proximoIntentoReconexion = null;
+    linea.ultimoCodigoDesconexion = CODIGO_RECHAZO_CONEXION_405;
+    linea.ultimoError =
+        'WhatsApp rechazó temporalmente la conexión (código 405). ' +
+        'ZeroOne conservará la sesión y esperará antes de probarla nuevamente.';
+    linea.sondaConexion405 = null;
+
+    const enRecuperacion = proteccionConexion405.recuperacion === true;
+    const enEnfriamiento = proteccionConexion405EnEnfriamiento();
+    const rafaga =
+        proteccionConexion405.eventosRecientes.size >=
+        UMBRAL_RAFAGA_CONEXION_405;
+
+    if (enRecuperacion) {
+        abrirProteccionConexion405({
+            sistemica: true,
+            motivo: 'fallo_sonda_405'
+        });
+    } else if (!enEnfriamiento) {
+        abrirProteccionConexion405({
+            sistemica: false,
+            motivo: 'observacion_405'
+        });
+    } else if (
+        rafaga &&
+        proteccionConexion405.motivo === 'observacion_405'
+    ) {
+        abrirProteccionConexion405({
+            sistemica: true,
+            motivo: 'rafaga_405'
+        });
+    }
+
+    encolarInicioWhatsApp(linea.id, {
+        prioridad: 2,
+        motivo: 'reintento protegido después de 405'
+    });
+    guardarLineas();
+}
+
+function registrarSondaEstableConexion405(
+    lineaId,
+    linea,
+    generacionConexion,
+    socket
+) {
+    const sonda = linea?.sondaConexion405;
+    if (
+        !sonda ||
+        sonda.epoch !== proteccionConexion405.epoch ||
+        sonda.generacion !== generacionConexion ||
+        proteccionConexion405.recuperacion !== true ||
+        !conexionSigueVigente(lineaId, linea, generacionConexion, socket) ||
+        linea.estado !== 'conectado'
+    ) {
+        return false;
+    }
+
+    linea.sondaConexion405 = null;
+    lineasPendientesConexion405.delete(lineaId);
+    proteccionConexion405.exitosRecuperacion += 1;
+    proteccionConexion405.proximoInicioPermitidoEn = Date.now();
+
+    if (
+        proteccionConexion405.exitosRecuperacion >=
+        EXITOS_PARA_CERRAR_CIRCUITO_405
+    ) {
+        proteccionConexion405.recuperacionConfirmada = true;
+        console.log(
+            '[Conexión] Protección 405: la recuperación fue confirmada; ' +
+            'la cola continuará gradualmente.'
+        );
+    }
+
+    guardarProteccionConexion405();
+    programarProcesamientoColaIniciosWhatsApp();
+    return true;
+}
+
+function descartarSondaConexion405(linea) {
+    if (!linea) return false;
+    const teniaSonda = Boolean(linea.sondaConexion405);
+    const estabaPendiente = lineasPendientesConexion405.delete(linea.id);
+    linea.sondaConexion405 = null;
+    if (teniaSonda || estabaPendiente) {
+        programarProcesamientoColaIniciosWhatsApp();
+        return true;
+    }
+    return false;
+}
+
+function cerrarRecuperacionConexion405SiCorresponde() {
+    if (
+        proteccionConexion405.recuperacion !== true ||
+        colaIniciosWhatsApp.length > 0 ||
+        turnosInicioWhatsAppActivos.size > 0 ||
+        lineasPendientesConexion405.size > 0
+    ) {
+        return false;
+    }
+
+    cancelarTemporizadorProteccionConexion405();
+    proteccionConexion405 = {
+        ...crearProteccionConexion405Vacia(),
+        epoch: proteccionConexion405.epoch + 1
+    };
+    guardarProteccionConexion405();
+    console.log(
+        '[Conexión] Protección 405 finalizada: la cola gradual terminó.'
+    );
+    return true;
+}
+
+function prepararRecuperacionInicialConexion405(idsLineas) {
+    const ids = [...new Set(idsLineas || [])]
+        .filter(lineaId => lineas.has(lineaId));
+    if (ids.length === 0) return false;
+
+    for (const lineaId of ids) {
+        lineasPendientesConexion405.add(lineaId);
+        const linea = lineas.get(lineaId);
+        linea.reconexionBloqueada = false;
+        linea.origenBloqueoReconexion = null;
+        linea.intentosReconexion = 0;
+        linea.proximoIntentoReconexion = null;
+        cancelarTemporizadorReconexion(linea);
+    }
+
+    if (!proteccionConexion405EnEnfriamiento()) {
+        proteccionConexion405.epoch += 1;
+        proteccionConexion405.recuperacion = true;
+        proteccionConexion405.recuperacionConfirmada = false;
+        proteccionConexion405.bloqueadaHasta = null;
+        proteccionConexion405.motivo = 'recuperacion_restaurada';
+        proteccionConexion405.exitosRecuperacion = 0;
+        proteccionConexion405.proximoInicioPermitidoEn = Date.now();
+        guardarProteccionConexion405();
+    }
+
+    return true;
+}
+
+function permitirProcesarColaConexion405() {
+    const bloqueadaHasta = obtenerBloqueoProteccionConexion405Ms();
+    if (bloqueadaHasta > Date.now()) {
+        programarTemporizadorProteccionConexion405(bloqueadaHasta);
+        return false;
+    }
+
+    if (bloqueadaHasta > 0) {
+        iniciarRecuperacionConexion405('terminó el enfriamiento');
+    }
+
+    if (proteccionConexion405.recuperacion === true) {
+        encolarLineasPendientesConexion405();
+        const sondaEnVerificacion = [...lineas.values()].some(linea =>
+            linea.sondaConexion405 &&
+            linea.sondaConexion405.epoch === proteccionConexion405.epoch &&
+            linea.estado === 'conectado' &&
+            linea.conexionEnVerificacion === true
+        );
+        if (sondaEnVerificacion) return false;
+
+        const siguiente = Math.max(
+            0,
+            Number(proteccionConexion405.proximoInicioPermitidoEn) || 0
+        );
+        if (siguiente > Date.now()) {
+            programarTemporizadorProteccionConexion405(siguiente);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 function prioridadInicioWhatsApp(lineaId, prioridadSolicitada = 0) {
     let prioridad = Math.max(0, Number(prioridadSolicitada) || 0);
 
@@ -9783,6 +10313,8 @@ function encolarInicioWhatsApp(
 }
 
 function obtenerLimiteIniciosWhatsApp() {
+    if (proteccionConexion405.recuperacion === true) return 1;
+
     return Math.max(
         1,
         Number(
@@ -9794,6 +10326,8 @@ function obtenerLimiteIniciosWhatsApp() {
 }
 
 function procesarColaIniciosWhatsApp() {
+    if (!permitirProcesarColaConexion405()) return;
+
     while (
         turnosInicioWhatsAppActivos.size <
             obtenerLimiteIniciosWhatsApp() &&
@@ -9813,12 +10347,26 @@ function procesarColaIniciosWhatsApp() {
         const turno = {
             token: ++secuenciaInicioWhatsApp,
             lineaId: solicitud.lineaId,
-            motivo: solicitud.motivo
+            motivo: solicitud.motivo,
+            sondaConexion405:
+                proteccionConexion405.recuperacion === true &&
+                proteccionConexion405.recuperacionConfirmada !== true,
+            epochConexion405: proteccionConexion405.epoch
         };
         turnosInicioWhatsAppActivos.set(solicitud.lineaId, turno);
 
         const inicio = iniciarWhatsApp(solicitud.lineaId, turno);
         turno.generacionConexion = linea.generacionConexion;
+        if (proteccionConexion405.recuperacion === true) {
+            proteccionConexion405.proximoInicioPermitidoEn =
+                Date.now() + ESPACIADO_RECUPERACION_405_MS;
+            if (turno.sondaConexion405) {
+                linea.sondaConexion405 = {
+                    epoch: turno.epochConexion405,
+                    generacion: turno.generacionConexion
+                };
+            }
+        }
 
         Promise.resolve(inicio).then(inicioPendiente => {
             if (inicioPendiente !== true) {
@@ -9851,7 +10399,11 @@ function procesarColaIniciosWhatsApp() {
                 error
             );
         });
+
+        if (proteccionConexion405.recuperacion === true) break;
     }
+
+    cerrarRecuperacionConexion405SiCorresponde();
 }
 
 function invalidarConexionActual(linea) {
@@ -10083,6 +10635,12 @@ function programarConfirmacionEstabilidad(lineaId, linea, generacion, socket) {
         if (linea.ultimoError === mensajeAlProgramar) {
             linea.ultimoError = null;
         }
+        registrarSondaEstableConexion405(
+            lineaId,
+            linea,
+            generacion,
+            socket
+        );
         guardarLineas();
     }, VENTANA_ESTABILIDAD_CONEXION_MS);
 }
@@ -10144,7 +10702,13 @@ function programarWatchdogConexion(
     }, TIEMPO_MAXIMO_INTENTO_CONEXION_MS);
 }
 
-function bloquearReconexionAutomatica(linea, mensaje, codigo = null, estado = 'requiere_intervencion') {
+function bloquearReconexionAutomatica(
+    linea,
+    mensaje,
+    codigo = null,
+    estado = 'requiere_intervencion',
+    origen = 'fatal'
+) {
     cancelarTemporizadorReconexion(linea);
     invalidarConexionActual(linea);
     linea.socket = null;
@@ -10157,6 +10721,10 @@ function bloquearReconexionAutomatica(linea, mensaje, codigo = null, estado = 'r
     linea.etiqueta = 'caida';
     linea.conexionEnVerificacion = false;
     linea.reconexionBloqueada = true;
+    linea.origenBloqueoReconexion =
+        ['agotamiento', 'fatal', 'manual'].includes(origen)
+            ? origen
+            : 'fatal';
     linea.ultimoCodigoDesconexion = codigo !== null &&
         codigo !== undefined &&
         Number.isFinite(Number(codigo))
@@ -10192,7 +10760,9 @@ function programarReconexionAutomatica(
         bloquearReconexionAutomatica(
             linea,
             mensajeFinal,
-            codigo
+            codigo,
+            'requiere_intervencion',
+            'agotamiento'
         );
         return false;
     }
@@ -10297,6 +10867,9 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
     if (lineaParticipaEnPublicacionActiva(linea)) {
         return false;
     }
+    if (obtenerEstadoProteccionConexion405().pausada) {
+        return false;
+    }
 
     const socketAnterior = linea.socket;
 
@@ -10306,6 +10879,7 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
 
     linea.reconexionManualEnCurso = true;
     linea.reconexionBloqueada = false;
+    linea.origenBloqueoReconexion = null;
     linea.intentosReconexion = 0;
     linea.reiniciosRequeridos = 0;
     linea.ultimoCodigoDesconexion = null;
@@ -10429,6 +11003,26 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 carpetaSesion
             );
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
+            return false;
+        }
+
+        if (
+            proteccionConexion405EnEnfriamiento() ||
+            (
+                proteccionConexion405.recuperacion === true &&
+                turnoInicio &&
+                turnoInicio.epochConexion405 !== proteccionConexion405.epoch
+            )
+        ) {
+            linea.iniciando = false;
+            linea.estado = 'reconectando';
+            const temporizador = setTimeout(() => {
+                encolarInicioWhatsApp(lineaId, {
+                    prioridad: 1,
+                    motivo: 'inicio aparcado por protección 405'
+                });
+            }, 0);
+            temporizador.unref?.();
             return false;
         }
 
@@ -10713,6 +11307,7 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                     cancelarTemporizadorIntentoConexion(linea);
                     linea.qr = qrGenerado;
                     linea.estado = 'esperando_qr';
+                    descartarSondaConexion405(linea);
                     if (
                         sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
                         linea.modoHistorialAgendamiento === true
@@ -10741,10 +11336,16 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
             }
 
             if (connection === 'open') {
+                const sondaConexion405 =
+                    linea.sondaConexion405?.epoch ===
+                        proteccionConexion405.epoch &&
+                    linea.sondaConexion405?.generacion ===
+                        generacionConexion;
                 const debeVerificarEstabilidad =
                     linea.conexionEnVerificacion === true ||
                     linea.reconexionManualEnCurso ||
-                    (Number(linea.intentosReconexion) || 0) > 0;
+                    (Number(linea.intentosReconexion) || 0) > 0 ||
+                    sondaConexion405;
                 cancelarReintentoAudiencia(linea);
                 cancelarTemporizadorReconexion(linea);
                 cancelarTemporizadorIntentoConexion(linea);
@@ -10763,6 +11364,7 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 }
                 linea.reconexionManualEnCurso = false;
                 linea.reconexionBloqueada = false;
+                linea.origenBloqueoReconexion = null;
                 linea.reiniciosRequeridos = 0;
                 linea.conexionEnVerificacion = debeVerificarEstabilidad;
                 linea.ultimoCodigoDesconexion = null;
@@ -10788,6 +11390,13 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 const jidConectado = jidNormalizedUser(sock.user.id);
                 actualizarIdentidadAgendamientoLinea(linea, jidConectado);
                 linea.jid = jidConectado;
+                if (
+                    proteccionConexion405.recuperacion === true &&
+                    proteccionConexion405.recuperacionConfirmada === true
+                ) {
+                    linea.sondaConexion405 = null;
+                    lineasPendientesConexion405.delete(lineaId);
+                }
                 guardarLineas();
                 programarConfirmacionEstabilidad(
                     lineaId,
@@ -10939,6 +11548,9 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 linea.conexionEnVerificacion = false;
                 linea.ultimaDesconexion = new Date().toISOString();
                 linea.ultimoCodigoDesconexion = codigoError;
+                if (codigoError !== CODIGO_RECHAZO_CONEXION_405) {
+                    descartarSondaConexion405(linea);
+                }
 
                 console.warn(
                     `[Conexión] ${linea.nombre} cerró su socket ` +
@@ -10958,9 +11570,16 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                         'Esperando el resultado para conservar cualquier ID devuelto y evitar duplicados.';
                 }
 
-                if (codigoError === DisconnectReason.restartRequired) {
+                if (codigoError === CODIGO_RECHAZO_CONEXION_405) {
+                    registrarRechazoConexion405(
+                        linea,
+                        generacionConexion
+                    );
+                } else if (codigoError === DisconnectReason.restartRequired) {
                     programarReinicioSolicitado(lineaId, mensajeDesconexion);
                 } else if (codigoError === DisconnectReason.loggedOut) {
+                    lineasPendientesConexion405.delete(lineaId);
+                    linea.sondaConexion405 = null;
                     linea.etiqueta = 'caida';
                     linea.reiniciosRequeridos = 0;
                     registrarCorteDesconexion(
@@ -10993,6 +11612,8 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                         'sesion_cerrada'
                     );
                 } else if (CODIGOS_DESCONEXION_FATAL.has(codigoError)) {
+                    lineasPendientesConexion405.delete(lineaId);
+                    linea.sondaConexion405 = null;
                     linea.etiqueta = 'caida';
                     linea.reiniciosRequeridos = 0;
                     registrarCorteDesconexion(
@@ -11071,6 +11692,7 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
 
         const preparacionLocalAgotada =
             error?.codigo === 'PREPARACION_CONEXION_AGOTADA';
+        const codigoErrorInicio = obtenerCodigoError(error);
         invalidarConexionActual(linea);
         linea.iniciando = false;
         linea.reconexionManualEnCurso = false;
@@ -11078,6 +11700,7 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
         linea.jid = null;
 
         if (preparacionLocalAgotada) {
+            descartarSondaConexion405(linea);
             linea.estado = 'reconectando';
             linea.conexionEnVerificacion = false;
             linea.ultimoCodigoDesconexion = null;
@@ -11096,10 +11719,16 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
         linea.etiqueta = 'caida';
         linea.conexionEnVerificacion = false;
         linea.ultimaDesconexion = new Date().toISOString();
-        linea.ultimoCodigoDesconexion = obtenerCodigoError(error);
+        linea.ultimoCodigoDesconexion = codigoErrorInicio;
         linea.ultimoError = error.message || 'No se pudo iniciar la línea.';
         linea.reiniciosRequeridos = 0;
-        if (CODIGOS_DESCONEXION_FATAL.has(linea.ultimoCodigoDesconexion)) {
+        if (codigoErrorInicio === CODIGO_RECHAZO_CONEXION_405) {
+            registrarRechazoConexion405(
+                linea,
+                generacionConexion
+            );
+        } else if (CODIGOS_DESCONEXION_FATAL.has(linea.ultimoCodigoDesconexion)) {
+            descartarSondaConexion405(linea);
             registrarCorteDesconexion(
                 linea,
                 linea.ultimoError,
@@ -11111,6 +11740,7 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 linea.ultimoCodigoDesconexion
             );
         } else {
+            descartarSondaConexion405(linea);
             guardarLineas();
             programarReconexionAutomatica(
                 lineaId,
@@ -13808,6 +14438,7 @@ app.post('/lineas', (req, res) => {
         generacionConexion: 0,
         reiniciosRequeridos: 0,
         reconexionManualEnCurso: false,
+        sondaConexion405: null,
         resincronizandoAudiencia: false,
         fallosPrivacidadPersonalizada: 0,
         modoPrivacidadEstadosInformado: null,
@@ -13829,6 +14460,7 @@ app.post('/lineas', (req, res) => {
         intentosReconexion: 0,
         conexionEnVerificacion: false,
         reconexionBloqueada: false,
+        origenBloqueoReconexion: null,
         requiereRevisionEnvio: false,
         motivoRevisionEnvio: null,
         revisionEnvioDesde: null,
@@ -15139,6 +15771,19 @@ registrarRutasConfiguracion(app, {
 });
 
 app.post('/lineas/reconectar-todas', (req, res) => {
+    const estadoProteccion405 = obtenerEstadoProteccionConexion405();
+    if (estadoProteccion405.pausada) {
+        return res.status(409).json({
+            codigo: 'CIRCUITO_405_ABIERTO',
+            error:
+                'WhatsApp está rechazando conexiones temporalmente. ' +
+                'ZeroOne conservará las sesiones y las recuperará de forma gradual; ' +
+                'Reconectar todas no puede adelantar este proceso.',
+            bloqueadaHasta: estadoProteccion405.bloqueadaHasta,
+            recuperacion: estadoProteccion405.recuperacion
+        });
+    }
+
     let cantidad = 0;
     let omitidasPorPublicacion = 0;
     let omitidasPorPreparacionLocal = 0;
@@ -15227,6 +15872,19 @@ app.post('/lineas/:id/reconectar', (req, res) => {
         return res.status(404).json({ error: 'La línea no existe.' });
     }
     if (responderConflictoReparacionPrivacidad(res, linea)) return;
+
+    const estadoProteccion405 = obtenerEstadoProteccionConexion405();
+    if (estadoProteccion405.pausada) {
+        return res.status(409).json({
+            codigo: 'CIRCUITO_405_ABIERTO',
+            error:
+                'WhatsApp está rechazando conexiones temporalmente. ' +
+                'ZeroOne conservará esta sesión y la recuperará automáticamente ' +
+                'cuando sea seguro volver a probar.',
+            bloqueadaHasta: estadoProteccion405.bloqueadaHasta,
+            recuperacion: estadoProteccion405.recuperacion
+        });
+    }
 
     if (linea.eliminando) {
         return res.status(409).json({
@@ -15352,6 +16010,8 @@ app.delete('/lineas/:id', async (req, res) => {
     }
 
     linea.socket = null;
+    lineasPendientesConexion405.delete(id);
+    linea.sondaConexion405 = null;
     lineas.delete(id);
     try {
         obtenerAlmacenMensajesRecientes()?.eliminarLinea(id);
@@ -15434,6 +16094,7 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     cargarConfiguracion();
     controladorRendimiento.iniciar();
     cargarProteccionMiddleware();
+    cargarProteccionConexion405();
     cargarClavesIdempotencia();
     if (MODO_FIXTURES_UI) {
         console.log(

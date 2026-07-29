@@ -62,6 +62,71 @@ function cargarBackendAislado(
                 `${Math.max(10, Number(opciones.tiempoPreparacionConexionMs))};`
         );
     }
+    if (Number.isFinite(Number(opciones.pausaInicialConexion405Ms))) {
+        original = original.replace(
+            /const PAUSA_INICIAL_CONEXION_405_MS = [^;]+;/u,
+            `const PAUSA_INICIAL_CONEXION_405_MS = ` +
+                `${Math.max(10, Number(opciones.pausaInicialConexion405Ms))};`
+        );
+    }
+    if (
+        Array.isArray(opciones.pausasSistemicasConexion405Ms) &&
+        opciones.pausasSistemicasConexion405Ms.length > 0
+    ) {
+        const pausas = opciones.pausasSistemicasConexion405Ms
+            .map(valor => Math.max(10, Number(valor) || 10));
+        original = original.replace(
+            /const PAUSAS_SISTEMICAS_CONEXION_405_MS = \[[\s\S]*?\];/u,
+            `const PAUSAS_SISTEMICAS_CONEXION_405_MS = ` +
+                `${JSON.stringify(pausas)};`
+        );
+    }
+    if (Number.isFinite(Number(opciones.ventanaConexion405Ms))) {
+        original = original.replace(
+            /const VENTANA_CONEXION_405_MS = [^;]+;/u,
+            `const VENTANA_CONEXION_405_MS = ` +
+                `${Math.max(10, Number(opciones.ventanaConexion405Ms))};`
+        );
+    }
+    if (Number.isFinite(Number(opciones.espaciadoRecuperacion405Ms))) {
+        original = original.replace(
+            /const ESPACIADO_RECUPERACION_405_MS = [^;]+;/u,
+            `const ESPACIADO_RECUPERACION_405_MS = ` +
+                `${Math.max(10, Number(opciones.espaciadoRecuperacion405Ms))};`
+        );
+    }
+    if (Number.isFinite(Number(opciones.exitosParaCerrarCircuito405))) {
+        original = original.replace(
+            /const EXITOS_PARA_CERRAR_CIRCUITO_405 = [^;]+;/u,
+            `const EXITOS_PARA_CERRAR_CIRCUITO_405 = ` +
+                `${Math.max(1, Number(opciones.exitosParaCerrarCircuito405))};`
+        );
+    }
+    if (Number.isFinite(Number(opciones.ventanaEstabilidadConexionMs))) {
+        original = original.replace(
+            /const VENTANA_ESTABILIDAD_CONEXION_MS = [^;]+;/u,
+            `const VENTANA_ESTABILIDAD_CONEXION_MS = ` +
+                `${Math.max(10, Number(opciones.ventanaEstabilidadConexionMs))};`
+        );
+    }
+    if (
+        Array.isArray(opciones.retrasosReconexionMs) &&
+        opciones.retrasosReconexionMs.length > 0
+    ) {
+        const retrasos = opciones.retrasosReconexionMs
+            .map(valor => Math.max(10, Number(valor) || 10));
+        original = original.replace(
+            /const RETRASOS_RECONEXION_MS = \[[^\]]+\];/u,
+            `const RETRASOS_RECONEXION_MS = ${JSON.stringify(retrasos)};`
+        );
+    }
+    if (Number.isFinite(Number(opciones.jitterMaximoReconexionMs))) {
+        original = original.replace(
+            /const JITTER_MAXIMO_RECONEXION_MS = [^;]+;/u,
+            `const JITTER_MAXIMO_RECONEXION_MS = ` +
+                `${Math.max(0, Number(opciones.jitterMaximoReconexionMs))};`
+        );
+    }
     const corte = original.indexOf('\napp.listen(');
     assert.ok(corte > 0, 'No se encontró el inicio del servidor');
 
@@ -81,6 +146,7 @@ function cargarBackendAislado(
                 const socket = {
                     ev,
                     lineaId: configuracion.auth?.__lineaId || null,
+                    cierres: [],
                     solicitudesHistorialCompleto: 0,
                     user: {
                         id: '595999999999@s.whatsapp.net',
@@ -95,7 +161,9 @@ function cargarBackendAislado(
                         socket.solicitudesHistorialCompleto += 1;
                         return 'no-deberia-usarse';
                     },
-                    end: () => {}
+                    end: error => {
+                        socket.cierres.push(error);
+                    }
                 };
                 configuraciones.push(configuracion);
                 sockets.push(socket);
@@ -124,6 +192,7 @@ function cargarBackendAislado(
             module.exports = {
                 app,
                 cargarLineasGuardadas,
+                cargarProteccionConexion405,
                 colaIniciosWhatsApp,
                 encolarInicioWhatsApp,
                 iniciarWhatsApp,
@@ -131,6 +200,17 @@ function cargarBackendAislado(
                 lineas,
                 maximosIniciosWhatsAppSimultaneos:
                     MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS,
+                limpiarProteccionConexion405Prueba: () => {
+                    cancelarTemporizadorProteccionConexion405();
+                    lineasPendientesConexion405.clear();
+                    proteccionConexion405 =
+                        crearProteccionConexion405Vacia();
+                    colaIniciosWhatsApp.splice(0);
+                },
+                obtenerEstadoProteccionConexion405:
+                    typeof obtenerEstadoProteccionConexion405 === 'function'
+                        ? obtenerEstadoProteccionConexion405
+                        : () => null,
                 preparacionAutenticacionLocalPendiente,
                 reanalizarMensajesRecientesAgendamiento,
                 seleccionarMensajesContextualesIA,
@@ -210,6 +290,7 @@ async function cerrarBackendAislado(backend, rutaDatos) {
         }
         backend.invalidarConexionActual(linea);
     }
+    backend.limpiarProteccionConexion405Prueba?.();
     backend.cerrar();
     await new Promise(resolve => setTimeout(resolve, 120));
     fs.rmSync(rutaDatos, { recursive: true, force: true });
@@ -224,6 +305,19 @@ async function esperarHasta(condicion, mensaje, limiteMs = 1500) {
     }
 
     assert.fail(mensaje);
+}
+
+function emitirCierreConexion(socket, codigo) {
+    socket.ev.emit('connection.update', {
+        connection: 'close',
+        lastDisconnect: {
+            error: {
+                output: {
+                    statusCode: codigo
+                }
+            }
+        }
+    });
 }
 
 async function escucharAplicacion(app) {
@@ -963,6 +1057,648 @@ test('un rechazo local transitorio permite una lectura nueva al Reconectar', asy
     assert.equal(llamadas, 2);
     backend.sockets.find(socket => socket.lineaId === ID_UNO)
         .ev.emit('connection.update', { connection: 'open' });
+});
+
+test('tres cierres 405 pausan globalmente sin gastar intentos ni tocar credenciales', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-proteccion-global-405-')
+    );
+    const lineasGuardadas = Array.from({ length: 3 }, (_, indice) => {
+        const numero = indice + 1;
+        return datosLinea(
+            `40500000-0000-4000-8000-${numero
+                .toString(16)
+                .padStart(12, '0')}`,
+            `Linea 405 ${numero}`,
+            numero
+        );
+    });
+    const archivosProtegidos = new Map();
+
+    for (const linea of lineasGuardadas) {
+        const carpeta = path.join(rutaDatos, 'sesiones', linea.id);
+        fs.mkdirSync(carpeta, { recursive: true });
+        const credenciales = Buffer.from(
+            `{"registered":true,"linea":"${linea.id}"}\n`,
+            'utf8'
+        );
+        const appState = Buffer.from(
+            `estado-cifrado-${linea.id}\u0000\u00ff`,
+            'latin1'
+        );
+        fs.writeFileSync(path.join(carpeta, 'creds.json'), credenciales);
+        fs.writeFileSync(
+            path.join(carpeta, 'app-state-sync-key-1.json'),
+            appState
+        );
+        archivosProtegidos.set(linea.id, { credenciales, appState });
+    }
+
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map(lineasGuardadas.map(linea => [linea.id, true])),
+        lineasGuardadas,
+        {
+            pausaInicialConexion405Ms: 120,
+            pausasSistemicasConexion405Ms: [120, 200, 300],
+            ventanaConexion405Ms: 500,
+            espaciadoRecuperacion405Ms: 10,
+            exitosParaCerrarCircuito405: 3,
+            ventanaEstabilidadConexionMs: 50
+        }
+    );
+    const advertirOriginal = console.warn;
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    for (const linea of lineasGuardadas) {
+        await backend.iniciarWhatsApp(linea.id);
+    }
+    assert.equal(backend.sockets.length, 3);
+
+    for (const socket of backend.sockets) {
+        emitirCierreConexion(socket, 405);
+        await new Promise(resolve => setImmediate(resolve));
+    }
+
+    const proteccion = backend.obtenerEstadoProteccionConexion405();
+    assert.equal(proteccion?.pausada, true);
+    const totalEventos = Array.isArray(proteccion?.eventosRecientes)
+        ? proteccion.eventosRecientes.length
+        : Number(proteccion?.eventosRecientes);
+    assert.ok(
+        totalEventos >= 3,
+        'La proteccion global no registro las tres lineas distintas.'
+    );
+
+    for (const lineaGuardada of lineasGuardadas) {
+        const linea = backend.lineas.get(lineaGuardada.id);
+        assert.equal(linea.intentosReconexion, 0);
+        assert.equal(linea.reconexionBloqueada, false);
+        assert.notEqual(linea.estado, 'requiere_intervencion');
+
+        const originales = archivosProtegidos.get(linea.id);
+        const carpeta = path.join(rutaDatos, 'sesiones', linea.id);
+        assert.deepEqual(
+            fs.readFileSync(path.join(carpeta, 'creds.json')),
+            originales.credenciales
+        );
+        assert.deepEqual(
+            fs.readFileSync(
+                path.join(carpeta, 'app-state-sync-key-1.json')
+            ),
+            originales.appState
+        );
+    }
+
+    await esperarHasta(
+        () => backend.sockets.length === 4,
+        'La recuperacion serial no inicio despues de la pausa 405.',
+        2000
+    );
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(
+        backend.sockets.length,
+        4,
+        'La recuperacion 405 abrio mas de un socket a la vez.'
+    );
+
+    for (let indice = 3; indice < 6; indice += 1) {
+        backend.sockets[indice].ev.emit('connection.update', {
+            connection: 'open'
+        });
+        await new Promise(resolve => setTimeout(resolve, 25));
+        assert.equal(
+            backend.sockets.length,
+            indice + 1,
+            'La recuperacion avanzo antes de confirmar la estabilidad.'
+        );
+        if (indice < 5) {
+            await esperarHasta(
+                () => backend.sockets.length === indice + 2,
+                'La recuperacion 405 no avanzo tras confirmar el socket anterior.',
+                2000
+            );
+            await new Promise(resolve => setTimeout(resolve, 60));
+            assert.equal(
+                backend.sockets.length,
+                indice + 2,
+                'La recuperacion 405 solapo dos sockets.'
+            );
+        }
+    }
+
+    await esperarHasta(
+        () => backend.obtenerEstadoProteccionConexion405()?.pausada === false,
+        'Tres recuperaciones estables no cerraron el circuito 405.',
+        2000
+    );
+});
+
+test('Reconectar manual no altera la linea mientras el circuito 405 esta pausado', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-reconexion-manual-pausa-405-')
+    );
+    const lineasGuardadas = [
+        datosLinea(ID_UNO, 'Linea conectada protegida', 1),
+        datosLinea(ID_DOS, 'Linea que activa 405', 2)
+    ];
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([
+            [ID_UNO, true],
+            [ID_DOS, true]
+        ]),
+        lineasGuardadas,
+        {
+            pausaInicialConexion405Ms: 500,
+            pausasSistemicasConexion405Ms: [500],
+            ventanaConexion405Ms: 1000
+        }
+    );
+    const advertirOriginal = console.warn;
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    await backend.iniciarWhatsApp(ID_UNO);
+    await backend.iniciarWhatsApp(ID_DOS);
+
+    const socketProtegido = backend.sockets.find(
+        socket => socket.lineaId === ID_UNO
+    );
+    const socketRechazado = backend.sockets.find(
+        socket => socket.lineaId === ID_DOS
+    );
+    socketProtegido.ev.emit('connection.update', { connection: 'open' });
+    await esperarHasta(
+        () => backend.lineas.get(ID_UNO).estado === 'conectado',
+        'La linea de control no llego a estar conectada.'
+    );
+    emitirCierreConexion(socketRechazado, 405);
+    await esperarHasta(
+        () => backend.obtenerEstadoProteccionConexion405()?.pausada === true,
+        'El rechazo 405 no activo la pausa de proteccion.'
+    );
+
+    const linea = backend.lineas.get(ID_UNO);
+    const estadoAnterior = {
+        socket: linea.socket,
+        generacionConexion: linea.generacionConexion,
+        estado: linea.estado,
+        etiqueta: linea.etiqueta,
+        iniciando: linea.iniciando,
+        reconexionManualEnCurso: linea.reconexionManualEnCurso,
+        reconexionBloqueada: linea.reconexionBloqueada,
+        intentosReconexion: linea.intentosReconexion,
+        temporizadorReconexion: linea.temporizadorReconexion,
+        temporizadorAudiencia: linea.temporizadorAudiencia,
+        jid: linea.jid,
+        qr: linea.qr
+    };
+
+    assert.equal(backend.solicitarReconexionManual(linea, 0), false);
+    assert.deepEqual(
+        {
+            socket: linea.socket,
+            generacionConexion: linea.generacionConexion,
+            estado: linea.estado,
+            etiqueta: linea.etiqueta,
+            iniciando: linea.iniciando,
+            reconexionManualEnCurso: linea.reconexionManualEnCurso,
+            reconexionBloqueada: linea.reconexionBloqueada,
+            intentosReconexion: linea.intentosReconexion,
+            temporizadorReconexion: linea.temporizadorReconexion,
+            temporizadorAudiencia: linea.temporizadorAudiencia,
+            jid: linea.jid,
+            qr: linea.qr
+        },
+        estadoAnterior
+    );
+    assert.equal(
+        socketProtegido.cierres.length,
+        0,
+        'Reconectar cerro el socket aunque el circuito 405 estaba pausado.'
+    );
+});
+
+test('una rafaga 405 detiene la creacion de sockets para 212 lineas en cola', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-escala-pausa-405-')
+    );
+    const lineasGuardadas = Array.from({ length: 212 }, (_, indice) => {
+        const numero = indice + 1;
+        return datosLinea(
+            `40521200-0000-4000-8000-${numero
+                .toString(16)
+                .padStart(12, '0')}`,
+            `Linea escala 405 ${numero}`,
+            numero
+        );
+    });
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map(lineasGuardadas.map(linea => [linea.id, true])),
+        lineasGuardadas,
+        {
+            pausaInicialConexion405Ms: 1000,
+            pausasSistemicasConexion405Ms: [1000],
+            ventanaConexion405Ms: 2000
+        }
+    );
+    const advertirOriginal = console.warn;
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    for (const linea of lineasGuardadas) {
+        backend.encolarInicioWhatsApp(linea.id, {
+            motivo: 'prueba de escala 405'
+        });
+    }
+    await esperarHasta(
+        () => backend.sockets.length === 10,
+        'La cola no inicio sus primeros diez sockets.',
+        2000
+    );
+
+    for (const socket of backend.sockets.slice(0, 3)) {
+        emitirCierreConexion(socket, 405);
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    const proteccion = backend.obtenerEstadoProteccionConexion405();
+    assert.equal(proteccion.pausada, true);
+    assert.ok(proteccion.eventosRecientes >= 3);
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(
+        backend.sockets.length,
+        10,
+        'La cola creo sockets nuevos durante la pausa global 405.'
+    );
+    assert.equal(
+        backend.turnosInicioWhatsAppActivos.size,
+        7,
+        'La pausa modifico turnos que ya estaban iniciados.'
+    );
+    assert.ok(
+        backend.colaIniciosWhatsApp.length >= 202,
+        'La pausa descarto lineas que debian permanecer en cola.'
+    );
+});
+
+test('una pausa 405 persistida demasiado futura se acota y corrige en disco', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-pausa-405-acotada-')
+    );
+    const maximoMs = 300;
+    const rutaProteccion = path.join(
+        rutaDatos,
+        'proteccion-conexion-405.json'
+    );
+    fs.mkdirSync(rutaDatos, { recursive: true });
+    fs.writeFileSync(
+        rutaProteccion,
+        JSON.stringify({
+            version: 1,
+            bloqueadaHasta: '2099-01-01T00:00:00.000Z',
+            nivel: 99,
+            recuperacion: false,
+            motivo: 'rafaga_405'
+        }),
+        'utf8'
+    );
+
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map(),
+        [],
+        {
+            pausaInicialConexion405Ms: 120,
+            pausasSistemicasConexion405Ms: [120, 200, maximoMs]
+        }
+    );
+
+    t.after(async () => {
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    const antes = Date.now();
+    backend.cargarProteccionConexion405();
+    const estado = backend.obtenerEstadoProteccionConexion405();
+    const vencimiento = Date.parse(estado.bloqueadaHasta || '');
+    assert.ok(vencimiento >= antes);
+    assert.ok(vencimiento <= Date.now() + maximoMs + 50);
+
+    const persistida = JSON.parse(
+        fs.readFileSync(rutaProteccion, 'utf8')
+    );
+    assert.equal(persistida.bloqueadaHasta, estado.bloqueadaHasta);
+});
+
+test('un error 405 durante iniciarWhatsApp entra al circuito global', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-catch-inicio-405-')
+    );
+    const lineaGuardada = datosLinea(
+        ID_UNO,
+        'Linea con rechazo 405 durante inicio',
+        1
+    );
+    let lecturasAutenticacion = 0;
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([[ID_UNO, true]]),
+        [lineaGuardada],
+        {
+            pausaInicialConexion405Ms: 500,
+            pausasSistemicasConexion405Ms: [500],
+            ventanaConexion405Ms: 1000,
+            useMultiFileAuthState: async () => {
+                lecturasAutenticacion += 1;
+                const error = new Error(
+                    'WhatsApp rechazo la preparacion del socket'
+                );
+                error.output = { statusCode: 405 };
+                throw error;
+            }
+        }
+    );
+    const errorOriginal = console.error;
+    const advertirOriginal = console.warn;
+    console.error = () => {};
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.error = errorOriginal;
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    backend.encolarInicioWhatsApp(ID_UNO, {
+        motivo: 'prueba catch 405'
+    });
+    await esperarHasta(
+        () => backend.obtenerEstadoProteccionConexion405()?.pausada === true,
+        'El 405 lanzado durante el inicio no activo el circuito.',
+        2000
+    );
+
+    const linea = backend.lineas.get(ID_UNO);
+    const proteccion = backend.obtenerEstadoProteccionConexion405();
+    assert.equal(lecturasAutenticacion, 1);
+    assert.equal(backend.sockets.length, 0);
+    assert.equal(proteccion.eventosRecientes, 1);
+    assert.equal(proteccion.pendientes, 1);
+    assert.equal(linea.ultimoCodigoDesconexion, 405);
+    assert.equal(linea.intentosReconexion, 0);
+    assert.equal(linea.reconexionBloqueada, false);
+    assert.equal(linea.estado, 'reconectando');
+});
+
+test('una sonda 405 que cierra con 428 vuelve al backoff normal', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-sonda-405-falla-428-')
+    );
+    const lineaGuardada = datosLinea(
+        ID_UNO,
+        'Linea cuya sonda falla con 428',
+        1
+    );
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([[ID_UNO, true]]),
+        [lineaGuardada],
+        {
+            pausaInicialConexion405Ms: 80,
+            pausasSistemicasConexion405Ms: [80],
+            ventanaConexion405Ms: 500,
+            espaciadoRecuperacion405Ms: 10,
+            retrasosReconexionMs: [40, 80, 120],
+            jitterMaximoReconexionMs: 0
+        }
+    );
+    const advertirOriginal = console.warn;
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    await backend.iniciarWhatsApp(ID_UNO);
+    emitirCierreConexion(backend.sockets[0], 405);
+    await esperarHasta(
+        () => backend.sockets.length === 2,
+        'No se inicio la sonda posterior al 405.',
+        2000
+    );
+
+    const linea = backend.lineas.get(ID_UNO);
+    assert.ok(linea.sondaConexion405);
+    emitirCierreConexion(backend.sockets[1], 428);
+    await esperarHasta(
+        () =>
+            linea.sondaConexion405 === null &&
+            backend.obtenerEstadoProteccionConexion405().pendientes === 0,
+        'La sonda fallida permanecio retenida en el circuito 405.',
+        2000
+    );
+
+    assert.equal(linea.ultimoCodigoDesconexion, 428);
+    assert.equal(linea.reconexionBloqueada, false);
+    assert.equal(linea.intentosReconexion, 0);
+    assert.ok(linea.temporizadorReconexion);
+    assert.ok(Date.parse(linea.proximoIntentoReconexion) > Date.now());
+
+    await esperarHasta(
+        () => backend.sockets.length === 3,
+        'El backoff normal no ejecuto su primer reintento.',
+        2000
+    );
+    assert.equal(linea.intentosReconexion, 1);
+    assert.equal(
+        backend.obtenerEstadoProteccionConexion405().pendientes,
+        0
+    );
+});
+
+test('una linea persistida como bloqueada por 405 se rehabilita al cargar', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-migracion-bloqueo-405-')
+    );
+    const mensajeBloqueoLegacy =
+        'La línea no pudo reconectarse después de 5 intentos. ' +
+        'Usá Reconectar cuando quieras volver a intentarlo.';
+    const lineaGuardadaLegacy = {
+        ...datosLinea(ID_UNO, 'Linea bloqueada por 405', 1),
+        etiqueta: 'caida',
+        intentosReconexion: 5,
+        reconexionBloqueada: true,
+        conexionEnVerificacion: false,
+        ultimoCodigoDesconexion: 405,
+        ultimoError: mensajeBloqueoLegacy
+    };
+    const lineaBloqueadaManualmente = {
+        ...datosLinea(ID_DOS, 'Linea 405 bloqueada manualmente', 2),
+        etiqueta: 'caida',
+        intentosReconexion: 5,
+        reconexionBloqueada: true,
+        origenBloqueoReconexion: 'manual',
+        conexionEnVerificacion: false,
+        ultimoCodigoDesconexion: 405,
+        ultimoError: mensajeBloqueoLegacy
+    };
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([
+            [ID_UNO, true],
+            [ID_DOS, true]
+        ]),
+        [lineaGuardadaLegacy, lineaBloqueadaManualmente]
+    );
+
+    t.after(async () => {
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    const linea = backend.lineas.get(ID_UNO);
+    assert.equal(linea.intentosReconexion, 0);
+    assert.equal(linea.reconexionBloqueada, false);
+    assert.notEqual(linea.estado, 'requiere_intervencion');
+
+    const lineaManual = backend.lineas.get(ID_DOS);
+    assert.equal(lineaManual.intentosReconexion, 5);
+    assert.equal(lineaManual.reconexionBloqueada, true);
+    assert.equal(lineaManual.estado, 'requiere_intervencion');
+    assert.equal(lineaManual.origenBloqueoReconexion, 'manual');
+
+    const lineasPersistidas = JSON.parse(
+        fs.readFileSync(
+            path.join(rutaDatos, 'sesiones', 'lineas.json'),
+            'utf8'
+        )
+    );
+    const legacyPersistida = lineasPersistidas.find(item => item.id === ID_UNO);
+    const manualPersistida = lineasPersistidas.find(item => item.id === ID_DOS);
+    assert.equal(legacyPersistida.intentosReconexion, 0);
+    assert.equal(legacyPersistida.reconexionBloqueada, false);
+    assert.equal(manualPersistida.reconexionBloqueada, true);
+    assert.equal(manualPersistida.origenBloqueoReconexion, 'manual');
+
+    assert.equal(
+        backend.encolarInicioWhatsApp(ID_UNO, {
+            motivo: 'prueba de migracion 405'
+        }),
+        true
+    );
+    await esperarHasta(
+        () => backend.sockets.some(socket => socket.lineaId === ID_UNO),
+        'La linea rehabilitada no pudo volver a la cola de conexion.',
+        2000
+    );
+});
+
+test('un origen de bloqueo desconocido nunca se migra automaticamente', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-origen-bloqueo-desconocido-')
+    );
+    const lineaGuardada = {
+        ...datosLinea(ID_UNO, 'Linea con origen desconocido', 1),
+        etiqueta: 'caida',
+        intentosReconexion: 5,
+        reconexionBloqueada: true,
+        origenBloqueoReconexion: 'sistema_externo_no_reconocido',
+        conexionEnVerificacion: false,
+        ultimoCodigoDesconexion: 405,
+        ultimoError:
+            'La linea quedo bloqueada por una causa externa desconocida.'
+    };
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([[ID_UNO, true]]),
+        [lineaGuardada]
+    );
+
+    t.after(async () => {
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    const linea = backend.lineas.get(ID_UNO);
+    assert.equal(linea.intentosReconexion, 5);
+    assert.equal(linea.reconexionBloqueada, true);
+    assert.equal(linea.estado, 'requiere_intervencion');
+    assert.equal(linea.origenBloqueoReconexion, 'desconocido');
+    assert.equal(
+        backend.obtenerEstadoProteccionConexion405().pendientes,
+        0
+    );
+
+    const persistida = JSON.parse(
+        fs.readFileSync(
+            path.join(rutaDatos, 'sesiones', 'lineas.json'),
+            'utf8'
+        )
+    ).find(item => item.id === ID_UNO);
+    assert.equal(persistida.reconexionBloqueada, true);
+    assert.equal(persistida.intentosReconexion, 5);
+    assert.equal(persistida.origenBloqueoReconexion, 'desconocido');
+});
+
+test('el cierre 401 conserva el bloqueo y borrado de sesion actual', async t => {
+    const rutaDatos = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'autostatues-cierre-fatal-401-')
+    );
+    const lineaGuardada = datosLinea(ID_UNO, 'Linea con cierre 401', 1);
+    const carpetaSesion = path.join(rutaDatos, 'sesiones', ID_UNO);
+    fs.mkdirSync(carpetaSesion, { recursive: true });
+    fs.writeFileSync(
+        path.join(carpetaSesion, 'creds.json'),
+        '{"registered":true,"secreto":"prueba"}',
+        'utf8'
+    );
+    const backend = cargarBackendAislado(
+        rutaDatos,
+        new Map([[ID_UNO, true]]),
+        [lineaGuardada]
+    );
+    const advertirOriginal = console.warn;
+    console.warn = () => {};
+
+    t.after(async () => {
+        console.warn = advertirOriginal;
+        await cerrarBackendAislado(backend, rutaDatos);
+    });
+
+    backend.cargarLineasGuardadas();
+    await backend.iniciarWhatsApp(ID_UNO);
+    emitirCierreConexion(backend.sockets[0], 401);
+
+    await esperarHasta(
+        () => backend.lineas.get(ID_UNO).estado === 'sesion_cerrada',
+        'El cierre 401 no conservo el estado fatal existente.'
+    );
+    const linea = backend.lineas.get(ID_UNO);
+    assert.equal(linea.reconexionBloqueada, true);
+    assert.equal(linea.etiqueta, 'caida');
+    assert.equal(fs.existsSync(carpetaSesion), false);
 });
 
 test('todas las conexiones aceptan solo historial reciente y nunca solicitan FULL', async t => {

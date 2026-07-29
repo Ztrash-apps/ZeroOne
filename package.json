@@ -1,6 +1,6 @@
 {
   "name": "zeroone",
-  "version": "1.5.13",
+  "version": "1.5.14",
   "private": true,
   "description": "ZeroOne, CRM de escritorio para gestionar estados y contactos de WhatsApp",
   "main": "main.js",
