@@ -5,6 +5,7 @@ const {
     jidNormalizedUser,
     WAMessageStatus,
     DisconnectReason,
+    fetchLatestWaWebVersion,
     proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
@@ -38,6 +39,18 @@ const {
 const { crearRuntimeIALocal } = require('./local-ai-runtime');
 const { crearAlmacenMensajesRecientes } = require('./recent-message-store');
 const {
+    crearAlmacenCheckpoint,
+    crearCheckpointPublicacion,
+    crearSnapshotPublicacionActiva,
+    marcarLineaEnCurso: marcarLineaCheckpoint,
+    actualizarFaseLineaEnCurso: actualizarFaseCheckpoint,
+    registrarResultadoDefinitivo: registrarResultadoCheckpoint,
+    reconciliarRegistroInterrumpido,
+    reconciliarRegistroSinJournal,
+    obtenerIdsPendientesSeguros,
+    obtenerIdsEnvioIncierto
+} = require('./publication-checkpoint');
+const {
     MODOS_RENDIMIENTO,
     crearControladorRendimiento,
     normalizarModoRendimiento
@@ -50,17 +63,6 @@ const {
 const {
     registrarRutasConfiguracion
 } = require('./routes/configuration');
-const { crearAlmacenJsonSeguro } = require('./crash-safe-json-store');
-const {
-    VERSION_CHECKPOINT_PUBLICACION,
-    VERSION_SNAPSHOT_PUBLICACION,
-    actualizarFaseLineaEnCurso,
-    crearCheckpointPublicacion,
-    crearSnapshotPublicacionActiva,
-    marcarLineaEnCurso,
-    reconciliarHistorialInterrumpido,
-    registrarResultadoDefinitivo
-} = require('./publication-history-checkpoint');
 
 const app = express();
 app.disable('x-powered-by');
@@ -95,17 +97,17 @@ const ARCHIVO_PROTECCION_PUBLICACION = path.join(
     CARPETA_DATOS,
     'proteccion-publicacion.json'
 );
-const ARCHIVO_PROTECCION_CONEXION_405 = path.join(
-    CARPETA_DATOS,
-    'proteccion-conexion-405.json'
-);
-const ARCHIVO_MIGRACION_RECONEXION_AGOTADA = path.join(
-    CARPETA_DATOS,
-    'migracion-reconexion-agotada-v1.json'
-);
 const ARCHIVO_IDEMPOTENCIA_PUBLICACION = path.join(
     CARPETA_DATOS,
     'idempotencia-publicacion.json'
+);
+const ARCHIVO_MIGRACION_RECONEXION_AGOTADA_V2 = path.join(
+    CARPETA_DATOS,
+    'migracion-reconexion-agotada-v2.json'
+);
+const ARCHIVO_CHECKPOINT_PUBLICACION = path.join(
+    CARPETA_HISTORIAL,
+    'publicacion-activa.json'
 );
 const ARCHIVO_AGENDAMIENTO = path.join(
     CARPETA_DATOS,
@@ -254,6 +256,10 @@ fs.mkdirSync(CARPETA_IMAGENES_PROGRAMADAS, { recursive: true });
 fs.mkdirSync(CARPETA_HISTORIAL, { recursive: true });
 fs.mkdirSync(CARPETA_IMAGENES_HISTORIAL, { recursive: true });
 
+const almacenCheckpointPublicacion = crearAlmacenCheckpoint(
+    ARCHIVO_CHECKPOINT_PUBLICACION
+);
+
 const upload = multer({
     dest: CARPETA_UPLOADS,
     limits: {
@@ -267,12 +273,8 @@ const programaciones = new Map();
 const trabajosProgramados = new Map();
 const colaIniciosWhatsApp = [];
 const turnosInicioWhatsAppActivos = new Map();
-const preparacionesEstadoAutenticacion = new Map();
-const lineasPendientesConexion405 = new Set();
 let secuenciaInicioWhatsApp = 0;
 let procesamientoColaIniciosProgramado = false;
-let temporizadorProteccionConexion405 = null;
-let vencimientoTemporizadorProteccionConexion405 = 0;
 const colaSincronizacionesAudiencia = [];
 let sincronizacionesAudienciaActivas = 0;
 let preparacionesEntregaActivas = 0;
@@ -461,70 +463,6 @@ const archivoLineas = path.join(CARPETA_SESIONES, 'lineas.json');
 const archivoProgramaciones = path.join(CARPETA_PROGRAMADOS, 'programaciones.json');
 const archivoHistorial = path.join(CARPETA_HISTORIAL, 'publicaciones.json');
 const archivoEstadosActivos = path.join(CARPETA_HISTORIAL, 'estados-activos.json');
-
-function validarListaEstadosActivosPersistidos(valor) {
-    if (!Array.isArray(valor)) return false;
-
-    return valor.every(grupo =>
-        grupo &&
-        typeof grupo === 'object' &&
-        String(grupo.id || '').trim() &&
-        Number.isFinite(new Date(grupo.fechaInicio).getTime()) &&
-        Array.isArray(grupo.lineas) &&
-        grupo.lineas.length > 0 &&
-        grupo.lineas.every(linea =>
-            linea &&
-            typeof linea === 'object' &&
-            String(linea.lineaId || '').trim() &&
-            linea.clave?.remoteJid === 'status@broadcast' &&
-            linea.clave?.fromMe === true &&
-            String(linea.clave?.id || '').trim()
-        )
-    );
-}
-
-function validarListaHistorialPersistido(valor) {
-    return Array.isArray(valor) && valor.every(registro =>
-        registro &&
-        typeof registro === 'object' &&
-        String(registro.id || '').trim() &&
-        Number.isFinite(new Date(registro.fechaInicio).getTime()) &&
-        (
-            registro.lineasCorrectas === undefined ||
-            Array.isArray(registro.lineasCorrectas)
-        ) &&
-        (
-            registro.lineasFallidas === undefined ||
-            Array.isArray(registro.lineasFallidas)
-        )
-    );
-}
-
-const archivoPublicacionActiva = path.join(
-    CARPETA_HISTORIAL,
-    'publicacion-activa.json'
-);
-const almacenEstadosActivos = crearAlmacenJsonSeguro({
-    ruta: archivoEstadosActivos,
-    validar: validarListaEstadosActivosPersistidos
-});
-const almacenHistorialPublicaciones = crearAlmacenJsonSeguro({
-    ruta: archivoHistorial,
-    validar: validarListaHistorialPersistido
-});
-const almacenPublicacionActiva = crearAlmacenJsonSeguro({
-    ruta: archivoPublicacionActiva,
-    validar: valor => valor === null || Boolean(
-        valor &&
-        typeof valor === 'object' &&
-        valor.version === VERSION_SNAPSHOT_PUBLICACION &&
-        String(valor.publicacionId || '').trim() &&
-        valor.checkpointPublicacion?.version ===
-            VERSION_CHECKPOINT_PUBLICACION &&
-        Array.isArray(valor.lineasCorrectas) &&
-        Array.isArray(valor.lineasFallidas)
-    )
-});
 const NOMBRE_ARCHIVO_AUDIENCIA_ESTADOS = 'audiencia-estados.json';
 const NOMBRE_ARCHIVO_ACTIVIDAD_CONTACTOS = 'actividad-contactos.json';
 
@@ -613,11 +551,15 @@ let generacionSimulacroPublicacion = 0;
 const trabajosPendientesPublicacion = new Set();
 let progresoPublicacion = crearProgresoVacio();
 const estadosActivos = new Map();
-let estadosActivosRequierenReconstruccion = false;
-let estadosActivosSinCopiaValida = false;
 let progresoEliminacionEstados = crearProgresoEliminacionEstadosVacio();
 
 const ETIQUETAS_LINEA = new Set(['activa', 'indefinida', 'caida', 'reposo']);
+const ORIGENES_BLOQUEO_RECONEXION = new Set([
+    'agotamiento',
+    'fatal',
+    'manual',
+    'desconocido'
+]);
 const DIAS_SEMANA_VALIDOS = new Set([0, 1, 2, 3, 4, 5, 6]);
 const MAXIMO_HISTORIAL = 500;
 const DURACION_ESTADO_MS = 24 * 60 * 60 * 1000;
@@ -660,6 +602,7 @@ const TIEMPO_MAXIMO_COLECCION_AUDIENCIA_MS = Math.min(
 const TIEMPO_MAXIMO_GOOGLE_AUDIENCIA_MS =
     TIEMPO_MAXIMO_COLECCION_AUDIENCIA_MS;
 const MAXIMOS_INTENTOS_RECONEXION = 5;
+const VERSION_MIGRACION_RECONEXION_AGOTADA = 2;
 const MAXIMOS_REINICIOS_REQUERIDOS = 3;
 const MAXIMOS_REINTENTOS_PREPARACION_CONEXION = 2;
 const TAMANO_LOTE_PREPARACION_ENTREGA = 50;
@@ -696,31 +639,22 @@ const DEMORA_REINTENTO_PREPARACION_TRANSITORIA_MS =
 const MAXIMOS_INICIOS_WHATSAPP_SIMULTANEOS = 10;
 const JITTER_MAXIMO_RECONEXION_MS = 2500;
 const RETRASOS_RECONEXION_MS = [3000, 8000, 15000, 30000, 60000];
-const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
-const TIEMPO_MAXIMO_PREPARACION_CONEXION_MS = 45000;
+// Un 405 no invalida las credenciales, pero reintentar muchas sesiones a la
+// vez puede convertir un rechazo transitorio en una ráfaga. La espera se
+// aplica únicamente a la línea afectada: nunca detiene la cola ni las demás
+// sesiones conectadas.
 const CODIGO_RECHAZO_CONEXION_405 = 405;
-const UMBRAL_RAFAGA_CONEXION_405 = 3;
-const VENTANA_CONEXION_405_MS = 30 * 1000;
-const PAUSA_INICIAL_CONEXION_405_MS = 30 * 1000;
-const PAUSAS_SISTEMICAS_CONEXION_405_MS = [
-    5 * 60 * 1000,
-    15 * 60 * 1000,
-    30 * 60 * 1000
-];
-const PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS = Math.max(
-    PAUSA_INICIAL_CONEXION_405_MS,
-    ...PAUSAS_SISTEMICAS_CONEXION_405_MS
-);
-const ESPACIADO_RECUPERACION_405_MS = 10 * 1000;
-const EXITOS_PARA_CERRAR_CIRCUITO_405 = 3;
-const RETRASOS_LINEA_CONEXION_405_MS = [
-    30 * 1000,
+const JITTER_MAXIMO_RECONEXION_405_MS = 15000;
+const RETRASOS_RECONEXION_405_MS = [
+    30000,
     2 * 60 * 1000,
     5 * 60 * 1000,
     15 * 60 * 1000,
     30 * 60 * 1000
 ];
-const VERSION_MIGRACION_RECONEXION_AGOTADA = 1;
+const TIEMPO_MAXIMO_VERSION_VINCULACION_MS = 7000;
+const VIGENCIA_VERSION_VINCULACION_MS = 15 * 60 * 1000;
+const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
 const TIEMPO_MAXIMO_RECUPERACION_PUBLICACION_MS =
     RETRASOS_RECONEXION_MS.reduce((total, retraso) => total + retraso, 0) +
@@ -852,7 +786,6 @@ const controladorRendimiento = crearControladorRendimiento({
 });
 
 let proteccionMiddlewarePublicacion = crearProteccionMiddlewareVacia();
-let proteccionConexion405 = crearProteccionConexion405Vacia();
 const solicitudesIdempotentes = new Map();
 
 let controlSeguridadPublicacion = crearControlSeguridadPublicacion();
@@ -860,6 +793,10 @@ const colaSincronizacionHistorialAgendamiento = [];
 let sincronizacionHistorialAgendamientoActiva = null;
 let secuenciaSincronizacionHistorialAgendamiento = 0;
 let temporizadorGuardadoHistorialAgendamiento = null;
+let versionVinculacionWhatsApp = null;
+let versionVinculacionWhatsAppObtenidaEn = 0;
+let promesaVersionVinculacionWhatsApp = null;
+let ultimaAdvertenciaVersionVinculacionEn = 0;
 
 function crearProgresoVacio() {
     return {
@@ -917,6 +854,96 @@ function crearProgresoEliminacionEstadosVacio() {
 
 function esperar(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizarVersionVinculacionWhatsApp(valor) {
+    if (!Array.isArray(valor) || valor.length !== 3) return null;
+
+    const version = valor.map(Number);
+    if (!version.every(numero =>
+        Number.isSafeInteger(numero) && numero > 0
+    )) {
+        return null;
+    }
+
+    return version;
+}
+
+function informarFalloVersionVinculacion(error) {
+    const ahora = Date.now();
+    if (
+        ultimaAdvertenciaVersionVinculacionEn &&
+        ahora - ultimaAdvertenciaVersionVinculacionEn <
+            VIGENCIA_VERSION_VINCULACION_MS
+    ) {
+        return;
+    }
+
+    ultimaAdvertenciaVersionVinculacionEn = ahora;
+    const detalle = error?.message
+        ? ` (${String(error.message).slice(0, 180)})`
+        : '';
+    console.warn(
+        '[Vinculación] No se pudo verificar la versión actual de WhatsApp' +
+        `${detalle}. Se usará la versión incluida por Baileys.`
+    );
+}
+
+async function obtenerVersionVinculacionWhatsApp({ forzar = false } = {}) {
+    const ahora = Date.now();
+    if (
+        !forzar &&
+        versionVinculacionWhatsApp &&
+        ahora - versionVinculacionWhatsAppObtenidaEn <
+            VIGENCIA_VERSION_VINCULACION_MS
+    ) {
+        return versionVinculacionWhatsApp;
+    }
+
+    if (promesaVersionVinculacionWhatsApp) {
+        return promesaVersionVinculacionWhatsApp;
+    }
+
+    promesaVersionVinculacionWhatsApp = (async () => {
+        const controlador = typeof AbortController === 'function'
+            ? new AbortController()
+            : null;
+        const temporizador = controlador
+            ? setTimeout(
+                () => controlador.abort(),
+                TIEMPO_MAXIMO_VERSION_VINCULACION_MS
+            )
+            : null;
+
+        try {
+            const resultado = await fetchLatestWaWebVersion(
+                controlador ? { signal: controlador.signal } : {}
+            );
+            const version = resultado?.isLatest === true
+                ? normalizarVersionVinculacionWhatsApp(resultado.version)
+                : null;
+
+            if (!version) {
+                informarFalloVersionVinculacion(resultado?.error);
+                return null;
+            }
+
+            versionVinculacionWhatsApp = version;
+            versionVinculacionWhatsAppObtenidaEn = Date.now();
+            return version;
+        } catch (error) {
+            informarFalloVersionVinculacion(error);
+            return null;
+        } finally {
+            if (temporizador) clearTimeout(temporizador);
+        }
+    })();
+
+    try {
+        return await promesaVersionVinculacionWhatsApp;
+    } finally {
+        promesaVersionVinculacionWhatsApp = null;
+    }
 }
 
 function normalizarProgresoHistorialAgendamiento(valor, respaldo = null) {
@@ -1505,29 +1532,6 @@ function procesarSiguienteSincronizacionHistorialAgendamiento() {
     }
 
     if (solicitud.reiniciarConexion) {
-        const estadoProteccion405 =
-            obtenerEstadoProteccionConexion405();
-        if (
-            estadoProteccion405.pausada ||
-            (
-                estadoProteccion405.recuperacion &&
-                proteccionConexion405.estadoLineas.has(linea.id)
-            )
-        ) {
-            cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
-                estado: 'pausada',
-                progreso: 0,
-                motivo:
-                    estadoProteccion405.pausada
-                        ? 'WhatsApp está rechazando conexiones temporalmente. ' +
-                            'ZeroOne conservará la sesión y retomará la preparación ' +
-                            'cuando termine la recuperación protegida.'
-                        : 'Esta línea todavía está dentro de la recuperación protegida. ' +
-                            'ZeroOne la probará automáticamente y las demás líneas ' +
-                            'podrán continuar.'
-            });
-            return;
-        }
         if (!solicitarReconexionManual(linea, 500)) {
             cerrarTurnoSincronizacionHistorialAgendamiento(linea, {
                 estado: 'pausada',
@@ -1591,83 +1595,10 @@ function guardarJSONAtomico(ruta, datos, espacios = 2) {
 
     try {
         fs.renameSync(temporal, ruta);
-        return;
-    } catch (error) {
-        if (
-            !fs.existsSync(ruta) ||
-            !['EEXIST', 'EPERM', 'EACCES'].includes(error?.code)
-        ) {
-            throw error;
-        }
-    }
-
-    const anterior = `${ruta}.previous-${process.pid}-${Date.now()}`;
-    fs.renameSync(ruta, anterior);
-    try {
-        fs.renameSync(temporal, ruta);
-        eliminarArchivoSeguro(anterior);
-    } catch (error) {
-        if (!fs.existsSync(ruta) && fs.existsSync(anterior)) {
-            try {
-                fs.renameSync(anterior, ruta);
-            } catch {
-                // Se conserva la copia anterior para recuperación manual.
-            }
-        }
-        throw error;
-    }
-}
-
-function migracionReconexionAgotadaYaAplicada() {
-    if (!fs.existsSync(ARCHIVO_MIGRACION_RECONEXION_AGOTADA)) {
-        return false;
-    }
-
-    try {
-        const marca = JSON.parse(
-            fs.readFileSync(
-                ARCHIVO_MIGRACION_RECONEXION_AGOTADA,
-                'utf8'
-            )
-        );
-        if (
-            marca?.completada === true &&
-            Number(marca.version) >=
-                VERSION_MIGRACION_RECONEXION_AGOTADA
-        ) {
-            return true;
-        }
     } catch {
-        // La presencia de una marca dañada se trata de forma conservadora.
+        fs.copyFileSync(temporal, ruta);
+        eliminarArchivoSeguro(temporal);
     }
-
-    console.warn(
-        '[Conexión] La marca de rehabilitación única no es válida. ' +
-        'No se desbloquearán líneas automáticamente para evitar repetirla.'
-    );
-    return true;
-}
-
-function guardarMarcaMigracionReconexionAgotada({
-    lineasEvaluadas = 0,
-    lineasRehabilitadas = 0
-} = {}) {
-    guardarJSONAtomico(
-        ARCHIVO_MIGRACION_RECONEXION_AGOTADA,
-        {
-            version: VERSION_MIGRACION_RECONEXION_AGOTADA,
-            completada: true,
-            completadaEn: new Date().toISOString(),
-            lineasEvaluadas: Math.max(
-                0,
-                Number(lineasEvaluadas) || 0
-            ),
-            lineasRehabilitadas: Math.max(
-                0,
-                Number(lineasRehabilitadas) || 0
-            )
-        }
-    );
 }
 
 function notificarEscritorio(titulo, cuerpo) {
@@ -1803,173 +1734,6 @@ function cargarConfiguracion() {
 
 function guardarConfiguracion() {
     guardarJSONAtomico(ARCHIVO_CONFIGURACION, configuracion);
-}
-
-function crearProteccionConexion405Vacia() {
-    return {
-        version: 1,
-        bloqueadaHasta: null,
-        nivel: 0,
-        recuperacion: false,
-        recuperacionConfirmada: false,
-        motivo: null,
-        eventosRecientes: new Map(),
-        estadoLineas: new Map(),
-        exitosRecuperacion: 0,
-        proximoInicioPermitidoEn: 0,
-        epoch: 0
-    };
-}
-
-function serializarProteccionConexion405() {
-    return {
-        version: 1,
-        bloqueadaHasta: proteccionConexion405.bloqueadaHasta,
-        nivel: Math.max(0, Number(proteccionConexion405.nivel) || 0),
-        recuperacion: proteccionConexion405.recuperacion === true,
-        motivo: proteccionConexion405.motivo || null,
-        estadoLineas: [...proteccionConexion405.estadoLineas.entries()]
-            .filter(([lineaId]) => esIdLineaValido(lineaId))
-            .slice(0, 1000)
-            .map(([lineaId, estado]) => [
-                lineaId,
-                {
-                    ultimoRechazo: Math.max(
-                        0,
-                        Number(estado?.ultimoRechazo) || 0
-                    ),
-                    diferidaHasta: Math.max(
-                        0,
-                        Number(estado?.diferidaHasta) || 0
-                    ),
-                    fallosConsecutivos: Math.max(
-                        0,
-                        Math.min(
-                            RETRASOS_LINEA_CONEXION_405_MS.length,
-                            Number(estado?.fallosConsecutivos) || 0
-                        )
-                    )
-                }
-            ])
-    };
-}
-
-function guardarProteccionConexion405() {
-    try {
-        guardarJSONAtomico(
-            ARCHIVO_PROTECCION_CONEXION_405,
-            serializarProteccionConexion405()
-        );
-    } catch (error) {
-        console.error(
-            '[Conexión] No se pudo guardar la protección 405:',
-            error.message
-        );
-    }
-}
-
-function cargarProteccionConexion405() {
-    proteccionConexion405 = crearProteccionConexion405Vacia();
-    if (!fs.existsSync(ARCHIVO_PROTECCION_CONEXION_405)) return;
-
-    try {
-        const datos = JSON.parse(
-            fs.readFileSync(ARCHIVO_PROTECCION_CONEXION_405, 'utf8')
-        );
-        const ahora = Date.now();
-        const bloqueadaHastaOriginalMs = Date.parse(
-            datos?.bloqueadaHasta || ''
-        );
-        const bloqueadaHastaMs = Number.isFinite(bloqueadaHastaOriginalMs)
-            ? Math.min(
-                bloqueadaHastaOriginalMs,
-                ahora + PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS
-            )
-            : NaN;
-        const pausaFueAcotada =
-            Number.isFinite(bloqueadaHastaOriginalMs) &&
-            bloqueadaHastaOriginalMs > bloqueadaHastaMs;
-        const pausaVigente =
-            Number.isFinite(bloqueadaHastaMs) &&
-            bloqueadaHastaMs > ahora;
-        const habiaProteccion =
-            datos?.recuperacion === true ||
-            Number.isFinite(bloqueadaHastaOriginalMs);
-        const estadoLineas = new Map();
-        for (
-            const entrada of Array.isArray(datos?.estadoLineas)
-                ? datos.estadoLineas.slice(0, 1000)
-                : []
-        ) {
-            if (
-                !Array.isArray(entrada) ||
-                !esIdLineaValido(entrada[0]) ||
-                !entrada[1] ||
-                typeof entrada[1] !== 'object'
-            ) {
-                continue;
-            }
-            estadoLineas.set(entrada[0], {
-                ultimoRechazo: Math.max(
-                    0,
-                    Math.min(
-                        ahora,
-                        Number(entrada[1].ultimoRechazo) || 0
-                    )
-                ),
-                diferidaHasta: Math.max(
-                    0,
-                    Math.min(
-                        ahora + PAUSA_MAXIMA_PERSISTIDA_CONEXION_405_MS,
-                        Number(entrada[1].diferidaHasta) || 0
-                    )
-                ),
-                fallosConsecutivos: Math.max(
-                    0,
-                    Math.min(
-                        RETRASOS_LINEA_CONEXION_405_MS.length,
-                        Number(entrada[1].fallosConsecutivos) || 0
-                    )
-                )
-            });
-        }
-
-        proteccionConexion405 = {
-            ...crearProteccionConexion405Vacia(),
-            bloqueadaHasta: pausaVigente
-                ? new Date(bloqueadaHastaMs).toISOString()
-                : null,
-            nivel: Math.max(
-                0,
-                Math.min(
-                    PAUSAS_SISTEMICAS_CONEXION_405_MS.length,
-                    Number(datos?.nivel) || 0
-                )
-            ),
-            recuperacion: !pausaVigente && habiaProteccion,
-            recuperacionConfirmada: false,
-            estadoLineas: habiaProteccion
-                ? estadoLineas
-                : new Map(),
-            motivo: pausaVigente
-                ? String(datos?.motivo || 'rechazo_405')
-                : (habiaProteccion ? 'recuperacion' : null)
-        };
-        if (pausaFueAcotada) {
-            guardarProteccionConexion405();
-        }
-    } catch (error) {
-        proteccionConexion405 = {
-            ...crearProteccionConexion405Vacia(),
-            recuperacion: true,
-            motivo: 'archivo_proteccion_invalido',
-            epoch: 1
-        };
-        console.error(
-            '[Conexión] No se pudo recuperar la protección 405:',
-            error.message
-        );
-    }
 }
 
 function crearProteccionMiddlewareVacia() {
@@ -2316,27 +2080,15 @@ function middlewareIdempotencia(ambito) {
         const registradaEn = Date.now();
         solicitudesIdempotentes.set(claveCompleta, registradaEn);
         guardarClavesIdempotencia();
-        let liberada = false;
-        const liberarSiFueRechazada = () => {
-            if (liberada || res.statusCode < 400) return;
-            liberada = true;
+        res.once('finish', () => {
             if (
+                res.statusCode >= 400 &&
                 solicitudesIdempotentes.get(claveCompleta) === registradaEn
             ) {
                 solicitudesIdempotentes.delete(claveCompleta);
                 guardarClavesIdempotencia();
             }
-        };
-        const finalizarRespuesta = res.end;
-        res.end = function finalizarConIdempotencia(...argumentos) {
-            // La clave rechazada se libera antes de entregar la respuesta al
-            // cliente. Así también sobrevive correctamente a un cierre
-            // inmediato de la aplicación.
-            liberarSiFueRechazada();
-            return finalizarRespuesta.apply(this, argumentos);
-        };
-        res.once('finish', liberarSiFueRechazada);
-        res.once('close', liberarSiFueRechazada);
+        });
         res.set('Idempotency-Key', claveRecibida);
         next();
     };
@@ -2467,6 +2219,171 @@ function resolverCarpetaSesionSegura(lineaId) {
     }
 
     return carpetaSesion;
+}
+
+function normalizarOrigenBloqueoReconexion(valor) {
+    const origen = String(valor || '').trim().toLowerCase();
+    return ORIGENES_BLOQUEO_RECONEXION.has(origen)
+        ? origen
+        : 'desconocido';
+}
+
+function leerEstadoMigracionReconexionAgotadaV2() {
+    if (!fs.existsSync(ARCHIVO_MIGRACION_RECONEXION_AGOTADA_V2)) {
+        return { completada: false, valida: true };
+    }
+
+    try {
+        const datos = JSON.parse(
+            fs.readFileSync(
+                ARCHIVO_MIGRACION_RECONEXION_AGOTADA_V2,
+                'utf8'
+            )
+        );
+        const esquemaValido =
+            datos &&
+            typeof datos === 'object' &&
+            !Array.isArray(datos) &&
+            datos.completada === true &&
+            Number.isInteger(datos.version) &&
+            datos.version >= VERSION_MIGRACION_RECONEXION_AGOTADA;
+        if (!esquemaValido) {
+            throw new Error('La marca no cumple el esquema de recuperación V2.');
+        }
+        return { completada: true, valida: true };
+    } catch (error) {
+        console.warn(
+            '[Conexión] La marca de recuperación de reinicios no es válida. ' +
+            'Las líneas bloqueadas se conservarán para no rehabilitarlas por error.'
+        );
+        return { completada: false, valida: false };
+    }
+}
+
+function sesionRegistradaParaRehabilitacion(lineaId) {
+    const carpetaSesion = resolverCarpetaSesionSegura(lineaId);
+    if (!carpetaSesion) return false;
+
+    try {
+        const credenciales = JSON.parse(
+            fs.readFileSync(path.join(carpetaSesion, 'creds.json'), 'utf8')
+        );
+        return credenciales?.registered === true;
+    } catch {
+        return false;
+    }
+}
+
+function tieneFirmaAgotamientoReconexion(datosLinea) {
+    const intentos = Math.max(0, Number(datosLinea?.intentosReconexion) || 0);
+    const firma = new RegExp(
+        `^La l[ií]nea no pudo reconectarse despu[eé]s de ${MAXIMOS_INTENTOS_RECONEXION} intentos\\. ` +
+        'Us[aá] Reconectar cuando quieras volver a intentarlo\\.?$',
+        'iu'
+    );
+    return intentos === MAXIMOS_INTENTOS_RECONEXION &&
+        firma.test(String(datosLinea?.ultimoError || '').trim());
+}
+
+function tieneFirmaLegacyRehabilitable(datosLinea, lineaId) {
+    if (!datosLinea || typeof datosLinea !== 'object') return false;
+    if (datosLinea.reconexionBloqueada !== true) return false;
+    if (datosLinea.conexionEnVerificacion === true) return false;
+    if (datosLinea.requiereRevisionEnvio === true) return false;
+    if (normalizarEtiqueta(datosLinea.etiqueta) !== 'caida') return false;
+    if (Number(datosLinea.versionMigracionReconexionAgotada) >= 1) {
+        return false;
+    }
+
+    const origen = normalizarOrigenBloqueoReconexion(
+        datosLinea.origenBloqueoReconexion
+    );
+    // Una marca explícita de agotamiento ya pertenece a una versión nueva.
+    // Solo se rescata la ausencia de origen de las versiones anteriores.
+    if (origen !== 'desconocido') return false;
+
+    const codigo = Number(datosLinea.ultimoCodigoDesconexion);
+    if (!Number.isFinite(codigo) || CODIGOS_DESCONEXION_FATAL.has(codigo)) {
+        return false;
+    }
+
+    return tieneFirmaAgotamientoReconexion(datosLinea);
+}
+
+function esCandidataRehabilitacionReconexionV2(datosLinea, lineaId) {
+    return tieneFirmaLegacyRehabilitable(datosLinea, lineaId) &&
+        sesionRegistradaParaRehabilitacion(lineaId);
+}
+
+function prepararRehabilitacionReconexionV2(datosLineas) {
+    const estadoMigracion = leerEstadoMigracionReconexionAgotadaV2();
+    const preparacion = {
+        aplicar: estadoMigracion.valida && !estadoMigracion.completada,
+        candidatas: [],
+        pendientesVerificacion: [],
+        estadoMigracion
+    };
+    if (!preparacion.aplicar || !Array.isArray(datosLineas)) {
+        return preparacion;
+    }
+
+    for (const datosLinea of datosLineas) {
+        const lineaId = String(datosLinea?.id || '').trim();
+        if (!esIdLineaValido(lineaId)) continue;
+        if (!tieneFirmaLegacyRehabilitable(datosLinea, lineaId)) continue;
+        if (!esCandidataRehabilitacionReconexionV2(datosLinea, lineaId)) {
+            preparacion.pendientesVerificacion.push(lineaId);
+            continue;
+        }
+
+        preparacion.candidatas.push({
+            id: lineaId,
+            estadoAnterior: {
+                intentosReconexion: datosLinea.intentosReconexion,
+                reconexionBloqueada: datosLinea.reconexionBloqueada,
+                origenBloqueoReconexion: datosLinea.origenBloqueoReconexion,
+                versionMigracionReconexionAgotada:
+                    datosLinea.versionMigracionReconexionAgotada,
+                proximoIntentoReconexion: datosLinea.proximoIntentoReconexion
+            }
+        });
+        datosLinea.intentosReconexion = 0;
+        datosLinea.reconexionBloqueada = false;
+        datosLinea.origenBloqueoReconexion = null;
+        datosLinea.versionMigracionReconexionAgotada =
+            VERSION_MIGRACION_RECONEXION_AGOTADA;
+        datosLinea.proximoIntentoReconexion = null;
+    }
+
+    return preparacion;
+}
+
+function guardarMarcaMigracionReconexionAgotadaV2(cantidadRehabilitada) {
+    guardarJSONAtomico(
+        ARCHIVO_MIGRACION_RECONEXION_AGOTADA_V2,
+        {
+            version: VERSION_MIGRACION_RECONEXION_AGOTADA,
+            completada: true,
+            completadaEn: new Date().toISOString(),
+            lineasRehabilitadas: Math.max(
+                0,
+                Number(cantidadRehabilitada) || 0
+            )
+        }
+    );
+}
+
+function revertirRehabilitacionReconexionV2(preparacion) {
+    for (const candidata of preparacion?.candidatas || []) {
+        const linea = lineas.get(candidata.id);
+        if (!linea) continue;
+
+        Object.assign(linea, candidata.estadoAnterior, {
+            estado: 'requiere_intervencion',
+            etiqueta: 'caida',
+            proximoIntentoReconexion: null
+        });
+    }
 }
 
 function esperarDecisionSeguridad(decisionPendiente = null) {
@@ -4275,8 +4192,6 @@ function inicializarActividadContactos(linea, cargada = false) {
     linea.mapeosActividadContactos = new Map();
     linea.actividadContactosCargada = cargada;
     linea.actividadContactosSucia = false;
-    linea.actividadContactosSoloLectura = false;
-    linea.errorActividadContactosInformado = false;
     linea.temporizadorActividadContactos = null;
     linea.promesaActividadContactos = Promise.resolve();
     linea.tareasActividadPendientes = 0;
@@ -4307,246 +4222,16 @@ function podarActividadContactos(linea) {
     return registros;
 }
 
-function leerCandidataActividadContactos(ruta, fuente) {
-    if (!fs.existsSync(ruta)) {
-        return {
-            ruta,
-            fuente,
-            existe: false,
-            valida: false,
-            datos: null,
-            error: null
-        };
-    }
-
-    try {
-        const contenido = fs.readFileSync(ruta, 'utf8');
-        if (contenido.includes('\0')) {
-            throw new SyntaxError(
-                'El archivo contiene bytes NUL y no es JSON válido.'
-            );
-        }
-        const datos = JSON.parse(
-            contenido.charCodeAt(0) === 0xfeff
-                ? contenido.slice(1)
-                : contenido
-        );
-        if (!Array.isArray(datos)) {
-            throw new TypeError('El archivo no contiene una lista válida.');
-        }
-        return {
-            ruta,
-            fuente,
-            existe: true,
-            valida: true,
-            datos,
-            error: null
-        };
-    } catch (error) {
-        return {
-            ruta,
-            fuente,
-            existe: true,
-            valida: false,
-            datos: null,
-            error
-        };
-    }
-}
-
-function crearRutaEvidenciaActividadContactos(ruta) {
-    const base =
-        `${ruta}.corrupto-` +
-        new Date().toISOString().replace(/[:.]/g, '-');
-    let destino = base;
-    let indice = 1;
-    while (fs.existsSync(destino)) {
-        destino = `${base}-${indice}`;
-        indice += 1;
-    }
-    return destino;
-}
-
-function preservarCandidataActividadContactos(candidata) {
-    if (!candidata?.existe || candidata.valida) {
-        return {
-            preservada: true,
-            liberada: !candidata?.existe,
-            ruta: null
-        };
-    }
-
-    const destino = crearRutaEvidenciaActividadContactos(candidata.ruta);
-    try {
-        fs.renameSync(candidata.ruta, destino);
-        return {
-            preservada: true,
-            liberada: true,
-            ruta: destino
-        };
-    } catch {
-        try {
-            fs.copyFileSync(candidata.ruta, destino);
-            return {
-                preservada: true,
-                liberada: false,
-                ruta: destino
-            };
-        } catch {
-            return {
-                preservada: false,
-                liberada: false,
-                ruta: null
-            };
-        }
-    }
-}
-
-function obtenerCandidatasRespaldoActividadContactos(ruta) {
-    const candidatas = [
-        leerCandidataActividadContactos(`${ruta}.tmp`, 'temporal'),
-        leerCandidataActividadContactos(`${ruta}.bak`, 'respaldo')
-    ];
-
-    try {
-        const carpeta = path.dirname(ruta);
-        const prefijo = `${path.basename(ruta)}.previous-`;
-        const anteriores = fs.readdirSync(carpeta)
-            .filter(nombre => nombre.startsWith(prefijo))
-            .sort((a, b) => {
-                const tiempoA = Number(a.split('-').at(-1)) || 0;
-                const tiempoB = Number(b.split('-').at(-1)) || 0;
-                return tiempoB - tiempoA;
-            })
-            .slice(0, 5);
-        for (const nombre of anteriores) {
-            candidatas.push(leerCandidataActividadContactos(
-                path.join(carpeta, nombre),
-                'anterior'
-            ));
-        }
-    } catch {
-        // Los respaldos con nombre conocido siguen siendo suficientes.
-    }
-
-    return candidatas;
-}
-
-function instalarActividadContactosRecuperada(ruta, datos) {
-    const temporalRecuperacion =
-        `${ruta}.recovery-${process.pid}-${Date.now()}.tmp`;
-    let descriptor = null;
-    try {
-        descriptor = fs.openSync(temporalRecuperacion, 'w', 0o600);
-        fs.writeFileSync(descriptor, JSON.stringify(datos), 'utf8');
-        fs.fsyncSync(descriptor);
-        fs.closeSync(descriptor);
-        descriptor = null;
-
-        if (fs.existsSync(ruta)) fs.rmSync(ruta, { force: true });
-        fs.renameSync(temporalRecuperacion, ruta);
-
-        const comprobacion = leerCandidataActividadContactos(
-            ruta,
-            'principal'
-        );
-        if (!comprobacion.valida) {
-            throw new Error(
-                'La copia recuperada no superó la validación final.'
-            );
-        }
-
-        try {
-            const descriptorCarpeta = fs.openSync(path.dirname(ruta), 'r');
-            try {
-                fs.fsyncSync(descriptorCarpeta);
-            } finally {
-                fs.closeSync(descriptorCarpeta);
-            }
-        } catch {
-            // Windows no siempre permite fsync sobre directorios.
-        }
-        return true;
-    } catch (error) {
-        if (descriptor !== null) {
-            try {
-                fs.closeSync(descriptor);
-            } catch {
-                // El error original conserva la causa relevante.
-            }
-        }
-        try {
-            fs.rmSync(temporalRecuperacion, { force: true });
-        } catch {
-            // Se conserva cualquier principal que sí haya sido instalado.
-        }
-        throw error;
-    }
-}
-
 function cargarActividadContactos(linea) {
     inicializarActividadContactos(linea, true);
 
+    const ruta = rutaActividadContactos(linea.id);
+    if (!fs.existsSync(ruta)) return;
+
     try {
-        const ruta = rutaActividadContactos(linea.id);
-        const principal = leerCandidataActividadContactos(
-            ruta,
-            'principal'
-        );
-        let datos = principal.valida ? principal.datos : null;
-
-        if (!principal.valida) {
-            const respaldos =
-                obtenerCandidatasRespaldoActividadContactos(ruta);
-            const recuperable = respaldos.find(candidata => candidata.valida);
-            const principalPreservado =
-                preservarCandidataActividadContactos(principal);
-            const temporalInvalido = respaldos.find(candidata =>
-                candidata.fuente === 'temporal' &&
-                candidata.existe &&
-                !candidata.valida
-            );
-            const temporalPreservado =
-                preservarCandidataActividadContactos(temporalInvalido);
-
-            linea.actividadContactosSoloLectura =
-                !principalPreservado.preservada ||
-                !principalPreservado.liberada ||
-                !temporalPreservado.preservada ||
-                !temporalPreservado.liberada;
-
-            if (recuperable) {
-                datos = recuperable.datos;
-                if (!linea.actividadContactosSoloLectura) {
-                    try {
-                        instalarActividadContactosRecuperada(ruta, datos);
-                    } catch (errorInstalacion) {
-                        linea.actividadContactosSoloLectura = true;
-                        console.warn(
-                            `[Actividad] ${linea.nombre}: se usará la copia ` +
-                            `${recuperable.fuente} solo en memoria porque no ` +
-                            `pudo instalarse de forma segura: ` +
-                            `${errorInstalacion.message}`
-                        );
-                    }
-                }
-                console.warn(
-                    `[Actividad] ${linea.nombre}: se recuperó el índice ` +
-                    `de contactos desde ${recuperable.fuente}.`
-                );
-            } else if (principal.existe || respaldos.some(item => item.existe)) {
-                console.warn(
-                    `[Actividad] ${linea.nombre}: el índice de contactos ` +
-                    'estaba dañado y se continuará con uno vacío. ' +
-                    (linea.actividadContactosSoloLectura
-                        ? 'No se sobrescribirá ninguna copia que Windows ' +
-                            'no haya permitido preservar.'
-                        : 'Las copias detectadas se preservaron para diagnóstico.')
-                );
-                return;
-            } else {
-                return;
-            }
+        const datos = JSON.parse(fs.readFileSync(ruta, 'utf8'));
+        if (!Array.isArray(datos)) {
+            throw new Error('El archivo no contiene una lista válida.');
         }
 
         const actividad = new Map();
@@ -4582,17 +4267,6 @@ function asegurarActividadContactos(linea) {
 function guardarActividadContactos(linea, forzar = false) {
     asegurarActividadContactos(linea);
     if (!forzar && !linea.actividadContactosSucia) return;
-    if (linea.actividadContactosSoloLectura) {
-        linea.actividadContactosSucia = false;
-        if (!linea.errorActividadContactosInformado) {
-            linea.errorActividadContactosInformado = true;
-            console.warn(
-                `[Actividad] ${linea.nombre}: el índice se mantendrá solo ` +
-                'en memoria porque Windows no permitió preservar su copia dañada.'
-            );
-        }
-        return;
-    }
 
     try {
         const registros = linea.ultimaInteraccionContactos.size >
@@ -5096,14 +4770,8 @@ function privacidadEstadosEsSegura(privacidad) {
     );
 }
 
-function audienciaEstadosLista(linea, opciones = {}) {
-    const cargar = opciones.cargar !== false;
-
-    if (cargar) {
-        asegurarAudienciaEstados(linea);
-    } else if (!linea.audienciaEstadosCargada) {
-        return false;
-    }
+function audienciaEstadosLista(linea) {
+    asegurarAudienciaEstados(linea);
 
     return (
         linea.audienciaResincronizada === true &&
@@ -8027,13 +7695,10 @@ function crearMetricasPriorizacionAudiencia(
     };
 }
 
-function obtenerAudienciaEfectivaGuardada(linea, opciones = {}) {
-    const cargar = opciones.cargar !== false;
-    if (cargar) {
-        asegurarAudienciaEstados(linea);
-        asegurarActividadContactos(linea);
-    }
-    if (!audienciaEstadosLista(linea, { cargar })) return [];
+function obtenerAudienciaEfectivaGuardada(linea) {
+    asegurarAudienciaEstados(linea);
+    asegurarActividadContactos(linea);
+    if (!audienciaEstadosLista(linea)) return [];
 
     const privacidad = linea.privacidadEstados;
     const canonizar = valor => {
@@ -8071,12 +7736,11 @@ function obtenerAudienciaEfectivaGuardada(linea, opciones = {}) {
     )];
 }
 
-function obtenerResumenPriorizacionAudiencia(linea, opciones = {}) {
-    const cargar = opciones.cargar !== false;
-    if (cargar) asegurarActividadContactos(linea);
+function obtenerResumenPriorizacionAudiencia(linea) {
+    asegurarActividadContactos(linea);
 
     const revision = Number(linea.revisionPriorizacionAudiencia) || 0;
-    const audienciaLista = audienciaEstadosLista(linea, { cargar });
+    const audienciaLista = audienciaEstadosLista(linea);
     const jidLinea = linea.jid || null;
     const limiteConfigurado = normalizarLimiteDestinatariosEstado(
         configuracion.maximoDestinatariosPorEstado
@@ -8092,10 +7756,7 @@ function obtenerResumenPriorizacionAudiencia(linea, opciones = {}) {
         return cache.resumen;
     }
 
-    const audienciaEfectiva = obtenerAudienciaEfectivaGuardada(
-        linea,
-        { cargar }
-    );
+    const audienciaEfectiva = obtenerAudienciaEfectivaGuardada(linea);
     const audienciaOrdenada = ordenarAudienciaPorActividad(
         linea,
         audienciaEfectiva
@@ -8417,16 +8078,15 @@ function guardarLineas() {
         ),
         conexionEnVerificacion: linea.conexionEnVerificacion === true,
         reconexionBloqueada: linea.reconexionBloqueada === true,
+        origenBloqueoReconexion: linea.reconexionBloqueada === true
+            ? normalizarOrigenBloqueoReconexion(
+                linea.origenBloqueoReconexion
+            )
+            : null,
         versionMigracionReconexionAgotada: Math.max(
             0,
             Number(linea.versionMigracionReconexionAgotada) || 0
         ),
-        origenBloqueoReconexion:
-            ['agotamiento', 'fatal', 'manual', 'desconocido'].includes(
-                linea.origenBloqueoReconexion
-            )
-                ? linea.origenBloqueoReconexion
-                : null,
         requiereRevisionEnvio: linea.requiereRevisionEnvio === true,
         motivoRevisionEnvio: linea.motivoRevisionEnvio || null,
         revisionEnvioDesde: linea.revisionEnvioDesde || null,
@@ -8453,20 +8113,6 @@ function guardarLineas() {
 function cargarLineasGuardadas() {
     if (!fs.existsSync(archivoLineas)) {
         console.log('No existe lineas.json todavía.');
-        if (!migracionReconexionAgotadaYaAplicada()) {
-            try {
-                guardarMarcaMigracionReconexionAgotada({
-                    lineasEvaluadas: 0,
-                    lineasRehabilitadas: 0
-                });
-            } catch (error) {
-                console.error(
-                    '[Conexión] No se pudo guardar la marca global de ' +
-                    'rehabilitación única:',
-                    error.message
-                );
-            }
-        }
         return;
     }
 
@@ -8476,17 +8122,20 @@ function cargarLineasGuardadas() {
             throw new Error('El archivo no contiene una lista de líneas válida.');
         }
 
-        const migracionReconexionAgotadaAplicada =
-            migracionReconexionAgotadaYaAplicada();
+        // Las versiones anteriores a la recuperación V2 guardaban como
+        // "bloqueada" una línea que simplemente agotó el contador durante un
+        // reinicio. Solo rehabilitamos la firma exacta, una vez, y únicamente
+        // si sus credenciales locales siguen registradas. No se toca ningún
+        // archivo de sesión.
+        const preparacionMigracionReconexion =
+            prepararRehabilitacionReconexionV2(datos);
+
         const ordenesReservados = new Set(
             datos
                 .map(item => Number(item?.ordenConexion))
                 .filter(orden => Number.isInteger(orden) && orden > 0)
         );
         const ordenesAsignados = new Set();
-        const idsRecuperacionConexion405 = [];
-        const bloqueosRehabilitadosPorActualizacion = new Map();
-        let lineasRehabilitadasPorActualizacion = 0;
         let ordenAlternativo = 1;
 
         for (const datosLinea of datos) {
@@ -8517,67 +8166,30 @@ function cargarLineasGuardadas() {
 
             ordenesAsignados.add(ordenConexion);
 
-            const intentosGuardados = Math.min(
+            const intentosReconexion = Math.min(
                 MAXIMOS_INTENTOS_RECONEXION,
                 Math.max(0, Number(datosLinea.intentosReconexion) || 0)
             );
             const conexionEnVerificacion =
                 datosLinea.conexionEnVerificacion === true;
-            const ultimoCodigoDesconexion =
-                datosLinea.ultimoCodigoDesconexion !== null &&
-                datosLinea.ultimoCodigoDesconexion !== undefined &&
-                Number.isFinite(Number(datosLinea.ultimoCodigoDesconexion))
-                    ? Number(datosLinea.ultimoCodigoDesconexion)
-                    : null;
-            const origenBloqueoCrudo =
-                datosLinea.origenBloqueoReconexion;
-            const origenBloqueoGuardado =
-                ['agotamiento', 'fatal', 'manual'].includes(
-                    origenBloqueoCrudo
-                )
-                    ? origenBloqueoCrudo
-                    : 'desconocido';
+            const origenBloqueoReconexion = normalizarOrigenBloqueoReconexion(
+                datosLinea.origenBloqueoReconexion
+            );
             const versionMigracionReconexionAgotada = Math.max(
                 0,
-                Number(
-                    datosLinea.versionMigracionReconexionAgotada
-                ) || 0
+                Number(datosLinea.versionMigracionReconexionAgotada) || 0
             );
-            const migrarBloqueoAgotadoAnterior =
-                !migracionReconexionAgotadaAplicada &&
-                versionMigracionReconexionAgotada <
-                    VERSION_MIGRACION_RECONEXION_AGOTADA &&
-                datosLinea.reconexionBloqueada === true &&
-                origenBloqueoGuardado === 'agotamiento' &&
-                intentosGuardados === MAXIMOS_INTENTOS_RECONEXION &&
-                conexionEnVerificacion === false &&
-                !CODIGOS_DESCONEXION_FATAL.has(
-                    ultimoCodigoDesconexion
-                );
-            const rehabilitarBloqueoAnterior =
-                migrarBloqueoAgotadoAnterior;
-            const intentosReconexion = rehabilitarBloqueoAnterior
-                ? 0
-                : intentosGuardados;
             const reconexionBloqueada =
-                (
-                    datosLinea.reconexionBloqueada === true &&
-                    !rehabilitarBloqueoAnterior
-                ) ||
+                datosLinea.reconexionBloqueada === true ||
                 (
                     intentosReconexion >= MAXIMOS_INTENTOS_RECONEXION &&
                     !conexionEnVerificacion
                 );
-            const origenBloqueoReconexion = reconexionBloqueada
-                ? origenBloqueoGuardado
-                : null;
             const proximoIntentoGuardado = Date.parse(
                 datosLinea.proximoIntentoReconexion || ''
             );
             const proximoIntentoReconexion =
-                !reconexionBloqueada &&
-                ultimoCodigoDesconexion !== CODIGO_RECHAZO_CONEXION_405 &&
-                Number.isFinite(proximoIntentoGuardado)
+                !reconexionBloqueada && Number.isFinite(proximoIntentoGuardado)
                     ? new Date(proximoIntentoGuardado).toISOString()
                     : null;
 
@@ -8610,7 +8222,6 @@ function cargarLineasGuardadas() {
                 generacionConexion: 0,
                 reiniciosRequeridos: 0,
                 reconexionManualEnCurso: false,
-                sondaConexion405: null,
                 fallosPrivacidadPersonalizada: 0,
                 modoPrivacidadEstadosInformado: null,
                 reparacionPrivacidadDisponible: false,
@@ -8632,17 +8243,19 @@ function cargarLineasGuardadas() {
                 intentosReconexion,
                 conexionEnVerificacion,
                 reconexionBloqueada,
-                versionMigracionReconexionAgotada:
-                    Math.max(
-                        versionMigracionReconexionAgotada,
-                        VERSION_MIGRACION_RECONEXION_AGOTADA
-                    ),
-                origenBloqueoReconexion,
+                origenBloqueoReconexion: reconexionBloqueada
+                    ? origenBloqueoReconexion
+                    : null,
+                versionMigracionReconexionAgotada,
                 requiereRevisionEnvio: datosLinea.requiereRevisionEnvio === true,
                 motivoRevisionEnvio: datosLinea.motivoRevisionEnvio || null,
                 revisionEnvioDesde: datosLinea.revisionEnvioDesde || null,
                 ultimaDesconexion: datosLinea.ultimaDesconexion || null,
-                ultimoCodigoDesconexion,
+                ultimoCodigoDesconexion: datosLinea.ultimoCodigoDesconexion !== null &&
+                    datosLinea.ultimoCodigoDesconexion !== undefined &&
+                    Number.isFinite(Number(datosLinea.ultimoCodigoDesconexion))
+                    ? Number(datosLinea.ultimoCodigoDesconexion)
+                    : null,
                 proximoIntentoReconexion,
                 contactosEstado: new Set(),
                 contactosEstadoWhatsApp: new Set(),
@@ -8679,108 +8292,58 @@ function cargarLineasGuardadas() {
                         ? datosLinea.etiquetaAntesHistorialAgendamiento
                         : null
             });
-            if (migrarBloqueoAgotadoAnterior) {
-                lineasRehabilitadasPorActualizacion += 1;
-                bloqueosRehabilitadosPorActualizacion.set(id, {
-                    intentosReconexion: intentosGuardados,
-                    reconexionBloqueada: true,
-                    versionMigracionReconexionAgotada,
-                    origenBloqueoReconexion:
-                        origenBloqueoGuardado,
-                    estado: 'requiere_intervencion',
-                    etiqueta: 'caida',
-                    proximoIntentoReconexion: null,
-                    ultimoError: datosLinea.ultimoError || null
-                });
-            }
-            if (
-                rehabilitarBloqueoAnterior ||
-                (
-                    ultimoCodigoDesconexion ===
-                        CODIGO_RECHAZO_CONEXION_405 &&
-                    !reconexionBloqueada
-                )
-            ) {
-                idsRecuperacionConexion405.push(id);
-            }
         }
 
-        let lineasPersistidasAntesDeReconectar = false;
+        let lineasGuardadas = false;
         try {
-            // Confirma los marcadores por línea antes de iniciar sockets.
+            // Persiste la migración de orden y, si corresponde, la
+            // rehabilitación V2 antes de permitir que el inicio normal vuelva
+            // a encolar una línea. Si no se puede escribir, la revertimos en
+            // memoria y se conserva el bloqueo anterior.
             guardarLineas();
-            lineasPersistidasAntesDeReconectar = true;
+            lineasGuardadas = true;
         } catch (error) {
-            for (
-                const [
-                    lineaId,
-                    estadoAnterior
-                ] of bloqueosRehabilitadosPorActualizacion
-            ) {
-                const linea = lineas.get(lineaId);
-                if (!linea) continue;
-
-                linea.intentosReconexion =
-                    estadoAnterior.intentosReconexion;
-                linea.reconexionBloqueada =
-                    estadoAnterior.reconexionBloqueada;
-                linea.versionMigracionReconexionAgotada =
-                    estadoAnterior.versionMigracionReconexionAgotada;
-                linea.origenBloqueoReconexion =
-                    estadoAnterior.origenBloqueoReconexion;
-                linea.estado = estadoAnterior.estado;
-                linea.etiqueta = estadoAnterior.etiqueta;
-                linea.proximoIntentoReconexion =
-                    estadoAnterior.proximoIntentoReconexion;
-                linea.ultimoError = estadoAnterior.ultimoError;
+            if (preparacionMigracionReconexion.candidatas.length > 0) {
+                revertirRehabilitacionReconexionV2(
+                    preparacionMigracionReconexion
+                );
             }
-            lineasRehabilitadasPorActualizacion = 0;
             console.error(
-                '[Conexión] No se pudo confirmar la rehabilitación única; ' +
-                'las líneas agotadas continuarán bloqueadas:',
+                'No se pudo guardar la migración de las líneas:',
                 error.message
             );
         }
 
-        if (
-            lineasPersistidasAntesDeReconectar &&
-            !migracionReconexionAgotadaAplicada
-        ) {
-            try {
-                guardarMarcaMigracionReconexionAgotada({
-                    lineasEvaluadas: lineas.size,
-                    lineasRehabilitadas:
-                        lineasRehabilitadasPorActualizacion
-                });
-            } catch (error) {
-                // Los marcadores por línea ya quedaron confirmados. La marca
-                // global se volverá a intentar en el siguiente inicio.
-                console.error(
-                    '[Conexión] No se pudo guardar la marca global de ' +
-                    'rehabilitación única:',
-                    error.message
+        if (lineasGuardadas && preparacionMigracionReconexion.aplicar) {
+            if (preparacionMigracionReconexion.pendientesVerificacion.length > 0) {
+                console.warn(
+                    '[Conexión] Recuperación posterior a reinicio pendiente: ' +
+                    `${preparacionMigracionReconexion.pendientesVerificacion.length} línea(s) ` +
+                    'no tienen credenciales verificables todavía. Se conservarán bloqueadas y se revisarán en el próximo inicio.'
                 );
+            } else {
+                try {
+                    guardarMarcaMigracionReconexionAgotadaV2(
+                        preparacionMigracionReconexion.candidatas.length
+                    );
+                    if (preparacionMigracionReconexion.candidatas.length > 0) {
+                        console.log(
+                            '[Conexión] Recuperación posterior a reinicio: ' +
+                            `${preparacionMigracionReconexion.candidatas.length} línea(s) ` +
+                            'volverán a intentar conectarse gradualmente.'
+                        );
+                    }
+                } catch (error) {
+                    // La línea ya quedó marcada con versión V2 en lineas.json,
+                    // así que no se repetirá la recuperación. El marcador solo
+                    // sirve como barrera adicional y no debe revertir lo que ya
+                    // fue guardado de forma correcta.
+                    console.error(
+                        'No se pudo guardar la marca de recuperación de reinicios:',
+                        error.message
+                    );
+                }
             }
-        }
-
-        const idsRecuperacionConfirmados =
-            lineasPersistidasAntesDeReconectar
-                ? idsRecuperacionConexion405
-                : idsRecuperacionConexion405.filter(
-                    lineaId =>
-                        !bloqueosRehabilitadosPorActualizacion.has(
-                            lineaId
-                        )
-                );
-        prepararRecuperacionInicialConexion405(
-            idsRecuperacionConfirmados
-        );
-        if (lineasRehabilitadasPorActualizacion > 0) {
-            console.log(
-                `[Conexión] Actualización: ` +
-                `${lineasRehabilitadasPorActualizacion} línea(s) agotada(s) ` +
-                'se rehabilitaron una sola vez y volverán gradualmente a la cola.'
-            );
         }
 
         console.log(`${lineas.size} línea(s) cargada(s).`);
@@ -9042,335 +8605,11 @@ function normalizarGrupoEstadosActivos(datos) {
     };
 }
 
-function informarCargaJsonRecuperable(nombre, resultado) {
-    for (const error of resultado?.errores || []) {
-        console.warn(
-            `[Persistencia] ${nombre}: copia ${error.fuente} no válida ` +
-            `(${error.codigo}): ${error.mensaje}`
-        );
-    }
-
-    if (resultado?.recuperado) {
-        console.warn(
-            `[Persistencia] ${nombre} se restauró automáticamente desde ` +
-            `${resultado.fuente}.`
-        );
-    }
-
-    for (const archivo of resultado?.archivosCorruptos || []) {
-        console.warn(
-            `[Persistencia] La copia dañada de ${nombre} se conservó como ` +
-            `${path.basename(archivo.ruta)}.`
-        );
-    }
-}
-
-function crearErrorPersistenciaCheckpoint(
-    error,
-    {
-        envioConfirmado = false,
-        envioIncierto = false,
-        resultadoCorrecto = null
-    } = {}
-) {
-    const protegido = new Error(
-        'No se pudo guardar el punto de recuperación de la campaña. ' +
-        'La publicación se detuvo antes de iniciar otra línea.'
-    );
-    protegido.codigo = 'PERSISTENCIA_CHECKPOINT_FALLIDA';
-    protegido.tipoError = 'persistencia_local';
-    protegido.codigoErrorCorte = 'PERSISTENCIA_CHECKPOINT_FALLIDA';
-    protegido.reintentable = false;
-    protegido.envioConfirmado = envioConfirmado;
-    protegido.envioIncierto = envioIncierto;
-    protegido.reintentoSeguro = !envioConfirmado && !envioIncierto;
-    protegido.resultadoCorrecto = resultadoCorrecto;
-    protegido.cause = error;
-    return protegido;
-}
-
-function persistirCambioCheckpoint(
-    registro,
-    transformar,
-    opciones = {}
-) {
-    try {
-        const actualizado = transformar(registro);
-        almacenPublicacionActiva.guardarEspejado(
-            crearSnapshotPublicacionActiva(actualizado)
-        );
-        Object.assign(registro, actualizado);
-        return registro;
-    } catch (error) {
-        if (error?.codigo === 'PERSISTENCIA_CHECKPOINT_FALLIDA') {
-            throw error;
-        }
-        throw crearErrorPersistenciaCheckpoint(error, opciones);
-    }
-}
-
-function guardarCheckpointInicial(registro) {
-    return persistirCambioCheckpoint(registro, actual => actual);
-}
-
-function marcarCheckpointLineaEnCurso(registro, linea) {
-    return persistirCambioCheckpoint(
-        registro,
-        actual => marcarLineaEnCurso(actual, {
-            id: linea.id,
-            nombre: linea.nombre,
-            numero: linea.jid ? linea.jid.split('@')[0] : null
-        })
-    );
-}
-
-function marcarCheckpointEnvioEnCurso(registro) {
-    return persistirCambioCheckpoint(
-        registro,
-        actual => actualizarFaseLineaEnCurso(actual, 'envio')
-    );
-}
-
-function registrarCheckpointDefinitivo(
-    registro,
-    tipo,
-    resultado,
-    opciones = {}
-) {
-    return persistirCambioCheckpoint(
-        registro,
-        actual => registrarResultadoDefinitivo(
-            actual,
-            tipo,
-            resultado
-        ),
-        opciones
-    );
-}
-
-function limpiarCheckpointPublicacion(publicacionId) {
-    try {
-        const cargado = almacenPublicacionActiva.cargar(null);
-        informarCargaJsonRecuperable(
-            'punto de recuperación de publicación',
-            cargado
-        );
-        if (
-            cargado.datos &&
-            String(cargado.datos.publicacionId || '') !==
-                String(publicacionId || '')
-        ) {
-            return false;
-        }
-
-        const rutas = new Set([
-            ...Object.values(almacenPublicacionActiva.rutas),
-            `${almacenPublicacionActiva.rutas.respaldo}.tmp`
-        ]);
-        for (const ruta of rutas) eliminarArchivoSeguro(ruta);
-        return true;
-    } catch (error) {
-        console.warn(
-            '[Persistencia] No se pudo retirar el punto de recuperación ' +
-            `ya finalizado: ${error.message}`
-        );
-        return false;
-    }
-}
-
-function conservarArchivoDanadoParaDiagnostico(ruta, nombre) {
-    if (!fs.existsSync(ruta)) return null;
-
-    const destino =
-        `${ruta}.corrupto-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    try {
-        fs.renameSync(ruta, destino);
-        console.warn(
-            `[Persistencia] Se conservó la copia dañada de ${nombre} en ` +
-            `${path.basename(destino)}.`
-        );
-        return destino;
-    } catch (error) {
-        console.warn(
-            `[Persistencia] No se pudo conservar aparte la copia dañada de ` +
-            `${nombre}: ${error.message}`
-        );
-        return null;
-    }
-}
-
-function reconstruirEstadosActivosDesdeHistorial() {
-    if (!estadosActivosRequierenReconstruccion) return 0;
-
-    const ahora = Date.now();
-    let recuperadas = 0;
-
-    for (const registro of historialPublicaciones) {
-        const fechaInicioMs = obtenerMilisegundosFecha(
-            registro?.fechaInicio,
-            NaN
-        );
-        if (!Number.isFinite(fechaInicioMs)) continue;
-
-        let grupo = estadosActivos.get(registro.id);
-        for (const resultado of Array.isArray(registro?.lineasCorrectas)
-            ? registro.lineasCorrectas
-            : []) {
-            const lineaId = String(
-                resultado?.id || resultado?.lineaId || ''
-            ).trim();
-            const estadoId = String(resultado?.estadoId || '').trim();
-            if (!lineaId || !estadoId) continue;
-
-            const publicadoMs = obtenerMilisegundosFecha(
-                resultado.publicadoEn,
-                fechaInicioMs
-            );
-            const expiraMs = publicadoMs + DURACION_ESTADO_MS;
-            if (expiraMs <= ahora) continue;
-
-            if (!grupo) {
-                grupo = {
-                    id: registro.id,
-                    fechaInicio: new Date(fechaInicioMs).toISOString(),
-                    expiraEn: new Date(expiraMs).toISOString(),
-                    texto: String(registro.texto || ''),
-                    lineas: []
-                };
-                estadosActivos.set(grupo.id, grupo);
-            }
-            if (grupo.lineas.some(linea => linea.lineaId === lineaId)) {
-                continue;
-            }
-
-            const clave = {
-                remoteJid: 'status@broadcast',
-                fromMe: true,
-                id: estadoId
-            };
-            const normalizada = normalizarLineaEstadoActivo({
-                lineaId,
-                nombre: resultado.nombre || lineas.get(lineaId)?.nombre,
-                numero: resultado.numero ||
-                    (
-                        lineas.get(lineaId)?.jid
-                            ? lineas.get(lineaId).jid.split('@')[0]
-                            : null
-                    ),
-                clave,
-                meta: {
-                    id: estadoId,
-                    remoteJid: 'status@broadcast',
-                    statusJidList: []
-                },
-                publicadoEn: new Date(publicadoMs).toISOString(),
-                expiraEn: new Date(expiraMs).toISOString(),
-                visualizadores: [],
-                estado: 'activo'
-            }, grupo.fechaInicio);
-
-            if (!normalizada) continue;
-            grupo.lineas.push(normalizada);
-            grupo.expiraEn = new Date(Math.max(
-                obtenerMilisegundosFecha(grupo.expiraEn, 0),
-                expiraMs
-            )).toISOString();
-            recuperadas += 1;
-        }
-    }
-
-    if (estadosActivosSinCopiaValida) {
-        conservarArchivoDanadoParaDiagnostico(
-            archivoEstadosActivos,
-            'estados activos'
-        );
-    }
-    guardarEstadosActivos();
-    estadosActivosRequierenReconstruccion = false;
-    estadosActivosSinCopiaValida = false;
-
-    console.warn(
-        `[Persistencia] Se reconstruyeron ${recuperadas} estado(s) con ID ` +
-        'confirmado desde el historial. Nunca se reenvió ningún estado.'
-    );
-    return recuperadas;
-}
-
-function reconciliarPublicacionesInterrumpidas() {
-    const cargado = almacenPublicacionActiva.cargar(null);
-    informarCargaJsonRecuperable(
-        'punto de recuperación de publicación',
-        cargado
-    );
-
-    const resultado = reconciliarHistorialInterrumpido(
-        historialPublicaciones,
-        Array.from(estadosActivos.values()),
-        new Date(),
-        cargado.datos
-    );
-
-    if (resultado.cambiados > 0) {
-        historialPublicaciones.splice(
-            0,
-            historialPublicaciones.length,
-            ...resultado.historial
-        );
-        guardarHistorial();
-
-        const confirmadas = resultado.resumen.reduce(
-            (total, item) =>
-                total + item.confirmadasDesdeEstadosActivos.length,
-            0
-        );
-        const seguras = resultado.resumen.reduce(
-            (total, item) => total + item.idsPendientesSeguros.length,
-            0
-        );
-        const inciertas = resultado.resumen.reduce(
-            (total, item) => total + item.idsEnvioIncierto.length,
-            0
-        );
-        console.warn(
-            `[Persistencia] ${resultado.cambiados} publicación(es) ` +
-            'interrumpida(s) fueron cerradas sin reanudarlas: ' +
-            `${confirmadas} confirmada(s), ${seguras} pendiente(s) segura(s) ` +
-            `y ${inciertas} envío(s) incierto(s).`
-        );
-    }
-
-    if (cargado.datos) {
-        const publicacionId = String(
-            cargado.datos.publicacionId || ''
-        );
-        const registroCorrespondiente = historialPublicaciones.find(
-            registro => String(registro?.id || '') === publicacionId
-        );
-        const fueReconciliado = resultado.resumen.some(
-            item => item.id === publicacionId
-        );
-        if (
-            fueReconciliado ||
-            (
-                registroCorrespondiente &&
-                registroCorrespondiente.estado !== 'ejecutando'
-            )
-        ) {
-            limpiarCheckpointPublicacion(publicacionId);
-        } else if (!registroCorrespondiente) {
-            console.warn(
-                '[Persistencia] Se conservó un punto de recuperación sin ' +
-                'historial correspondiente para revisión; no se reanudará ' +
-                'automáticamente.'
-            );
-        }
-    }
-
-    reconstruirEstadosActivosDesdeHistorial();
-}
-
 function guardarEstadosActivos() {
-    almacenEstadosActivos.guardar(Array.from(estadosActivos.values()));
+    guardarJSONAtomico(
+        archivoEstadosActivos,
+        Array.from(estadosActivos.values())
+    );
 }
 
 function podarEstadosActivos(guardar = true) {
@@ -9411,31 +8650,33 @@ function podarEstadosActivos(guardar = true) {
 }
 
 function cargarEstadosActivos() {
-    const resultado = almacenEstadosActivos.cargar([]);
-    informarCargaJsonRecuperable('estados activos', resultado);
-    estadosActivosSinCopiaValida =
-        resultado.fuente === 'predeterminado' &&
-        resultado.errores.length > 0;
-    estadosActivosRequierenReconstruccion =
-        estadosActivosSinCopiaValida ||
-        ['temporal', 'respaldo'].includes(resultado.fuente);
+    if (!fs.existsSync(archivoEstadosActivos)) return;
 
-    for (const candidato of resultado.datos.slice(0, 10000)) {
-        let grupo;
-
-        try {
-            grupo = normalizarGrupoEstadosActivos(candidato);
-        } catch {
-            grupo = null;
+    try {
+        const datos = JSON.parse(fs.readFileSync(archivoEstadosActivos, 'utf8'));
+        if (!Array.isArray(datos)) {
+            throw new Error('El archivo no contiene una lista válida.');
         }
 
-        if (!grupo || estadosActivos.has(grupo.id)) continue;
-        estadosActivos.set(grupo.id, grupo);
+        for (const candidato of datos.slice(0, 10000)) {
+            let grupo;
+
+            try {
+                grupo = normalizarGrupoEstadosActivos(candidato);
+            } catch {
+                grupo = null;
+            }
+
+            if (!grupo || estadosActivos.has(grupo.id)) continue;
+            estadosActivos.set(grupo.id, grupo);
+        }
+    } catch (error) {
+        console.error('No se pudieron cargar los estados activos:', error.message);
+        estadosActivos.clear();
+        return;
     }
 
     podarEstadosActivos(false);
-
-    if (estadosActivosRequierenReconstruccion) return;
 
     try {
         // Reescribimos solamente los campos validados y completamos datos de
@@ -9556,42 +8797,294 @@ function guardarHistorial() {
         }
     }
 
-    almacenHistorialPublicaciones.guardarEspejado(
-        historialPublicaciones
-    );
+    guardarJSONAtomico(archivoHistorial, historialPublicaciones);
 }
 
 function cargarHistorial() {
-    const resultado = almacenHistorialPublicaciones.cargar([]);
-    informarCargaJsonRecuperable(
-        'historial de publicaciones',
-        resultado
-    );
-    historialPublicaciones.push(
-        ...resultado.datos
-            .filter(item => item && typeof item === 'object')
-            .map(item => ({
-                ...item,
-                modoRitmo: normalizarModoRitmo(item.modoRitmo, 'grupos'),
-                intervaloSegundos: limitarNumero(
-                    item.intervaloSegundos,
-                    45,
-                    10,
-                    3600,
-                    true
-                ),
-                variacionSegundos: limitarNumero(
-                    item.variacionSegundos,
-                    0,
-                    0,
-                    30,
-                    true
-                )
-            }))
-    );
+    if (!fs.existsSync(archivoHistorial)) return;
 
-    if (historialPublicaciones.length > MAXIMO_HISTORIAL) {
+    try {
+        const datos = JSON.parse(fs.readFileSync(archivoHistorial, 'utf8'));
+        if (Array.isArray(datos)) {
+            historialPublicaciones.push(
+                ...datos
+                    .filter(item => item && typeof item === 'object')
+                    .map(item => ({
+                        ...item,
+                        modoRitmo: normalizarModoRitmo(item.modoRitmo, 'grupos'),
+                        intervaloSegundos: limitarNumero(
+                            item.intervaloSegundos,
+                            45,
+                            10,
+                            3600,
+                            true
+                        ),
+                        variacionSegundos: limitarNumero(
+                            item.variacionSegundos,
+                            0,
+                            0,
+                            30,
+                            true
+                        )
+                    }))
+            );
+
+            if (historialPublicaciones.length > MAXIMO_HISTORIAL) {
+                guardarHistorial();
+            }
+        }
+    } catch (error) {
+        console.error('No se pudo cargar el historial:', error.message);
+    }
+}
+
+function reemplazarRegistroHistorial(registro, actualizado) {
+    if (!registro || !actualizado || registro === actualizado) return registro;
+
+    for (const clave of Object.keys(registro)) {
+        if (!Object.prototype.hasOwnProperty.call(actualizado, clave)) {
+            delete registro[clave];
+        }
+    }
+    Object.assign(registro, actualizado);
+    return registro;
+}
+
+function sincronizarRegistroHistorialConProgreso(registro) {
+    if (!registro) return registro;
+
+    registro.correctas = Number(progresoPublicacion.correctas) || 0;
+    registro.fallidas = Number(progresoPublicacion.fallidas) || 0;
+    registro.noProcesadas = Number(progresoPublicacion.noProcesadas) || 0;
+    registro.lineasCorrectas = [...(progresoPublicacion.lineasCorrectas || [])];
+    registro.lineasFallidas = [...(progresoPublicacion.lineasFallidas || [])];
+    return registro;
+}
+
+function guardarCheckpointPublicacion(registro) {
+    const snapshot = crearSnapshotPublicacionActiva(registro);
+    // El respaldo recibe la misma revisión antes de que se actualice el
+    // principal. Si esto falla, nunca se debe iniciar el siguiente envío.
+    almacenCheckpointPublicacion.guardar(snapshot);
+    reemplazarRegistroHistorial(registro, snapshot.registro);
+    guardarHistorial();
+    return registro;
+}
+
+function crearCheckpointInicialPublicacion(registro) {
+    sincronizarRegistroHistorialConProgreso(registro);
+    if (registro?.checkpointPublicacion?.version !== 1) {
+        const actualizado = crearCheckpointPublicacion(registro);
+        reemplazarRegistroHistorial(registro, actualizado);
+    }
+
+    // Las líneas descartadas antes de comenzar también son resultados
+    // definitivos: no hubo sendMessage y deben poder retomarse si la app se
+    // apaga mientras espera la decisión inicial del usuario.
+    for (const fallo of registro.lineasFallidas || []) {
+        if (
+            fallo?.envioConfirmado !== false ||
+            fallo?.envioIncierto !== false
+        ) continue;
+
+        const actualizado = registrarResultadoCheckpoint(
+            registro,
+            'fallida',
+            fallo
+        );
+        reemplazarRegistroHistorial(registro, actualizado);
+    }
+    return guardarCheckpointPublicacion(registro);
+}
+
+function marcarCheckpointPreparacion(registro, linea) {
+    sincronizarRegistroHistorialConProgreso(registro);
+    const actualizado = marcarLineaCheckpoint(registro, {
+        id: linea.id,
+        nombre: linea.nombre,
+        numero: linea.jid ? linea.jid.split('@')[0] : null
+    }, 'preparacion');
+    reemplazarRegistroHistorial(registro, actualizado);
+    return guardarCheckpointPublicacion(registro);
+}
+
+function marcarCheckpointEnvioEnCurso(registro) {
+    const actualizado = actualizarFaseCheckpoint(registro, 'envio');
+    reemplazarRegistroHistorial(registro, actualizado);
+    return guardarCheckpointPublicacion(registro);
+}
+
+function registrarResultadoCheckpointPublicacion(registro, tipo, resultado) {
+    sincronizarRegistroHistorialConProgreso(registro);
+    const actualizado = registrarResultadoCheckpoint(registro, tipo, resultado);
+    reemplazarRegistroHistorial(registro, actualizado);
+    return guardarCheckpointPublicacion(registro);
+}
+
+function limpiarCheckpointPublicacion(publicacionId) {
+    try {
+        almacenCheckpointPublicacion.eliminarSiPerteneceA(publicacionId);
+    } catch (error) {
+        // El historial final ya fue escrito. Conservamos el journal para que
+        // pueda limpiarse al siguiente inicio en vez de borrar a ciegas.
+        console.error(
+            'No se pudo retirar el checkpoint finalizado de la publicación:',
+            error.message
+        );
+    }
+}
+
+function guardarCheckpointFinalPublicacion(registro) {
+    try {
+        const snapshot = crearSnapshotPublicacionActiva(registro);
+        almacenCheckpointPublicacion.guardar(snapshot);
+        reemplazarRegistroHistorial(registro, snapshot.registro);
+        return true;
+    } catch (error) {
+        // Ya no habrá más envíos en esta campaña. Se intenta conservar el
+        // historial final igualmente; si el journal anterior sobrevive, la
+        // recuperación seguirá siendo conservadora al próximo inicio.
+        console.error(
+            'No se pudo marcar el checkpoint como finalizado:',
+            error.message
+        );
+        return false;
+    }
+}
+
+function reconciliarPublicacionesInterrumpidas() {
+    const carga = almacenCheckpointPublicacion.cargar();
+    if (!carga?.datos) return false;
+
+    const snapshot = carga.datos;
+    const registroSnapshot = snapshot.registro;
+    const indiceExistente = historialPublicaciones.findIndex(
+        item => item?.id === snapshot.publicacionId
+    );
+    const registroExistente = indiceExistente >= 0
+        ? historialPublicaciones[indiceExistente]
+        : null;
+
+    // Si el historial final ya alcanzó el disco, tiene prioridad sobre un
+    // journal que no llegó a retirarse antes de un apagado. Así no se cambia
+    // una campaña terminada a "interrumpida" ni se altera su auditoría.
+    if (registroExistente && registroExistente.estado !== 'ejecutando') {
+        limpiarCheckpointPublicacion(snapshot.publicacionId);
+        return false;
+    }
+
+    if (!registroSnapshot) {
+        limpiarCheckpointPublicacion(snapshot.publicacionId);
+        return false;
+    }
+
+    // La ventana entre el guardado final del journal y publicaciones.json se
+    // recupera desde la copia completa, sin clasificar otra vez la campaña.
+    if (registroSnapshot.estado !== 'ejecutando') {
+        if (indiceExistente >= 0) {
+            historialPublicaciones[indiceExistente] = registroSnapshot;
+        } else {
+            historialPublicaciones.unshift(registroSnapshot);
+        }
+        try {
+            guardarHistorial();
+            limpiarCheckpointPublicacion(snapshot.publicacionId);
+            return true;
+        } catch (error) {
+            console.error(
+                'No se pudo restaurar el cierre final de la publicación:',
+                error.message
+            );
+            return false;
+        }
+    }
+
+    let resultado;
+    try {
+        // El journal contiene una copia completa del registro. Por eso también
+        // puede recuperar una campaña si publicaciones.json fue cortado o no
+        // alcanzó a guardarse durante un apagado abrupto.
+        resultado = reconciliarRegistroInterrumpido(
+            registroSnapshot,
+            estadosActivos
+        );
+    } catch (error) {
+        console.error(
+            'No se pudo reconciliar el checkpoint de publicación:',
+            error.message
+        );
+        return false;
+    }
+
+    if (!resultado.cambiado) {
+        limpiarCheckpointPublicacion(snapshot.publicacionId);
+        return false;
+    }
+
+    if (indiceExistente >= 0) {
+        historialPublicaciones[indiceExistente] = resultado.registro;
+    } else {
+        historialPublicaciones.unshift(resultado.registro);
+    }
+
+    try {
         guardarHistorial();
+    } catch (error) {
+        console.error(
+            'No se pudo guardar la recuperación de la publicación:',
+            error.message
+        );
+        return false;
+    }
+
+    limpiarCheckpointPublicacion(resultado.registro.id);
+    console.warn(
+        '[Publicación] Se recuperó una campaña interrumpida: ' +
+        `${resultado.idsPendientesSeguros.length} línea(s) seguras para reanudar, ` +
+        `${resultado.idsEnvioIncierto.length} con envío incierto.`
+    );
+    return true;
+}
+
+function reconciliarPublicacionesLegadasSinCheckpoint() {
+    let recuperadas = 0;
+
+    for (let indice = 0; indice < historialPublicaciones.length; indice += 1) {
+        const registro = historialPublicaciones[indice];
+        let resultado;
+        try {
+            resultado = reconciliarRegistroSinJournal(
+                registro,
+                estadosActivos
+            );
+        } catch (error) {
+            console.error(
+                'No se pudo revisar una publicación antigua interrumpida:',
+                error.message
+            );
+            continue;
+        }
+        if (!resultado.cambiado) continue;
+
+        historialPublicaciones[indice] = resultado.registro;
+        recuperadas += 1;
+    }
+
+    if (!recuperadas) return false;
+    try {
+        guardarHistorial();
+        console.warn(
+            '[Publicación] Se recuperaron ' +
+            `${recuperadas} campaña(s) sin journal verificable. ` +
+            'Las líneas sin comprobación quedaron como envío incierto para evitar duplicados.'
+        );
+        return true;
+    } catch (error) {
+        console.error(
+            'No se pudo guardar la recuperación de campañas antiguas:',
+            error.message
+        );
+        return false;
     }
 }
 
@@ -9612,7 +9105,7 @@ function crearRegistroHistorial({
     const rutaCopia = path.join(CARPETA_IMAGENES_HISTORIAL, `${id}${tipo.extension}`);
     fs.copyFileSync(rutaImagen, rutaCopia);
 
-    const registro = crearCheckpointPublicacion({
+    const registro = {
         id,
         fechaInicio: new Date().toISOString(),
         fechaFin: null,
@@ -9635,8 +9128,18 @@ function crearRegistroHistorial({
         lineasCorrectas: [],
         lineasFallidas: [],
         error: null
-    });
+    };
 
+    // El journal nace antes de incorporar el registro al historial normal.
+    // Así se cierra incluso la ventana entre crear una campaña y preparar su
+    // primera línea: todavía no habrá envío, pero la reanudación será segura.
+    const registroConCheckpoint = crearCheckpointPublicacion(registro);
+    const snapshotInicial = crearSnapshotPublicacionActiva(
+        registroConCheckpoint
+    );
+    almacenCheckpointPublicacion.guardar(snapshotInicial);
+
+    Object.assign(registro, snapshotInicial.registro);
     historialPublicaciones.unshift(registro);
     guardarHistorial();
     return registro;
@@ -9655,7 +9158,12 @@ function finalizarRegistroHistorial(registro, estado, error = null) {
     registro.lineaCorte = progresoPublicacion.lineaCorte || null;
     registro.mensajeErrorCorte = progresoPublicacion.mensajeErrorCorte || null;
     registro.error = error;
+    // El journal refleja el estado terminal antes de escribir el historial.
+    // Esto cubre una caída justo en el cierre de la campaña.
+    guardarCheckpointFinalPublicacion(registro);
     guardarHistorial();
+    // Solo se elimina después de que el historial final quedó persistido.
+    // Si el proceso cae antes, el journal conserva la campaña recuperable.
     limpiarCheckpointPublicacion(registro.id);
 }
 
@@ -10138,531 +9646,6 @@ function cancelarTemporizadorEstabilidadConexion(linea) {
     }
 }
 
-function obtenerBloqueoProteccionConexion405Ms() {
-    const valor = Date.parse(proteccionConexion405.bloqueadaHasta || '');
-    return Number.isFinite(valor) ? valor : 0;
-}
-
-function proteccionConexion405EnEnfriamiento() {
-    return obtenerBloqueoProteccionConexion405Ms() > Date.now();
-}
-
-function depurarEventosConexion405(ahora = Date.now()) {
-    for (const [lineaId, evento] of proteccionConexion405.eventosRecientes) {
-        if (
-            !evento ||
-            ahora - Number(evento.fecha || 0) > VENTANA_CONEXION_405_MS
-        ) {
-            proteccionConexion405.eventosRecientes.delete(lineaId);
-        }
-    }
-}
-
-function obtenerEstadoProteccionConexion405() {
-    depurarEventosConexion405();
-    const bloqueadaHastaMs = obtenerBloqueoProteccionConexion405Ms();
-    const enfriamiento = bloqueadaHastaMs > Date.now();
-    const recuperacion = proteccionConexion405.recuperacion === true;
-    const recuperacionConfirmada =
-        proteccionConexion405.recuperacionConfirmada === true;
-
-    return {
-        pausada:
-            enfriamiento ||
-            (recuperacion && !recuperacionConfirmada),
-        enfriamiento,
-        recuperacion,
-        recuperacionConfirmada,
-        degradada: recuperacion && recuperacionConfirmada,
-        bloqueadaHasta: enfriamiento
-            ? new Date(bloqueadaHastaMs).toISOString()
-            : null,
-        nivel: Math.max(0, Number(proteccionConexion405.nivel) || 0),
-        motivo: proteccionConexion405.motivo || null,
-        eventosRecientes: proteccionConexion405.eventosRecientes.size,
-        exitosRecuperacion:
-            Math.max(0, Number(proteccionConexion405.exitosRecuperacion) || 0),
-        pendientes: lineasPendientesConexion405.size,
-        lineasDiferidas: [...proteccionConexion405.estadoLineas.values()]
-            .filter(estado =>
-                Number(estado?.diferidaHasta) > Date.now()
-            )
-            .length
-    };
-}
-
-function cancelarTemporizadorProteccionConexion405() {
-    if (temporizadorProteccionConexion405) {
-        clearTimeout(temporizadorProteccionConexion405);
-        temporizadorProteccionConexion405 = null;
-    }
-    vencimientoTemporizadorProteccionConexion405 = 0;
-}
-
-function programarTemporizadorProteccionConexion405(vencimiento) {
-    const destino = Math.max(Date.now(), Number(vencimiento) || Date.now());
-    if (
-        temporizadorProteccionConexion405 &&
-        vencimientoTemporizadorProteccionConexion405 <= destino + 10
-    ) {
-        return;
-    }
-
-    cancelarTemporizadorProteccionConexion405();
-    vencimientoTemporizadorProteccionConexion405 = destino;
-    temporizadorProteccionConexion405 = setTimeout(() => {
-        temporizadorProteccionConexion405 = null;
-        vencimientoTemporizadorProteccionConexion405 = 0;
-        programarProcesamientoColaIniciosWhatsApp();
-    }, Math.max(0, destino - Date.now()));
-    temporizadorProteccionConexion405.unref?.();
-}
-
-function obtenerEstadoLineaConexion405(lineaId) {
-    return proteccionConexion405.estadoLineas.get(lineaId) || {
-        ultimoRechazo: 0,
-        diferidaHasta: 0,
-        fallosConsecutivos: 0
-    };
-}
-
-function registrarFalloLineaConexion405(
-    lineaId,
-    ahora = Date.now(),
-    { diferir = false } = {}
-) {
-    const anterior = obtenerEstadoLineaConexion405(lineaId);
-    const fallosConsecutivos = Math.min(
-        RETRASOS_LINEA_CONEXION_405_MS.length,
-        Math.max(0, Number(anterior.fallosConsecutivos) || 0) + 1
-    );
-    const indiceRetraso = Math.min(
-        fallosConsecutivos - 1,
-        RETRASOS_LINEA_CONEXION_405_MS.length - 1
-    );
-    const estado = {
-        ultimoRechazo: ahora,
-        diferidaHasta: diferir
-            ? ahora + RETRASOS_LINEA_CONEXION_405_MS[indiceRetraso]
-            : 0,
-        fallosConsecutivos
-    };
-    proteccionConexion405.estadoLineas.set(lineaId, estado);
-    return estado;
-}
-
-function limpiarEstadoLineaConexion405(lineaId) {
-    return proteccionConexion405.estadoLineas.delete(lineaId);
-}
-
-function obtenerIndiceSolicitudRecuperacion405() {
-    const ahora = Date.now();
-    let indiceElegido = -1;
-    let solicitudElegida = null;
-    let estadoElegido = null;
-    let proximoVencimiento = Infinity;
-
-    for (
-        let indice = 0;
-        indice < colaIniciosWhatsApp.length;
-        indice += 1
-    ) {
-        const solicitud = colaIniciosWhatsApp[indice];
-        const estado = obtenerEstadoLineaConexion405(solicitud.lineaId);
-        const diferidaHasta = Math.max(
-            0,
-            Number(estado.diferidaHasta) || 0
-        );
-        if (diferidaHasta > ahora) {
-            proximoVencimiento = Math.min(
-                proximoVencimiento,
-                diferidaHasta
-            );
-            continue;
-        }
-
-        if (
-            !solicitudElegida ||
-            Number(estado.ultimoRechazo || 0) <
-                Number(estadoElegido.ultimoRechazo || 0) ||
-            (
-                Number(estado.ultimoRechazo || 0) ===
-                    Number(estadoElegido.ultimoRechazo || 0) &&
-                (
-                    solicitud.prioridad > solicitudElegida.prioridad ||
-                    (
-                        solicitud.prioridad === solicitudElegida.prioridad &&
-                        solicitud.secuencia < solicitudElegida.secuencia
-                    )
-                )
-            )
-        ) {
-            indiceElegido = indice;
-            solicitudElegida = solicitud;
-            estadoElegido = estado;
-        }
-    }
-
-    if (
-        indiceElegido < 0 &&
-        Number.isFinite(proximoVencimiento)
-    ) {
-        programarTemporizadorProteccionConexion405(proximoVencimiento);
-    }
-    return indiceElegido;
-}
-
-function encolarLineasPendientesConexion405() {
-    for (const lineaId of [...lineasPendientesConexion405]) {
-        const linea = lineas.get(lineaId);
-        const verificandoEstabilidad405 =
-            linea?.estado === 'conectado' &&
-            linea?.conexionEnVerificacion === true &&
-            linea?.sondaConexion405?.epoch === proteccionConexion405.epoch &&
-            proteccionConexion405.estadoLineas.has(lineaId);
-
-        if (verificandoEstabilidad405) {
-            continue;
-        }
-        if (
-            !linea ||
-            linea.eliminando ||
-            linea.estado === 'conectado' ||
-            linea.estado === 'esperando_qr'
-        ) {
-            lineasPendientesConexion405.delete(lineaId);
-            continue;
-        }
-
-        if (
-            linea.iniciando ||
-            linea.temporizadorReconexion ||
-            turnosInicioWhatsAppActivos.has(lineaId) ||
-            colaIniciosWhatsApp.some(item => item.lineaId === lineaId)
-        ) {
-            continue;
-        }
-        encolarInicioWhatsApp(lineaId, {
-            prioridad: 2,
-            motivo: 'recuperación gradual después de rechazo 405'
-        });
-    }
-}
-
-function iniciarRecuperacionConexion405(motivo = 'fin del enfriamiento') {
-    cancelarTemporizadorProteccionConexion405();
-    proteccionConexion405.epoch += 1;
-    proteccionConexion405.bloqueadaHasta = null;
-    proteccionConexion405.recuperacion = true;
-    proteccionConexion405.recuperacionConfirmada = false;
-    proteccionConexion405.motivo = 'recuperacion';
-    proteccionConexion405.exitosRecuperacion = 0;
-    proteccionConexion405.proximoInicioPermitidoEn = Date.now();
-    guardarProteccionConexion405();
-    encolarLineasPendientesConexion405();
-    console.log(
-        `[Conexión] Protección 405: ${motivo}; se probará una línea por vez.`
-    );
-}
-
-function abrirProteccionConexion405({
-    sistemica = false,
-    motivo = 'rechazo_405'
-} = {}) {
-    const ahora = Date.now();
-    let duracion = PAUSA_INICIAL_CONEXION_405_MS;
-
-    if (sistemica) {
-        const indice = Math.min(
-            Math.max(0, Number(proteccionConexion405.nivel) || 0),
-            PAUSAS_SISTEMICAS_CONEXION_405_MS.length - 1
-        );
-        duracion = PAUSAS_SISTEMICAS_CONEXION_405_MS[indice];
-        proteccionConexion405.nivel = Math.min(
-            PAUSAS_SISTEMICAS_CONEXION_405_MS.length,
-            indice + 1
-        );
-    }
-
-    proteccionConexion405.epoch += 1;
-    proteccionConexion405.bloqueadaHasta =
-        new Date(ahora + duracion).toISOString();
-    proteccionConexion405.recuperacion = false;
-    proteccionConexion405.recuperacionConfirmada = false;
-    proteccionConexion405.motivo = motivo;
-    proteccionConexion405.exitosRecuperacion = 0;
-    proteccionConexion405.proximoInicioPermitidoEn = 0;
-    guardarProteccionConexion405();
-    programarTemporizadorProteccionConexion405(ahora + duracion);
-
-    const descripcion = motivo === 'fallo_sonda_405'
-        ? `sonda de recuperación rechazada; pausa preventiva de ${Math.ceil(duracion / 60000)} minuto(s)`
-        : sistemica
-            ? `ráfaga sistémica; pausa global de ${Math.ceil(duracion / 60000)} minuto(s)`
-            : `rechazo aislado; observación de ${Math.ceil(duracion / 1000)} segundos`;
-    console.warn(
-        `[Conexión] Protección 405 activada: ${descripcion}. ` +
-        'Las sesiones se conservaron y no se pedirán códigos QR.'
-    );
-}
-
-function registrarRechazoConexion405(linea, generacionConexion) {
-    const ahora = Date.now();
-    const enRecuperacion = proteccionConexion405.recuperacion === true;
-    const recuperacionConfirmada =
-        proteccionConexion405.recuperacionConfirmada === true;
-    depurarEventosConexion405(ahora);
-    proteccionConexion405.eventosRecientes.set(linea.id, {
-        fecha: ahora,
-        generacion: Number(generacionConexion) || 0
-    });
-    const estadoFalloLinea = registrarFalloLineaConexion405(
-        linea.id,
-        ahora,
-        {
-            diferir:
-                enRecuperacion &&
-                recuperacionConfirmada
-        }
-    );
-    lineasPendientesConexion405.add(linea.id);
-    cancelarTemporizadorReconexion(linea);
-    linea.intentosReconexion = 0;
-    linea.reconexionBloqueada = false;
-    linea.origenBloqueoReconexion = null;
-    linea.estado = 'reconectando';
-    linea.etiqueta = 'caida';
-    linea.conexionEnVerificacion = false;
-    linea.proximoIntentoReconexion = null;
-    linea.ultimoCodigoDesconexion = CODIGO_RECHAZO_CONEXION_405;
-    linea.ultimoError =
-        'WhatsApp rechazó temporalmente la conexión (código 405). ' +
-        'ZeroOne conservará la sesión y esperará antes de probarla nuevamente.';
-    linea.sondaConexion405 = null;
-
-    const enEnfriamiento = proteccionConexion405EnEnfriamiento();
-    const rafaga =
-        proteccionConexion405.eventosRecientes.size >=
-        UMBRAL_RAFAGA_CONEXION_405;
-
-    if (enRecuperacion && !recuperacionConfirmada) {
-        abrirProteccionConexion405({
-            sistemica: true,
-            motivo: 'fallo_sonda_405'
-        });
-    } else if (
-        enRecuperacion &&
-        recuperacionConfirmada &&
-        rafaga
-    ) {
-        abrirProteccionConexion405({
-            sistemica: true,
-            motivo: 'rafaga_405'
-        });
-    } else if (enRecuperacion && recuperacionConfirmada) {
-        proteccionConexion405.motivo = 'linea_405_diferida';
-        proteccionConexion405.proximoInicioPermitidoEn = Math.max(
-            Number(
-                proteccionConexion405.proximoInicioPermitidoEn
-            ) || 0,
-            ahora + ESPACIADO_RECUPERACION_405_MS
-        );
-        console.warn(
-            `[Conexión] ${linea.nombre} seguirá en espera por código 405 ` +
-            `durante ${Math.ceil(
-                (estadoFalloLinea.diferidaHasta - ahora) / 1000
-            )} segundo(s); las demás líneas continuarán.`
-        );
-    } else if (!enEnfriamiento) {
-        abrirProteccionConexion405({
-            sistemica: false,
-            motivo: 'observacion_405'
-        });
-    } else if (
-        rafaga &&
-        proteccionConexion405.motivo === 'observacion_405'
-    ) {
-        abrirProteccionConexion405({
-            sistemica: true,
-            motivo: 'rafaga_405'
-        });
-    }
-
-    encolarInicioWhatsApp(linea.id, {
-        prioridad: enRecuperacion ? 0 : 2,
-        motivo: 'reintento protegido después de 405'
-    });
-    guardarProteccionConexion405();
-    guardarLineas();
-}
-
-function registrarSondaEstableConexion405(
-    lineaId,
-    linea,
-    generacionConexion,
-    socket
-) {
-    const sonda = linea?.sondaConexion405;
-    if (
-        !sonda ||
-        sonda.epoch !== proteccionConexion405.epoch ||
-        sonda.generacion !== generacionConexion ||
-        proteccionConexion405.recuperacion !== true ||
-        !conexionSigueVigente(lineaId, linea, generacionConexion, socket) ||
-        linea.estado !== 'conectado'
-    ) {
-        return false;
-    }
-
-    linea.sondaConexion405 = null;
-    lineasPendientesConexion405.delete(lineaId);
-    limpiarEstadoLineaConexion405(lineaId);
-    if (proteccionConexion405.recuperacionConfirmada !== true) {
-        proteccionConexion405.exitosRecuperacion += 1;
-        proteccionConexion405.proximoInicioPermitidoEn = Date.now();
-
-        if (
-            proteccionConexion405.exitosRecuperacion >=
-            EXITOS_PARA_CERRAR_CIRCUITO_405
-        ) {
-            proteccionConexion405.recuperacionConfirmada = true;
-            console.log(
-                '[Conexión] Protección 405: la recuperación fue confirmada; ' +
-                'la cola continuará gradualmente.'
-            );
-        }
-    }
-
-    guardarProteccionConexion405();
-    programarProcesamientoColaIniciosWhatsApp();
-    return true;
-}
-
-function descartarSondaConexion405(linea) {
-    if (!linea) return false;
-    const teniaSonda = Boolean(linea.sondaConexion405);
-    const estabaPendiente = lineasPendientesConexion405.delete(linea.id);
-    const teniaEstado = limpiarEstadoLineaConexion405(linea.id);
-    linea.sondaConexion405 = null;
-    if (teniaSonda || estabaPendiente || teniaEstado) {
-        guardarProteccionConexion405();
-        programarProcesamientoColaIniciosWhatsApp();
-        return true;
-    }
-    return false;
-}
-
-function cerrarRecuperacionConexion405SiCorresponde() {
-    if (
-        proteccionConexion405.recuperacion !== true ||
-        colaIniciosWhatsApp.length > 0 ||
-        turnosInicioWhatsAppActivos.size > 0 ||
-        lineasPendientesConexion405.size > 0
-    ) {
-        return false;
-    }
-
-    cancelarTemporizadorProteccionConexion405();
-    proteccionConexion405 = {
-        ...crearProteccionConexion405Vacia(),
-        epoch: proteccionConexion405.epoch + 1
-    };
-    guardarProteccionConexion405();
-    console.log(
-        '[Conexión] Protección 405 finalizada: la cola gradual terminó.'
-    );
-    return true;
-}
-
-function prepararRecuperacionInicialConexion405(idsLineas) {
-    const ids = [...new Set(idsLineas || [])]
-        .filter(lineaId => lineas.has(lineaId));
-    if (ids.length === 0) return false;
-
-    for (const lineaId of ids) {
-        lineasPendientesConexion405.add(lineaId);
-        const linea = lineas.get(lineaId);
-        if (!proteccionConexion405.estadoLineas.has(lineaId)) {
-            const ultimaDesconexion = Date.parse(
-                linea.ultimaDesconexion || ''
-            );
-            const tuvoRechazo405 =
-                Number(linea.ultimoCodigoDesconexion) ===
-                CODIGO_RECHAZO_CONEXION_405;
-            proteccionConexion405.estadoLineas.set(lineaId, {
-                ultimoRechazo:
-                    tuvoRechazo405 &&
-                    Number.isFinite(ultimaDesconexion)
-                    ? Math.min(Date.now(), ultimaDesconexion)
-                    : 0,
-                diferidaHasta: 0,
-                fallosConsecutivos:
-                    tuvoRechazo405 &&
-                    Number.isFinite(ultimaDesconexion)
-                        ? 1
-                        : 0
-            });
-        }
-        linea.reconexionBloqueada = false;
-        linea.origenBloqueoReconexion = null;
-        linea.intentosReconexion = 0;
-        linea.proximoIntentoReconexion = null;
-        cancelarTemporizadorReconexion(linea);
-    }
-
-    if (!proteccionConexion405EnEnfriamiento()) {
-        proteccionConexion405.epoch += 1;
-        proteccionConexion405.recuperacion = true;
-        proteccionConexion405.recuperacionConfirmada = false;
-        proteccionConexion405.bloqueadaHasta = null;
-        proteccionConexion405.motivo = 'recuperacion_restaurada';
-        proteccionConexion405.exitosRecuperacion = 0;
-        proteccionConexion405.proximoInicioPermitidoEn = Date.now();
-    }
-
-    guardarProteccionConexion405();
-    return true;
-}
-
-function permitirProcesarColaConexion405() {
-    const bloqueadaHasta = obtenerBloqueoProteccionConexion405Ms();
-    if (bloqueadaHasta > Date.now()) {
-        programarTemporizadorProteccionConexion405(bloqueadaHasta);
-        return false;
-    }
-
-    if (bloqueadaHasta > 0) {
-        iniciarRecuperacionConexion405('terminó el enfriamiento');
-    }
-
-    if (proteccionConexion405.recuperacion === true) {
-        encolarLineasPendientesConexion405();
-        const sondaEnVerificacion = [...lineas.values()].some(linea =>
-            linea.sondaConexion405 &&
-            linea.sondaConexion405.epoch === proteccionConexion405.epoch &&
-            linea.estado === 'conectado' &&
-            linea.conexionEnVerificacion === true
-        );
-        if (
-            proteccionConexion405.recuperacionConfirmada !== true &&
-            sondaEnVerificacion
-        ) {
-            return false;
-        }
-
-        const siguiente = Math.max(
-            0,
-            Number(proteccionConexion405.proximoInicioPermitidoEn) || 0
-        );
-        if (siguiente > Date.now()) {
-            programarTemporizadorProteccionConexion405(siguiente);
-            return false;
-        }
-    }
-
-    return true;
-}
-
 function prioridadInicioWhatsApp(lineaId, prioridadSolicitada = 0) {
     let prioridad = Math.max(0, Number(prioridadSolicitada) || 0);
 
@@ -10756,8 +9739,6 @@ function encolarInicioWhatsApp(
 }
 
 function obtenerLimiteIniciosWhatsApp() {
-    if (proteccionConexion405.recuperacion === true) return 1;
-
     return Math.max(
         1,
         Number(
@@ -10769,22 +9750,12 @@ function obtenerLimiteIniciosWhatsApp() {
 }
 
 function procesarColaIniciosWhatsApp() {
-    if (!permitirProcesarColaConexion405()) return;
-
     while (
         turnosInicioWhatsAppActivos.size <
             obtenerLimiteIniciosWhatsApp() &&
         colaIniciosWhatsApp.length > 0
     ) {
-        const indiceSolicitud =
-            proteccionConexion405.recuperacion === true
-                ? obtenerIndiceSolicitudRecuperacion405()
-                : 0;
-        if (indiceSolicitud < 0) break;
-        const [solicitud] = colaIniciosWhatsApp.splice(
-            indiceSolicitud,
-            1
-        );
+        const solicitud = colaIniciosWhatsApp.shift();
         const linea = lineas.get(solicitud.lineaId);
 
         if (
@@ -10798,260 +9769,34 @@ function procesarColaIniciosWhatsApp() {
         const turno = {
             token: ++secuenciaInicioWhatsApp,
             lineaId: solicitud.lineaId,
-            motivo: solicitud.motivo,
-            sondaConexion405:
-                proteccionConexion405.recuperacion === true &&
-                (
-                    proteccionConexion405.recuperacionConfirmada !== true ||
-                    proteccionConexion405.estadoLineas.has(
-                        solicitud.lineaId
-                    )
-                ),
-            epochConexion405: proteccionConexion405.epoch
+            motivo: solicitud.motivo
         };
         turnosInicioWhatsAppActivos.set(solicitud.lineaId, turno);
 
-        const inicio = iniciarWhatsApp(solicitud.lineaId, turno);
-        turno.generacionConexion = linea.generacionConexion;
-        if (proteccionConexion405.recuperacion === true) {
-            proteccionConexion405.proximoInicioPermitidoEn =
-                Date.now() + ESPACIADO_RECUPERACION_405_MS;
-            if (turno.sondaConexion405) {
-                linea.sondaConexion405 = {
-                    epoch: turno.epochConexion405,
-                    generacion: turno.generacionConexion
-                };
-            }
-        }
-
-        Promise.resolve(inicio).then(inicioPendiente => {
+        Promise.resolve(
+            iniciarWhatsApp(solicitud.lineaId, turno)
+        ).then(inicioPendiente => {
             if (inicioPendiente !== true) {
                 liberarTurnoInicioWhatsApp(solicitud.lineaId, turno);
             }
         }).catch(error => {
-            const turnoSigueVigente =
-                turnosInicioWhatsAppActivos.get(solicitud.lineaId) ===
-                    turno &&
-                linea.generacionConexion === turno.generacionConexion;
             liberarTurnoInicioWhatsApp(solicitud.lineaId, turno);
-            if (turnoSigueVigente) {
-                try {
-                    recuperarFalloInesperadoInicioWhatsApp(
-                        linea,
-                        error,
-                        turno.generacionConexion
-                    );
-                } catch (errorRecuperacion) {
-                    linea.iniciando = false;
-                    linea.reconexionManualEnCurso = false;
-                    console.error(
-                        `No se pudo sanear el inicio de ${linea.nombre}:`,
-                        errorRecuperacion
-                    );
-                }
-            }
             console.error(
                 `No se pudo iniciar el turno de conexión de ${linea.nombre}:`,
                 error
             );
         });
-
-        if (proteccionConexion405.recuperacion === true) break;
     }
-
-    cerrarRecuperacionConexion405SiCorresponde();
 }
 
 function invalidarConexionActual(linea) {
     cancelarInicioWhatsAppPendiente(linea?.id, { liberarActivo: true });
-    if (linea?.eliminando) {
-        preparacionesEstadoAutenticacion.delete(linea.id);
-    }
     cancelarTemporizadorIntentoConexion(linea);
     cancelarTemporizadorEstabilidadConexion(linea);
     cancelarGuardadoActividadContactos(linea, true);
     linea.promesaActividadContactos = Promise.resolve();
     linea.generacionConexion = (Number(linea.generacionConexion) || 0) + 1;
     return linea.generacionConexion;
-}
-
-function recuperarFalloInesperadoInicioWhatsApp(
-    linea,
-    error,
-    generacionEsperada
-) {
-    if (
-        !linea ||
-        lineas.get(linea.id) !== linea ||
-        linea.eliminando ||
-        linea.generacionConexion !== generacionEsperada
-    ) {
-        return false;
-    }
-
-    const socketAnterior = linea.socket;
-    try {
-        invalidarConexionActual(linea);
-    } catch {
-        cancelarInicioWhatsAppPendiente(linea.id, { liberarActivo: true });
-        cancelarTemporizadorIntentoConexion(linea);
-        cancelarTemporizadorEstabilidadConexion(linea);
-        linea.generacionConexion =
-            (Number(linea.generacionConexion) || 0) + 1;
-    }
-
-    linea.iniciando = false;
-    linea.reconexionManualEnCurso = false;
-    linea.socket = null;
-    linea.jid = null;
-    linea.qr = null;
-    linea.estado = 'desconectado';
-    linea.etiqueta = 'caida';
-    linea.conexionEnVerificacion = false;
-    linea.ultimaDesconexion = new Date().toISOString();
-    linea.ultimoCodigoDesconexion = DisconnectReason.timedOut;
-    linea.ultimoError =
-        `No se pudo preparar la conexión: ` +
-        `${error?.message || 'error interno desconocido'}.`;
-    linea.reiniciosRequeridos = 0;
-
-    cerrarSocketSeguro(
-        socketAnterior,
-        'Fallo inesperado durante la preparación de la conexión'
-    );
-    guardarLineas();
-    programarReconexionAutomatica(
-        linea.id,
-        linea.ultimoError,
-        DisconnectReason.timedOut
-    );
-    return true;
-}
-
-function obtenerPreparacionEstadoAutenticacion(linea, carpetaSesion) {
-    const existente = preparacionesEstadoAutenticacion.get(linea.id);
-    if (existente?.carpetaSesion === carpetaSesion) return existente;
-
-    const entrada = {
-        carpetaSesion,
-        promesa: null,
-        completada: false,
-        resultado: null,
-        error: null,
-        agotada: false
-    };
-    entrada.promesa = Promise.resolve()
-        .then(() => useMultiFileAuthState(carpetaSesion))
-        .then(resultado => {
-            entrada.completada = true;
-            entrada.resultado = resultado;
-            return resultado;
-        }, error => {
-            entrada.completada = true;
-            entrada.error = error;
-            throw error;
-        });
-    preparacionesEstadoAutenticacion.set(linea.id, entrada);
-
-    entrada.promesa.then(
-        () => programarReanudacionPreparacionAutenticacion(
-            linea.id,
-            entrada
-        ),
-        () => programarReanudacionPreparacionAutenticacion(
-            linea.id,
-            entrada
-        )
-    );
-    return entrada;
-}
-
-function programarReanudacionPreparacionAutenticacion(lineaId, entrada) {
-    const temporizador = setTimeout(() => {
-        if (preparacionesEstadoAutenticacion.get(lineaId) !== entrada) {
-            return;
-        }
-        if (!entrada.agotada) return;
-
-        const linea = lineas.get(lineaId);
-        if (!linea || linea.eliminando) {
-            preparacionesEstadoAutenticacion.delete(lineaId);
-            return;
-        }
-
-        if (entrada.error) {
-            // La siguiente preparación podrá intentar una lectura nueva, pero
-            // nunca habrá dos operaciones sobre la carpeta al mismo tiempo.
-            preparacionesEstadoAutenticacion.delete(lineaId);
-        }
-
-        if (
-            linea.estado === 'conectado' ||
-            linea.iniciando ||
-            turnosInicioWhatsAppActivos.has(lineaId)
-        ) {
-            return;
-        }
-
-        encolarInicioWhatsApp(lineaId, {
-            prioridad: linea.reconexionManualEnCurso ? 3 : 1,
-            motivo: 'preparación local completada'
-        });
-    }, 0);
-    temporizador.unref?.();
-}
-
-function preparacionAutenticacionLocalPendiente(lineaId) {
-    const entrada = preparacionesEstadoAutenticacion.get(lineaId);
-    // La entrada sigue siendo dueña de la lectura hasta que la reanudación
-    // automática la consuma. Aunque la promesa ya haya terminado, permitir una
-    // reconexión manual en esta ventana podría abrir dos sockets para la misma
-    // carpeta de sesión.
-    return Boolean(entrada?.agotada);
-}
-
-async function cargarEstadoAutenticacionConLimite(
-    linea,
-    carpetaSesion
-) {
-    const entrada = obtenerPreparacionEstadoAutenticacion(
-        linea,
-        carpetaSesion
-    );
-    let temporizador = null;
-    const limite = new Promise((_resolve, reject) => {
-        temporizador = setTimeout(() => {
-            entrada.agotada = true;
-            const error = new Error(
-                `La preparación local de ${linea.nombre} no respondió en ` +
-                `${TIEMPO_MAXIMO_PREPARACION_CONEXION_MS / 1000} segundos.`
-            );
-            error.codigo = 'PREPARACION_CONEXION_AGOTADA';
-            reject(error);
-        }, TIEMPO_MAXIMO_PREPARACION_CONEXION_MS);
-        temporizador.unref?.();
-    });
-
-    try {
-        const resultado = await Promise.race([
-            entrada.promesa,
-            limite
-        ]);
-        if (preparacionesEstadoAutenticacion.get(linea.id) === entrada) {
-            preparacionesEstadoAutenticacion.delete(linea.id);
-        }
-        return resultado;
-    } catch (error) {
-        if (
-            entrada.completada &&
-            preparacionesEstadoAutenticacion.get(linea.id) === entrada
-        ) {
-            preparacionesEstadoAutenticacion.delete(linea.id);
-        }
-        throw error;
-    } finally {
-        if (temporizador) clearTimeout(temporizador);
-    }
 }
 
 function conexionSigueVigente(lineaId, linea, generacion, socket = null) {
@@ -11091,12 +9836,6 @@ function programarConfirmacionEstabilidad(lineaId, linea, generacion, socket) {
         if (linea.ultimoError === mensajeAlProgramar) {
             linea.ultimoError = null;
         }
-        registrarSondaEstableConexion405(
-            lineaId,
-            linea,
-            generacion,
-            socket
-        );
         guardarLineas();
     }, VENTANA_ESTABILIDAD_CONEXION_MS);
 }
@@ -11167,11 +9906,6 @@ function bloquearReconexionAutomatica(
 ) {
     cancelarTemporizadorReconexion(linea);
     invalidarConexionActual(linea);
-    // Una sonda puede agotar su watchdog sin recibir `open` ni `close`.
-    // Al detener definitivamente esa línea, también debe salir del circuito
-    // 405; de lo contrario queda como pendiente para siempre e impide
-    // finalizar la recuperación global.
-    descartarSondaConexion405(linea);
     linea.socket = null;
     linea.jid = null;
     linea.qr = null;
@@ -11182,10 +9916,7 @@ function bloquearReconexionAutomatica(
     linea.etiqueta = 'caida';
     linea.conexionEnVerificacion = false;
     linea.reconexionBloqueada = true;
-    linea.origenBloqueoReconexion =
-        ['agotamiento', 'fatal', 'manual'].includes(origen)
-            ? origen
-            : 'fatal';
+    linea.origenBloqueoReconexion = normalizarOrigenBloqueoReconexion(origen);
     linea.ultimoCodigoDesconexion = codigo !== null &&
         codigo !== undefined &&
         Number.isFinite(Number(codigo))
@@ -11229,8 +9960,18 @@ function programarReconexionAutomatica(
     }
 
     const siguienteIntento = intentosRealizados + 1;
-    const retrasoCalculado = RETRASOS_RECONEXION_MS[intentosRealizados] ||
-        RETRASOS_RECONEXION_MS[RETRASOS_RECONEXION_MS.length - 1];
+    const esRechazo405 = Number(codigo) === CODIGO_RECHAZO_CONEXION_405;
+    const esVinculacionNueva = linea.sesionRegistrada === false;
+    const esRechazoVinculacion = esRechazo405 && esVinculacionNueva;
+    // La espera larga protege sesiones que ya estaban vinculadas. Aplicarla a
+    // un vínculo sin QR convertía un rechazo transitorio en minutos sin que el
+    // usuario pudiera siquiera recibir el primer código.
+    const aplicarEsperaLarga405 = esRechazo405 && !esVinculacionNueva;
+    const retrasosAplicables = aplicarEsperaLarga405
+        ? RETRASOS_RECONEXION_405_MS
+        : RETRASOS_RECONEXION_MS;
+    const retrasoCalculado = retrasosAplicables[intentosRealizados] ||
+        retrasosAplicables[retrasosAplicables.length - 1];
     const tieneRetrasoForzado = retrasoForzadoMs !== null &&
         retrasoForzadoMs !== undefined &&
         Number.isFinite(Number(retrasoForzadoMs));
@@ -11239,18 +9980,35 @@ function programarReconexionAutomatica(
         : retrasoCalculado;
     const jitter = tieneRetrasoForzado
         ? 0
-        : crypto.randomInt(0, JITTER_MAXIMO_RECONEXION_MS + 1);
+        : crypto.randomInt(
+            0,
+            (aplicarEsperaLarga405
+                ? JITTER_MAXIMO_RECONEXION_405_MS
+                : JITTER_MAXIMO_RECONEXION_MS) + 1
+        );
     const retraso = retrasoBase + jitter;
     linea.estado = 'reconectando';
-    linea.etiqueta = 'caida';
+    linea.etiqueta = esRechazoVinculacion ? 'indefinida' : 'caida';
     linea.conexionEnVerificacion = false;
+    if (esRechazoVinculacion) {
+        // No se borran credenciales: antes del QR todavía no hay una sesión
+        // registrada. Sólo se fuerza una comprobación nueva de versión antes
+        // de crear el siguiente socket.
+        linea.refrescarVersionVinculacion = true;
+    }
     linea.ultimoCodigoDesconexion = codigo !== null &&
         codigo !== undefined &&
         Number.isFinite(Number(codigo))
         ? Number(codigo)
         : null;
     linea.proximoIntentoReconexion = new Date(Date.now() + retraso).toISOString();
-    linea.ultimoError = `${mensaje || 'La línea se desconectó.'} ` +
+    linea.ultimoError = `${mensaje || 'La línea se desconectó.'}` +
+        (esRechazoVinculacion
+            ? ' WhatsApp rechazó el vínculo antes de entregar un QR; se reintentará con una versión actual del protocolo.'
+            : aplicarEsperaLarga405
+            ? ' El reintento por código 405 quedó aislado a esta línea.'
+            : '') +
+        ' ' +
         `Reintento automático ${siguienteIntento} de ${MAXIMOS_INTENTOS_RECONEXION}.`;
 
     linea.temporizadorReconexion = setTimeout(() => {
@@ -11328,12 +10086,6 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
     if (lineaParticipaEnPublicacionActiva(linea)) {
         return false;
     }
-    if (
-        obtenerEstadoProteccionConexion405().pausada ||
-        proteccionConexion405.estadoLineas.has(linea.id)
-    ) {
-        return false;
-    }
 
     const socketAnterior = linea.socket;
 
@@ -11365,11 +10117,7 @@ function solicitarReconexionManual(linea, retrasoMs = 350) {
         if (
             !actual ||
             actual.eliminando ||
-            !actual.reconexionManualEnCurso ||
-            actual.socket ||
-            actual.iniciando ||
-            ['conectado', 'esperando_qr'].includes(actual.estado) ||
-            turnosInicioWhatsAppActivos.has(actual.id)
+            !actual.reconexionManualEnCurso
         ) return;
 
         encolarInicioWhatsApp(actual.id, {
@@ -11435,70 +10183,59 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
     const generacionConexion = (Number(linea.generacionConexion) || 0) + 1;
     linea.generacionConexion = generacionConexion;
 
+    asegurarAudienciaEstados(linea);
+    asegurarActividadContactos(linea);
+
+    const conservarEstadoDesconectado =
+        ['desconectado', 'reconectando'].includes(linea.estado);
+
+    linea.iniciando = true;
+
+    if (!conservarEstadoDesconectado) {
+        linea.estado = 'iniciando';
+    }
+
+    linea.qr = null;
+
+    const carpetaSesion = resolverCarpetaSesionSegura(lineaId);
+
+    if (!carpetaSesion) {
+        linea.iniciando = false;
+        linea.estado = 'error';
+        linea.ultimoError = 'El identificador guardado de la línea no es válido.';
+        guardarLineas();
+        return false;
+    }
+
     try {
-        asegurarAudienciaEstados(linea);
-
-        const conservarEstadoDesconectado =
-            ['desconectado', 'reconectando'].includes(linea.estado);
-
-        linea.iniciando = true;
-
-        if (!conservarEstadoDesconectado) {
-            linea.estado = 'iniciando';
-        }
-
-        linea.qr = null;
-
-        const carpetaSesion = resolverCarpetaSesionSegura(lineaId);
-
-        if (!carpetaSesion) {
-            linea.iniciando = false;
-            linea.reconexionManualEnCurso = false;
-            linea.estado = 'error';
-            linea.ultimoError =
-                'El identificador guardado de la línea no es válido.';
-            guardarLineas();
-            return false;
-        }
-
-        const { state, saveCreds } =
-            await cargarEstadoAutenticacionConLimite(
-                linea,
-                carpetaSesion
-            );
+        const { state, saveCreds } = await useMultiFileAuthState(carpetaSesion);
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
-            return false;
-        }
-
-        if (
-            proteccionConexion405EnEnfriamiento() ||
-            (
-                proteccionConexion405.recuperacion === true &&
-                turnoInicio &&
-                turnoInicio.epochConexion405 !== proteccionConexion405.epoch
-            )
-        ) {
-            linea.iniciando = false;
-            linea.estado = 'reconectando';
-            const temporizador = setTimeout(() => {
-                encolarInicioWhatsApp(lineaId, {
-                    prioridad: 1,
-                    motivo: 'inicio aparcado por protección 405'
-                });
-            }, 0);
-            temporizador.unref?.();
             return false;
         }
 
         const sesionExistente = state.creds.registered === true;
         linea.sesionRegistrada = sesionExistente;
 
+        // Los vínculos nuevos son el único momento en que necesitamos una
+        // versión de Web actual. Las sesiones ya registradas conservan su
+        // arranque habitual para no alterar conexiones existentes.
+        const versionVinculacion = !sesionExistente
+            ? await obtenerVersionVinculacionWhatsApp({
+                forzar: linea.refrescarVersionVinculacion === true
+            })
+            : null;
+        linea.refrescarVersionVinculacion = false;
+
+        if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
+            return false;
+        }
+
         // Agendamiento trabaja únicamente con mensajes nuevos y con los
         // bloques recientes que WhatsApp entregue de forma normal. Nunca
         // reinicia ni vuelve a vincular una sesión para pedir historial FULL.
         linea.modoHistorialAgendamiento = false;
 
-        const sock = makeWASocket({
+        const configuracionSocket = {
             auth: state,
             logger: pino({ level: 'silent' }),
             browser: Browsers.windows('Desktop'),
@@ -11508,7 +10245,12 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                     TIPO_HISTORIAL_COMPLETO,
                     TIPO_HISTORIAL_BAJO_DEMANDA
                 ].includes(mensajeHistorial?.syncType)
-        });
+        };
+        if (versionVinculacion) {
+            configuracionSocket.version = versionVinculacion;
+        }
+
+        const sock = makeWASocket(configuracionSocket);
 
         linea.socket = sock;
         linea.iniciando = false;
@@ -11771,7 +10513,6 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                     cancelarTemporizadorIntentoConexion(linea);
                     linea.qr = qrGenerado;
                     linea.estado = 'esperando_qr';
-                    descartarSondaConexion405(linea);
                     if (
                         sincronizacionHistorialAgendamientoActiva?.lineaId === lineaId &&
                         linea.modoHistorialAgendamiento === true
@@ -11800,16 +10541,10 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
             }
 
             if (connection === 'open') {
-                const sondaConexion405 =
-                    linea.sondaConexion405?.epoch ===
-                        proteccionConexion405.epoch &&
-                    linea.sondaConexion405?.generacion ===
-                        generacionConexion;
                 const debeVerificarEstabilidad =
                     linea.conexionEnVerificacion === true ||
                     linea.reconexionManualEnCurso ||
-                    (Number(linea.intentosReconexion) || 0) > 0 ||
-                    sondaConexion405;
+                    (Number(linea.intentosReconexion) || 0) > 0;
                 cancelarReintentoAudiencia(linea);
                 cancelarTemporizadorReconexion(linea);
                 cancelarTemporizadorIntentoConexion(linea);
@@ -12005,9 +10740,6 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 linea.conexionEnVerificacion = false;
                 linea.ultimaDesconexion = new Date().toISOString();
                 linea.ultimoCodigoDesconexion = codigoError;
-                if (codigoError !== CODIGO_RECHAZO_CONEXION_405) {
-                    descartarSondaConexion405(linea);
-                }
 
                 console.warn(
                     `[Conexión] ${linea.nombre} cerró su socket ` +
@@ -12027,16 +10759,9 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                         'Esperando el resultado para conservar cualquier ID devuelto y evitar duplicados.';
                 }
 
-                if (codigoError === CODIGO_RECHAZO_CONEXION_405) {
-                    registrarRechazoConexion405(
-                        linea,
-                        generacionConexion
-                    );
-                } else if (codigoError === DisconnectReason.restartRequired) {
+                if (codigoError === DisconnectReason.restartRequired) {
                     programarReinicioSolicitado(lineaId, mensajeDesconexion);
                 } else if (codigoError === DisconnectReason.loggedOut) {
-                    lineasPendientesConexion405.delete(lineaId);
-                    linea.sondaConexion405 = null;
                     linea.etiqueta = 'caida';
                     linea.reiniciosRequeridos = 0;
                     registrarCorteDesconexion(
@@ -12069,8 +10794,6 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                         'sesion_cerrada'
                     );
                 } else if (CODIGOS_DESCONEXION_FATAL.has(codigoError)) {
-                    lineasPendientesConexion405.delete(lineaId);
-                    linea.sondaConexion405 = null;
                     linea.etiqueta = 'caida';
                     linea.reiniciosRequeridos = 0;
                     registrarCorteDesconexion(
@@ -12147,45 +10870,19 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
             });
         }
 
-        const preparacionLocalAgotada =
-            error?.codigo === 'PREPARACION_CONEXION_AGOTADA';
-        const codigoErrorInicio = obtenerCodigoError(error);
         invalidarConexionActual(linea);
         linea.iniciando = false;
         linea.reconexionManualEnCurso = false;
         linea.socket = null;
         linea.jid = null;
-
-        if (preparacionLocalAgotada) {
-            descartarSondaConexion405(linea);
-            linea.estado = 'reconectando';
-            linea.conexionEnVerificacion = false;
-            linea.ultimoCodigoDesconexion = null;
-            linea.ultimoError =
-                `${error.message} La cola continuará con las demás líneas ` +
-                'y esta sesión se retomará cuando termine la lectura local.';
-            guardarLineas();
-            console.warn(
-                `[Conexión] ${linea.nombre}: preparación local pendiente; ` +
-                'no se contabilizó como caída de WhatsApp.'
-            );
-            return false;
-        }
-
         linea.estado = 'desconectado';
         linea.etiqueta = 'caida';
         linea.conexionEnVerificacion = false;
         linea.ultimaDesconexion = new Date().toISOString();
-        linea.ultimoCodigoDesconexion = codigoErrorInicio;
+        linea.ultimoCodigoDesconexion = obtenerCodigoError(error);
         linea.ultimoError = error.message || 'No se pudo iniciar la línea.';
         linea.reiniciosRequeridos = 0;
-        if (codigoErrorInicio === CODIGO_RECHAZO_CONEXION_405) {
-            registrarRechazoConexion405(
-                linea,
-                generacionConexion
-            );
-        } else if (CODIGOS_DESCONEXION_FATAL.has(linea.ultimoCodigoDesconexion)) {
-            descartarSondaConexion405(linea);
+        if (CODIGOS_DESCONEXION_FATAL.has(linea.ultimoCodigoDesconexion)) {
             registrarCorteDesconexion(
                 linea,
                 linea.ultimoError,
@@ -12197,7 +10894,6 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
                 linea.ultimoCodigoDesconexion
             );
         } else {
-            descartarSondaConexion405(linea);
             guardarLineas();
             programarReconexionAutomatica(
                 lineaId,
@@ -12409,18 +11105,17 @@ async function ejecutarPublicacion({
         const imagenLeida = fs.readFileSync(rutaImagen);
         const textoLimpio = String(texto || '').trim();
         registroHistorial = crearRegistroHistorial({
-            idsLineas,
-            rutaImagen,
-            texto: textoLimpio,
-            modoRitmo,
-            intervaloSegundos,
-            variacionSegundos,
-            lineasPorGrupo,
-            intervaloMinutos,
-            maximoDestinatariosPorEstado,
+        idsLineas,
+        rutaImagen,
+        texto: textoLimpio,
+        modoRitmo,
+        intervaloSegundos,
+        variacionSegundos,
+        lineasPorGrupo,
+        intervaloMinutos,
+        maximoDestinatariosPorEstado,
             origen
         });
-        guardarCheckpointInicial(registroHistorial);
         marcarReintentoHistorial(
             historialOrigenId,
             idsLineas,
@@ -12479,20 +11174,10 @@ async function ejecutarPublicacion({
         mensaje: 'Preparando publicación...'
     };
 
-        if (fallosIniciales.length > 0) {
-            persistirCambioCheckpoint(
-                registroHistorial,
-                actual => fallosIniciales.reduce(
-                    (acumulado, fallo) =>
-                        registrarResultadoDefinitivo(
-                            acumulado,
-                            'fallida',
-                            fallo
-                        ),
-                    actual
-                )
-            );
-        }
+        // Antes de esperar decisiones, audiencias o conexiones, dejamos una
+        // copia completa de la campaña. A partir de este punto un reinicio no
+        // puede perder qué líneas siguen pendientes.
+        crearCheckpointInicialPublicacion(registroHistorial);
 
         if (noDisponibles.length > 0) {
             const primera = noDisponibles[0];
@@ -12610,10 +11295,11 @@ async function ejecutarPublicacion({
                     indice: progresoPublicacion.procesadas + 1,
                     total
                 };
-                marcarCheckpointLineaEnCurso(
-                    registroHistorial,
-                    linea
-                );
+
+                // Preparación se registra antes de realizar cualquier paso
+                // que pueda terminar en un envío. Si la app se apaga aquí,
+                // esta línea será segura de reanudar manualmente.
+                marcarCheckpointPreparacion(registroHistorial, linea);
 
                 let socketUsado = null;
                 let numeroUsado = null;
@@ -12740,52 +11426,55 @@ async function ejecutarPublicacion({
                     if (textoLimpio) contenido.caption = textoLimpio;
 
                     fase = 'envio';
-                    huboIntentoEnvioGrupo = true;
+                    // Punto de no retorno: el journal queda en "envío" y
+                    // respaldado antes de llamar a WhatsApp. Si el proceso se
+                    // interrumpe desde aquí, la línea nunca se reenviará sola.
                     marcarCheckpointEnvioEnCurso(registroHistorial);
-                    progresoPublicacion.envioEnCurso = true;
+                    huboIntentoEnvioGrupo = true;
+                    const promesaEnvioRegistrado = Promise.resolve(
+                        socketUsado.sendMessage(
+                            'status@broadcast',
+                            contenido,
+                            {
+                                statusJidList: destinatariosEstado,
+                                broadcast: true,
+                                useUserDevicesCache: true
+                            }
+                        )
+                    ).then(mensajeEstado => {
+                        try {
+                            registrarEstadoActivo(
+                                registroHistorial,
+                                linea,
+                                mensajeEstado,
+                                destinatariosEstado,
+                                numeroUsado
+                            );
+                        } catch (errorRegistro) {
+                            throw crearErrorPublicacion(
+                                'REGISTRO_ESTADO_FALLIDO',
+                                'registro_local',
+                                `La operación devolvió un ID de estado para ${linea.nombre}, ` +
+                                    `pero no se pudo guardar su ID: ${errorRegistro.message}`,
+                                {
+                                    fasePublicacion: 'registro',
+                                    reintentable: false,
+                                    envioConfirmado: true,
+                                    envioIncierto: false,
+                                    reintentoSeguro: false,
+                                    causa: errorRegistro
+                                }
+                            );
+                        }
+
+                        return mensajeEstado;
+                    });
+
                     let mensajeEstadoConfirmado = null;
                     let confirmacionManual = false;
                     let confirmacionManualEn = null;
-                    let promesaEnvioRegistrado = null;
+                    progresoPublicacion.envioEnCurso = true;
                     try {
-                        promesaEnvioRegistrado = Promise.resolve(
-                            socketUsado.sendMessage(
-                                'status@broadcast',
-                                contenido,
-                                {
-                                    statusJidList: destinatariosEstado,
-                                    broadcast: true,
-                                    useUserDevicesCache: true
-                                }
-                            )
-                        ).then(mensajeEstado => {
-                            try {
-                                registrarEstadoActivo(
-                                    registroHistorial,
-                                    linea,
-                                    mensajeEstado,
-                                    destinatariosEstado,
-                                    numeroUsado
-                                );
-                            } catch (errorRegistro) {
-                                throw crearErrorPublicacion(
-                                    'REGISTRO_ESTADO_FALLIDO',
-                                    'registro_local',
-                                    `La operación devolvió un ID de estado para ${linea.nombre}, ` +
-                                        `pero no se pudo guardar su ID: ${errorRegistro.message}`,
-                                    {
-                                        fasePublicacion: 'registro',
-                                        reintentable: false,
-                                        envioConfirmado: true,
-                                        envioIncierto: false,
-                                        reintentoSeguro: false,
-                                        causa: errorRegistro
-                                    }
-                                );
-                            }
-
-                            return mensajeEstado;
-                        });
                         try {
                             mensajeEstadoConfirmado =
                                 await esperarOperacionPublicacion(
@@ -12895,15 +11584,14 @@ async function ejecutarPublicacion({
                     );
                     fase = 'registro';
 
-                    const publicadoEn = new Date().toISOString();
-                    const resultadoCorrecto = {
+                    progresoPublicacion.correctas += 1;
+                    progresoPublicacion.lineasCorrectas.push({
                         id: linea.id,
                         nombre: linea.nombre,
                         estadoId:
                             mensajeEstadoConfirmado?.key?.id || null,
                         confirmacionManual,
                         confirmacionManualEn,
-                        publicadoEn,
                         numero: numeroUsado ||
                             (linea.jid ? linea.jid.split('@')[0] : null),
                         destinatarios:
@@ -12930,23 +11618,19 @@ async function ejecutarPublicacion({
                         priorizacionAudiencia:
                             linea.ultimaSeleccionAudienciaEstado
                                 ?.priorizacionAudiencia || null
-                    };
-                    progresoPublicacion.correctas += 1;
-                    progresoPublicacion.lineasCorrectas.push(
-                        resultadoCorrecto
-                    );
-                    linea.ultimaPublicacion = publicadoEn;
-                    linea.ultimoError = null;
-                    linea.fallosRecientes = 0;
-                    registrarCheckpointDefinitivo(
+                    });
+                    // registrarEstadoActivo ya dejó el ID real en disco. Ahora
+                    // el journal confirma esta línea antes de avanzar a otra.
+                    registrarResultadoCheckpointPublicacion(
                         registroHistorial,
                         'correcta',
-                        resultadoCorrecto,
-                        {
-                            envioConfirmado: true,
-                            resultadoCorrecto
-                        }
+                        progresoPublicacion.lineasCorrectas[
+                            progresoPublicacion.lineasCorrectas.length - 1
+                        ]
                     );
+                    linea.ultimaPublicacion = new Date().toISOString();
+                    linea.ultimoError = null;
+                    linea.fallosRecientes = 0;
                     consumirCorteDesconexionConResultadoConfirmado(
                         linea.id
                     );
@@ -12965,13 +11649,6 @@ async function ejecutarPublicacion({
 
                     if (error?.codigo === 'DETENIDA_ALTO_TOTAL') {
                         contabilizarLinea = false;
-                        throw error;
-                    }
-                    if (
-                        error?.codigo ===
-                            'PERSISTENCIA_CHECKPOINT_FALLIDA' &&
-                        error.resultadoCorrecto
-                    ) {
                         throw error;
                     }
 
@@ -13062,27 +11739,22 @@ async function ejecutarPublicacion({
 
                     progresoPublicacion.fallidas += 1;
                     progresoPublicacion.lineasFallidas.push(fallo);
-                    fallosTotalesGrupo += 1;
-                    linea.ultimoError = fallo.error;
-                    linea.fallosRecientes = (Number(linea.fallosRecientes) || 0) + 1;
                     if (
-                        error?.codigo !==
-                            'PERSISTENCIA_CHECKPOINT_FALLIDA' &&
-                        fallo.envioConfirmado === false &&
-                        fallo.envioIncierto === false
+                        clasificacion.envioConfirmado === false &&
+                        clasificacion.envioIncierto === false
                     ) {
-                        registrarCheckpointDefinitivo(
+                        // Solo los fallos que prueban que no hubo envío se
+                        // marcan definitivos. Los inciertos permanecen en la
+                        // fase envío para que un reinicio nunca los duplique.
+                        registrarResultadoCheckpointPublicacion(
                             registroHistorial,
                             'fallida',
                             fallo
                         );
                     }
-                    if (
-                        error?.codigo ===
-                            'PERSISTENCIA_CHECKPOINT_FALLIDA'
-                    ) {
-                        throw error;
-                    }
+                    fallosTotalesGrupo += 1;
+                    linea.ultimoError = fallo.error;
+                    linea.fallosRecientes = (Number(linea.fallosRecientes) || 0) + 1;
                     if (clasificacion.tipoError === 'envio_omitido_manual') {
                         console.info(
                             `[Publicación] ${linea.nombre}: envío omitido por confirmación manual.`
@@ -14895,7 +13567,6 @@ app.post('/lineas', (req, res) => {
         generacionConexion: 0,
         reiniciosRequeridos: 0,
         reconexionManualEnCurso: false,
-        sondaConexion405: null,
         resincronizandoAudiencia: false,
         fallosPrivacidadPersonalizada: 0,
         modoPrivacidadEstadosInformado: null,
@@ -14917,9 +13588,11 @@ app.post('/lineas', (req, res) => {
         intentosReconexion: 0,
         conexionEnVerificacion: false,
         reconexionBloqueada: false,
+        origenBloqueoReconexion: null,
+        // Las líneas creadas por esta versión no deben confundirse con el
+        // bloqueo heredado que la migración V2 corrige una sola vez.
         versionMigracionReconexionAgotada:
             VERSION_MIGRACION_RECONEXION_AGOTADA,
-        origenBloqueoReconexion: null,
         requiereRevisionEnvio: false,
         motivoRevisionEnvio: null,
         revisionEnvioDesde: null,
@@ -15006,10 +13679,7 @@ app.get('/estado', (req, res) => {
         .map(linea => {
             const evaluacionPublicacion = evaluarLineaParaPublicar(linea);
             const priorizacionAudiencia =
-                obtenerResumenPriorizacionAudiencia(
-                    linea,
-                    { cargar: false }
-                );
+                obtenerResumenPriorizacionAudiencia(linea);
             const destinatariosEstadoTotales =
                 Number(priorizacionAudiencia.audienciaEfectiva) || 0;
             const destinatariosEstadoBase =
@@ -15034,9 +13704,7 @@ app.get('/estado', (req, res) => {
             ultimaPublicacion: linea.ultimaPublicacion || null,
             ultimoError: linea.ultimoError || null,
             ultimoErrorAudiencia: linea.ultimoErrorAudiencia || null,
-            estadoAudiencia: linea.audienciaEstadosCargada
-                ? obtenerEstadoPublicoAudiencia(linea)
-                : 'esperando',
+            estadoAudiencia: obtenerEstadoPublicoAudiencia(linea),
             resincronizandoAudiencia:
                 linea.resincronizandoAudiencia === true,
             intentosResincronizacionAudiencia:
@@ -15086,12 +13754,8 @@ app.get('/estado', (req, res) => {
                 0,
                 destinatariosEstadoTotales - destinatariosEstadoBase
             ),
-            audienciaEstadosLista: audienciaEstadosLista(
-                linea,
-                { cargar: false }
-            ),
+            audienciaEstadosLista: audienciaEstadosLista(linea),
             reparacionPrivacidadDisponible:
-                linea.audienciaEstadosCargada &&
                 puedeReaplicarPrivacidadMisContactos(linea),
             reparandoPrivacidadAudiencia:
                 linea.reparandoPrivacidadAudiencia === true,
@@ -16230,25 +14894,8 @@ registrarRutasConfiguracion(app, {
 });
 
 app.post('/lineas/reconectar-todas', (req, res) => {
-    const estadoProteccion405 = obtenerEstadoProteccionConexion405();
-    if (
-        estadoProteccion405.pausada ||
-        estadoProteccion405.recuperacion
-    ) {
-        return res.status(409).json({
-            codigo: 'CIRCUITO_405_ABIERTO',
-            error:
-                'WhatsApp está rechazando conexiones temporalmente. ' +
-                'ZeroOne conservará las sesiones y las recuperará de forma gradual; ' +
-                'Reconectar todas no puede adelantar este proceso.',
-            bloqueadaHasta: estadoProteccion405.bloqueadaHasta,
-            recuperacion: estadoProteccion405.recuperacion
-        });
-    }
-
     let cantidad = 0;
     let omitidasPorPublicacion = 0;
-    let omitidasPorPreparacionLocal = 0;
 
     for (const linea of lineas.values()) {
         if (
@@ -16257,11 +14904,6 @@ app.post('/lineas/reconectar-todas', (req, res) => {
             linea.reconexionManualEnCurso ||
             historialAgendamientoEnCurso(linea.id)
         ) {
-            continue;
-        }
-
-        if (preparacionAutenticacionLocalPendiente(linea.id)) {
-            omitidasPorPreparacionLocal += 1;
             continue;
         }
 
@@ -16289,15 +14931,8 @@ app.post('/lineas/reconectar-todas', (req, res) => {
             ? `Reconexión iniciada para ${cantidad} línea(s).` +
                 (omitidasPorPublicacion
                     ? ` ${omitidasPorPublicacion} línea(s) de la publicación activa no se modificaron.`
-                    : '') +
-                (omitidasPorPreparacionLocal
-                    ? ` ${omitidasPorPreparacionLocal} línea(s) todavía ` +
-                        'esperan que Windows libere su lectura local.'
                     : '')
-            : omitidasPorPreparacionLocal
-                ? `${omitidasPorPreparacionLocal} línea(s) todavía esperan ` +
-                    'que Windows libere su lectura local.'
-                : 'No hay líneas pendientes de reconexión.'
+            : 'No hay líneas pendientes de reconexión.'
     });
 });
 
@@ -16335,49 +14970,9 @@ app.post('/lineas/:id/reconectar', (req, res) => {
     }
     if (responderConflictoReparacionPrivacidad(res, linea)) return;
 
-    const estadoProteccion405 = obtenerEstadoProteccionConexion405();
-    if (estadoProteccion405.pausada) {
-        return res.status(409).json({
-            codigo: 'CIRCUITO_405_ABIERTO',
-            error:
-                'WhatsApp está rechazando conexiones temporalmente. ' +
-                'ZeroOne conservará esta sesión y la recuperará automáticamente ' +
-                'cuando sea seguro volver a probar.',
-            bloqueadaHasta: estadoProteccion405.bloqueadaHasta,
-            recuperacion: estadoProteccion405.recuperacion
-        });
-    }
-    if (
-        estadoProteccion405.recuperacion &&
-        proteccionConexion405.estadoLineas.has(linea.id)
-    ) {
-        const estadoLinea405 =
-            obtenerEstadoLineaConexion405(linea.id);
-        return res.status(409).json({
-            codigo: 'LINEA_405_DIFERIDA',
-            error:
-                `${linea.nombre} está dentro de la recuperación protegida. ` +
-                'ZeroOne la volverá a probar automáticamente sin afectar a las demás líneas.',
-            reintentarDespuesDe: Number(estadoLinea405.diferidaHasta) > Date.now()
-                ? new Date(estadoLinea405.diferidaHasta).toISOString()
-                : null
-        });
-    }
-
     if (linea.eliminando) {
         return res.status(409).json({
             error: 'La línea se está eliminando y no se puede reconectar.'
-        });
-    }
-
-    if (preparacionAutenticacionLocalPendiente(linea.id)) {
-        return res.status(409).json({
-            codigo: 'PREPARACION_LOCAL_PENDIENTE',
-            error:
-                'Windows todavía no terminó de leer esta sesión. ZeroOne la ' +
-                'retomará automáticamente cuando termine. Si el aviso no ' +
-                'cambia, cerrá ZeroOne desde la bandeja y volvé a abrirlo; ' +
-                'no hace falta vincular nuevamente el QR.'
         });
     }
 
@@ -16488,14 +15083,6 @@ app.delete('/lineas/:id', async (req, res) => {
     }
 
     linea.socket = null;
-    const estabaPendienteConexion405 =
-        lineasPendientesConexion405.delete(id);
-    const teniaEstadoConexion405 =
-        limpiarEstadoLineaConexion405(id);
-    linea.sondaConexion405 = null;
-    if (estabaPendienteConexion405 || teniaEstadoConexion405) {
-        guardarProteccionConexion405();
-    }
     lineas.delete(id);
     try {
         obtenerAlmacenMensajesRecientes()?.eliminarLinea(id);
@@ -16578,7 +15165,6 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
     cargarConfiguracion();
     controladorRendimiento.iniciar();
     cargarProteccionMiddleware();
-    cargarProteccionConexion405();
     cargarClavesIdempotencia();
     if (MODO_FIXTURES_UI) {
         console.log(
@@ -16588,14 +15174,10 @@ app.listen(PUERTO_SERVIDOR, '127.0.0.1', () => {
         cargarEstadosActivos();
         cargarHistorial();
         cargarLineasGuardadas();
-        try {
-            reconciliarPublicacionesInterrumpidas();
-        } catch (error) {
-            console.error(
-                '[Persistencia] No se pudo completar la recuperación de ' +
-                `publicaciones interrumpidas: ${error.message}`
-            );
-        }
+        // Esta recuperación solo reescribe el historial y ofrece una
+        // reanudación manual posterior. No abre sockets ni publica estados.
+        reconciliarPublicacionesInterrumpidas();
+        reconciliarPublicacionesLegadasSinCheckpoint();
 
         for (const linea of lineas.values()) {
             if (linea.reconexionBloqueada) continue;

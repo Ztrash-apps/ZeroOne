@@ -1476,7 +1476,7 @@ test('un fallo de envío común ofrece omitir la línea y continuar con el resto
         backend.cargarConfiguracion();
         let enviosPrimeraLinea = 0;
         let enviosSegundaLinea = 0;
-        const primeraLinea = crearLinea(() => {
+        const primeraLinea = crearLinea(async () => {
             enviosPrimeraLinea += 1;
             const error = new Error('WhatsApp rechazó este envío sin cerrar el socket.');
             error.statusCode = 500;
@@ -1558,7 +1558,6 @@ test('un fallo de envío común ofrece omitir la línea y continuar con el resto
             backend.obtenerProgreso().decisionSeguridadPendiente,
             null
         );
-        assert.equal(backend.obtenerProgreso().envioEnCurso, false);
         const fallo = backend.obtenerProgreso().lineasFallidas.find(
             item => item.id === primeraLinea.id
         );

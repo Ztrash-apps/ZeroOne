@@ -43,7 +43,7 @@ latest.yml
 # Archivos de estado creados al ejecutar el backend desde el repositorio
 /configuracion.json
 /proteccion-publicacion.json
-/migracion-reconexion-agotada-v1.json
+/migracion-reconexion-agotada-v*.json
 /idempotencia-publicacion.json
 /agendamiento.json
 /lineas.json

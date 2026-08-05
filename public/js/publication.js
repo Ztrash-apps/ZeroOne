@@ -256,6 +256,11 @@
                     clase: 'error',
                     icono: 'stop'
                 },
+                interrumpido_reinicio: {
+                    texto: 'Interrumpida por reinicio',
+                    clase: 'warning',
+                    icono: 'alert'
+                },
                 ejecutando: {
                     texto: 'Publicando',
                     clase: '',
@@ -1309,13 +1314,29 @@
                         ? item.lineasFallidas
                         : [];
                     const estadoVisual = describirEstadoHistorial(item.estado);
-                    const puedeReintentar =
-                        item.estado !== 'ejecutando' &&
-                        lineasFallidas.some(fallo =>
+                    const lineasReanudables = lineasFallidas.filter(fallo =>
                             fallo?.envioConfirmado !== true &&
                             fallo?.reintentoSeguro === true &&
                             !fallo?.reintentadaEn
                         );
+                    const puedeReintentar =
+                        item.estado !== 'ejecutando' &&
+                        lineasReanudables.length > 0;
+                    const recuperacion = item.recuperacionReinicio || null;
+                    const pendientesSeguros = Array.isArray(
+                        recuperacion?.idsPendientesSeguros
+                    )
+                        ? recuperacion.idsPendientesSeguros.length
+                        : lineasReanudables.length;
+                    const enviosInciertos = Array.isArray(
+                        recuperacion?.idsEnvioIncierto
+                    )
+                        ? recuperacion.idsEnvioIncierto.length
+                        : 0;
+                    const etiquetaReintento =
+                        item.estado === 'interrumpido_reinicio'
+                            ? `Reanudar ${lineasReanudables.length} pendiente(s)`
+                            : 'Reintentar fallidas';
                     const ritmo = describirRitmoPublicacion(item);
                     const tipoCorte = nombreCausaPublicacion(item.tipoErrorCorte);
                     return `<article class="history-item">
@@ -1327,11 +1348,12 @@
                             </div>
                             <div class="history-meta"><span>${escaparHTML(formatearFecha(item.fechaInicio))}</span><span>${item.total || 0} líneas</span><span class="history-rhythm">${escaparHTML(ritmo.principal)}${ritmo.detalle ? ` · ${escaparHTML(ritmo.detalle)}` : ''}</span>${tipoCorte ? `<span class="result-error-type">${escaparHTML(tipoCorte)}</span>` : ''}</div>
                             <div class="history-results"><span>Correctas: <strong>${item.correctas || 0}</strong></span><span>Fallidas: <strong>${item.fallidas || 0}</strong></span>${Number(item.noProcesadas) > 0 ? `<span>No procesadas: <strong>${Number(item.noProcesadas)}</strong></span>` : ''}</div>
+                            ${item.estado === 'interrumpido_reinicio' ? `<span class="help">Pendientes seguras: ${pendientesSeguros}. ${enviosInciertos > 0 ? `Envíos inciertos para revisar: ${enviosInciertos}.` : 'No hay envíos inciertos.'}</span>` : ''}
                             ${item.error ? `<span class="help">${escaparHTML(item.error)}</span>` : ''}
                             ${detalleFallosHistorial(lineasFallidas)}
                         </div>
                         <div class="history-actions">
-                            <button type="button" class="secondary-button btn-reintentar-historial" data-id="${item.id}" data-disabled-base="${puedeReintentar ? 'false' : 'true'}" ${puedeReintentar ? '' : 'disabled'}>${iconoSVG('refresh')}<span>Reintentar fallidas</span></button>
+                            <button type="button" class="secondary-button btn-reintentar-historial" data-id="${item.id}" data-disabled-base="${puedeReintentar ? 'false' : 'true'}" ${puedeReintentar ? '' : 'disabled'}>${iconoSVG('refresh')}<span>${escaparHTML(etiquetaReintento)}</span></button>
                         </div>
                     </article>`;
                 }).join('');
