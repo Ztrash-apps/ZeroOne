@@ -22,9 +22,17 @@ playwright-report/
 *.msi
 *.msix
 *.appx
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+*.snap
+*.asar
+*.asar.unpacked/
 builder-debug.yml
 builder-effective-config.yaml
-latest.yml
+latest*.yml
 
 # Datos privados y persistentes de ZeroOne
 /datos/
@@ -39,6 +47,21 @@ latest.yml
 /backups/
 /respaldos/
 /copias-seguridad/
+/zeroone-data/
+/zeroone-data-*/
+/zeroone-fixtures/
+
+# Credenciales locales de Google y OAuth cuando se cargan desde el proyecto
+credenciales*.json
+credentials*.json
+client_secret*.json
+oauth*.json
+token*.json
+tokens*.json
+google-credentials*.json
+google-oauth*.json
+service-account*.json
+service_account*.json
 
 # Archivos de estado creados al ejecutar el backend desde el repositorio
 /configuracion.json
@@ -92,6 +115,10 @@ certs/
 *.log
 *.log.*
 *.dmp
+*.heapsnapshot
+*.heapprofile
+*.cpuprofile
+*.trace
 *.zip
 *.tgz
 *.7z
@@ -132,3 +159,6 @@ $RECYCLE.BIN/
 
 # Documento interno antiguo
 /INSTRUCCIONES_AGENDAMIENTO_1.1.1.txt
+
+# Fuente recuperable del manual técnico protegido (nunca se publica)
+/docs-private/

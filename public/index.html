@@ -79,6 +79,8 @@
         <symbol id="i-percent" viewBox="0 0 24 24"><path d="m19 5-14 14"/><circle cx="7" cy="7" r="2.25"/><circle cx="17" cy="17" r="2.25"/></symbol>
         <symbol id="i-activity" viewBox="0 0 24 24"><path d="M2.75 12h4.5l2-6 4 12 2-6h6"/></symbol>
         <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.75 12s3.35-6.25 9.25-6.25S21.25 12 21.25 12 17.9 18.25 12 18.25 2.75 12 2.75 12z"/><circle cx="12" cy="12" r="2.75"/></symbol>
+        <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.25" y="10.25" width="15.5" height="10.5" rx="3"/><path d="M7.75 10.25V7.5a4.25 4.25 0 0 1 8.5 0v2.75M12 14.25v2.5"/></symbol>
+        <symbol id="i-book" viewBox="0 0 24 24"><path d="M4.25 5.75A2.75 2.75 0 0 1 7 3h3.25A2.75 2.75 0 0 1 12 3.65V20.5a2.75 2.75 0 0 0-1.75-.65H7A2.75 2.75 0 0 0 4.25 22z"/><path d="M19.75 5.75A2.75 2.75 0 0 0 17 3h-3.25A2.75 2.75 0 0 0 12 3.65V20.5a2.75 2.75 0 0 1 1.75-.65H17a2.75 2.75 0 0 1 2.75 2.75z"/><path d="M7.25 7.25h2M14.75 7.25h2M7.25 10.5h2M14.75 10.5h2"/></symbol>
     </svg>
 
     <div class="app-shell">
@@ -136,7 +138,7 @@
             <div class="update-panel">
                 <div class="update-panel-header">
                     <span class="update-panel-title title-with-icon"><svg class="icon"><use href="#i-update"></use></svg><span>Actualizaciones</span></span>
-                    <span id="update-version" class="update-version">v1.5.2</span>
+                    <span id="update-version" class="update-version">v1.7.0</span>
                 </div>
 
                 <p id="update-message" class="update-message">
@@ -163,7 +165,13 @@
                 </button>
             </div>
 
-            <div id="sidebar-app-version" class="sidebar-version">ZeroOne</div>
+            <div
+                id="sidebar-app-version"
+                class="sidebar-version"
+                title="The Update that Changed the World"
+            >
+                The Update that Changed the World
+            </div>
         </aside>
 
         <main class="main">
@@ -1017,6 +1025,10 @@
                             <svg class="icon"><use href="#i-nav-agenda"></use></svg>
                             <span>Agendamiento</span>
                         </button>
+                        <button type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="manuales">
+                            <svg class="icon"><use href="#i-book"></use></svg>
+                            <span>Manuales</span>
+                        </button>
                         <button type="button" class="settings-tab" role="tab" aria-selected="false" data-settings-tab="apariencia">
                             <svg class="icon"><use href="#i-palette"></use></svg>
                             <span>Apariencia</span>
@@ -1024,7 +1036,7 @@
                     </nav>
 
                     <div class="settings-content">
-                        <section class="panel settings-tab-panel active" role="tabpanel" data-settings-panel="general">
+                        <section class="panel settings-tab-panel active" role="tabpanel" data-settings-panel="general" data-settings-editable="true">
                             <div class="settings-section-heading">
                                 <span class="settings-section-icon"><svg class="icon"><use href="#i-settings"></use></svg></span>
                                 <div>
@@ -1058,6 +1070,19 @@
                                         <small>Abrir automáticamente al encender la PC. Si el segundo plano está activo, iniciará oculto en la bandeja.</small>
                                     </span>
                                 </label>
+                                <div class="settings-control-card settings-action-card settings-notification-action">
+                                    <span class="settings-action-icon">
+                                        <svg class="icon"><use href="#i-bell"></use></svg>
+                                    </span>
+                                    <span class="settings-action-copy">
+                                        <strong>Comprobar notificaciones</strong>
+                                        <small>Mostrá un aviso de prueba de Windows para confirmar que ZeroOne puede notificarte.</small>
+                                    </span>
+                                    <button type="button" id="btn-probar-notificacion" class="secondary-button">
+                                        <svg class="icon"><use href="#i-bell"></use></svg>
+                                        <span>Probar notificación</span>
+                                    </button>
+                                </div>
                                 <div class="settings-control-card settings-action-card">
                                     <span class="settings-action-icon">
                                         <svg class="icon"><use href="#i-folder"></use></svg>
@@ -1085,10 +1110,23 @@
                                         </button>
                                     </div>
                                 </div>
+                                <div class="settings-control-card settings-action-card settings-danger-action-card">
+                                    <span class="settings-action-icon">
+                                        <svg class="icon"><use href="#i-trash"></use></svg>
+                                    </span>
+                                    <span class="settings-action-copy">
+                                        <strong>Restablecer ZeroOne</strong>
+                                        <small>Elimina todos los datos locales: sesiones, líneas, campañas, historial, agenda, IA, ajustes y logs para volver a una instalación limpia.</small>
+                                    </span>
+                                    <button type="button" id="btn-restablecer-datos" class="danger-button">
+                                        <svg class="icon"><use href="#i-trash"></use></svg>
+                                        <span>Borrar todos los datos</span>
+                                    </button>
+                                </div>
                             </div>
                         </section>
 
-                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="publicacion" hidden>
+                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="publicacion" data-settings-editable="true" hidden>
                             <div class="settings-section-heading">
                                 <span class="settings-section-icon"><svg class="icon"><use href="#i-timer"></use></svg></span>
                                 <div>
@@ -1166,7 +1204,7 @@
                             </div>
                         </section>
 
-                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="seguridad" hidden>
+                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="seguridad" data-settings-editable="true" hidden>
                             <div class="settings-section-heading">
                                 <span class="settings-section-icon danger"><svg class="icon"><use href="#i-alert"></use></svg></span>
                                 <div>
@@ -1201,7 +1239,7 @@
                             </div>
                         </section>
 
-                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="rendimiento" hidden>
+                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="rendimiento" data-settings-editable="true" hidden>
                             <div class="settings-section-heading">
                                 <span class="settings-section-icon performance"><svg class="icon"><use href="#i-activity"></use></svg></span>
                                 <div>
@@ -1297,7 +1335,7 @@
                             </div>
                         </section>
 
-                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="agendamiento" hidden>
+                        <section class="panel settings-tab-panel" role="tabpanel" data-settings-panel="agendamiento" data-settings-editable="true" hidden>
                             <div class="settings-section-heading">
                                 <span class="settings-section-icon"><svg class="icon"><use href="#i-nav-agenda"></use></svg></span>
                                 <div>
@@ -1340,7 +1378,61 @@
                             </div>
                         </section>
 
-                        <section class="panel settings-tab-panel theme-settings-panel" role="tabpanel" data-settings-panel="apariencia" aria-labelledby="theme-settings-title" hidden>
+                        <section class="panel settings-tab-panel manuals-settings-panel" role="tabpanel" data-settings-panel="manuales" aria-labelledby="manuals-title" hidden>
+                            <div class="settings-section-heading manuals-heading">
+                                <span class="settings-section-icon"><svg class="icon"><use href="#i-book"></use></svg></span>
+                                <div>
+                                    <span class="settings-eyebrow">Ayuda integrada</span>
+                                    <h2 id="manuals-title">Centro de manuales</h2>
+                                    <p>Consultá las mismas guías incluidas con ZeroOne, sin salir de la aplicación.</p>
+                                </div>
+                            </div>
+
+                            <div class="manuals-workspace">
+                                <aside class="manuals-navigation" aria-label="Manuales disponibles y contenido">
+                                    <div class="manuals-type-switch" role="tablist" aria-label="Manual seleccionado">
+                                        <button type="button" class="manuals-type-button active" role="tab" aria-selected="true" data-manual-type="uso">
+                                            <svg class="icon"><use href="#i-book"></use></svg>
+                                            <span>
+                                                <strong>Uso diario</strong>
+                                                <small>Guía práctica</small>
+                                            </span>
+                                        </button>
+                                        <button type="button" class="manuals-type-button" role="tab" aria-selected="false" data-manual-type="tecnico">
+                                            <svg class="icon"><use href="#i-layers"></use></svg>
+                                            <span>
+                                                <strong>Arquitectura</strong>
+                                                <small>Documento técnico</small>
+                                            </span>
+                                        </button>
+                                    </div>
+
+                                    <div class="manuals-local-note">
+                                        <svg class="icon"><use href="#i-check-circle"></use></svg>
+                                        <span>Documentación local incluida con esta versión.</span>
+                                    </div>
+
+                                    <nav id="manuals-toc" class="manuals-toc" aria-label="Contenido del manual">
+                                        <p class="manuals-toc-empty">Abrí un manual para ver su contenido.</p>
+                                    </nav>
+                                </aside>
+
+                                <article id="manuals-reader" class="manuals-reader" aria-busy="false" aria-live="polite">
+                                    <div class="manuals-reader-header">
+                                        <span id="manuals-reader-kicker" class="manuals-reader-kicker">Guía práctica</span>
+                                        <span id="manuals-reader-state" class="manuals-reader-state"><svg class="icon"><use href="#i-book"></use></svg> Disponible sin conexión</span>
+                                    </div>
+                                    <div id="manuals-reader-content" class="manuals-reader-content">
+                                        <div class="manuals-loading-state">
+                                            <svg class="icon"><use href="#i-loader"></use></svg>
+                                            <span>Preparando el manual…</span>
+                                        </div>
+                                    </div>
+                                </article>
+                            </div>
+                        </section>
+
+                        <section class="panel settings-tab-panel theme-settings-panel" role="tabpanel" data-settings-panel="apariencia" data-settings-editable="true" aria-labelledby="theme-settings-title" hidden>
                             <div class="theme-settings-heading">
                                 <span class="theme-settings-icon"><svg class="icon"><use href="#i-palette"></use></svg></span>
                                 <div>
@@ -1406,11 +1498,7 @@
                         </section>
                     </div>
 
-                    <div class="settings-actions settings-global-actions">
-                        <button type="button" id="btn-probar-notificacion" class="secondary-button">
-                            <svg class="icon"><use href="#i-bell"></use></svg>
-                            <span>Probar notificación</span>
-                        </button>
+                    <div id="settings-global-actions" class="settings-actions settings-global-actions">
                         <button type="button" id="btn-guardar-configuracion" class="primary-button">
                             <svg class="icon"><use href="#i-save"></use></svg>
                             <span>Guardar configuración</span>
@@ -2190,6 +2278,54 @@
     </div>
 
     <div
+        id="modal-restablecer-datos"
+        class="modal confirmation-modal factory-reset-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden="true"
+        aria-labelledby="restablecer-datos-titulo"
+        aria-describedby="restablecer-datos-mensaje"
+    >
+        <div class="modal-card confirmation-card factory-reset-card">
+            <div class="confirmation-body factory-reset-body">
+                <span class="confirmation-icon" aria-hidden="true">
+                    <svg class="icon"><use href="#i-alert"></use></svg>
+                </span>
+                <div class="confirmation-copy">
+                    <h2 id="restablecer-datos-titulo">Restablecer todos los datos</h2>
+                    <p id="restablecer-datos-mensaje">Esta acción es permanente. Al reiniciar tendrás que vincular todas las líneas por QR y conectar Google nuevamente.</p>
+                </div>
+                <ul class="factory-reset-list" aria-label="Datos que se eliminarán">
+                    <li>Sesiones locales de WhatsApp, líneas y audiencias.</li>
+                    <li>Estados, campañas, historial, imágenes y programaciones.</li>
+                    <li>Agendamiento, cuentas Google, caché de IA, ajustes y logs.</li>
+                </ul>
+                <label class="factory-reset-confirmation" for="restablecer-datos-confirmacion">
+                    <span>Escribí <strong>RESTABLECER</strong> para continuar</span>
+                    <input
+                        id="restablecer-datos-confirmacion"
+                        class="input"
+                        type="text"
+                        autocomplete="off"
+                        autocapitalize="characters"
+                        spellcheck="false"
+                    >
+                </label>
+                <div class="confirmation-actions">
+                    <button type="button" id="restablecer-datos-cancelar" class="secondary-button">
+                        <svg class="icon"><use href="#i-x"></use></svg>
+                        <span>Cancelar</span>
+                    </button>
+                    <button type="button" id="restablecer-datos-aceptar" class="danger-button" disabled>
+                        <svg class="icon"><use href="#i-trash"></use></svg>
+                        <span>Borrar y reiniciar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div
         id="modal-confirmacion"
         class="modal confirmation-modal"
         role="dialog"
@@ -2227,6 +2363,7 @@
     <script src="/js/lines.js"></script>
     <script src="/js/agenda.js"></script>
     <script src="/js/publication.js"></script>
+    <script src="/js/manuals.js"></script>
     <script src="/js/bootstrap.js"></script>
 </body>
 </html>

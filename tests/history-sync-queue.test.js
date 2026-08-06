@@ -108,6 +108,18 @@ function cargarBackendAislado(
     process.env.AUTOSTATUES_DATA_DIR = rutaDatos;
 
     Module._load = function cargarModulo(request, parent, isMain) {
+        if (request === './whatsapp-link-version') {
+            return {
+                crearProveedorVersionVinculacionWhatsApp: () => ({
+                    obtenerVersionEnCache: () => null,
+                    actualizarEnSegundoPlano: opciones => {
+                        consultasVersionVinculacion.push(opciones);
+                        return Promise.resolve(null);
+                    }
+                })
+            };
+        }
+
         if (request !== '@whiskeysockets/baileys') {
             return cargarOriginal.call(this, request, parent, isMain);
         }
@@ -147,14 +159,7 @@ function cargarBackendAislado(
                     }
                 },
                 saveCreds: async () => {}
-            }),
-            fetchLatestWaWebVersion: async opciones => {
-                consultasVersionVinculacion.push(opciones);
-                return {
-                    version: [2, 3000, 1044539926],
-                    isLatest: true
-                };
-            }
+            })
         };
     };
 
@@ -445,14 +450,15 @@ test('un 405 antes del QR reintenta pronto el vínculo con protocolo actualizado
     backend.cargarLineasGuardadas();
     await backend.iniciarWhatsApp(ID_UNO);
 
-    const configuracionVinculacion = backend.configuraciones.find(
-        configuracion => Array.isArray(configuracion.version)
+    assert.equal(
+        backend.configuraciones[0]?.version,
+        undefined,
+        'The first QR socket must not wait for a remote protocol lookup.'
     );
     assert.deepEqual(
-        configuracionVinculacion?.version,
-        [2, 3000, 1044539926]
+        backend.consultasVersionVinculacion,
+        [{ forzar: false }]
     );
-    assert.equal(backend.consultasVersionVinculacion.length, 1);
 
     const antesDelCierre = Date.now();
     backend.sockets[0].ev.emit('connection.update', {

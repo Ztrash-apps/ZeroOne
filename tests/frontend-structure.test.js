@@ -16,6 +16,7 @@ test('la interfaz carga módulos ordenados y no conserva el script monolítico',
         'lines.js',
         'agenda.js',
         'publication.js',
+        'manuals.js',
         'bootstrap.js'
     ];
 
@@ -76,6 +77,120 @@ test('las tareas periódicas se pausan fuera de su pantalla o con la app oculta'
     assert.match(bootstrap, /document\.hidden/u);
     assert.match(bootstrap, /seccionesPermitidas\.has\(seccionActual\)/u);
     assert.doesNotMatch(bootstrap, /setInterval\(actualizarLineas/u);
+});
+
+test('el panel de actualizaciones muestra el nombre de la release actual o disponible', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+    const estilos = fs.readFileSync(
+        path.join(rutaPublica, 'css', 'foundation.css'),
+        'utf8'
+    );
+
+    assert.match(html, /id="sidebar-app-version"/u);
+    assert.match(html, /The Update that Changed the World/u);
+    assert.match(bootstrap, /estado\.tituloVersionDisponible/u);
+    assert.match(bootstrap, /estado\.tituloVersionActual/u);
+    assert.match(estilos, /\.sidebar-version\s*\{[\s\S]+-webkit-line-clamp:\s*2/u);
+});
+
+test('Configuración integra los manuales locales en un lector seguro y navegable', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const manuales = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'manuals.js'),
+        'utf8'
+    );
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+    const lineas = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'lines.js'),
+        'utf8'
+    );
+    const estilos = fs.readFileSync(
+        path.join(rutaPublica, 'css', 'features.css'),
+        'utf8'
+    );
+
+    assert.match(html, /data-settings-tab="manuales"/u);
+    assert.match(html, /data-settings-panel="manuales"/u);
+    assert.doesNotMatch(
+        html,
+        /data-settings-panel="manuales"[^>]+data-settings-editable="true"/u
+    );
+    assert.match(html, /id="manuals-toc"/u);
+    assert.match(html, /id="manuals-reader-content"/u);
+    assert.match(html, /id="manuals-reader-state"/u);
+    assert.match(html, /data-manual-type="uso"/u);
+    assert.match(html, /data-manual-type="tecnico"/u);
+    assert.match(html, /id="i-lock"/u);
+    assert.match(bootstrap, /'manuales'/u);
+    assert.match(bootstrap, /inicializarManuales()/u);
+    assert.match(bootstrap, /activa === 'manuales'[\s\S]+cargarManualZeroOne/u);
+    assert.match(
+        bootstrap,
+        /panelActivo\?\.dataset\.settingsEditable === 'true'/u
+    );
+    assert.match(manuales, /fetch\(`\/manuales\/\$\{encodeURIComponent\(manualTipo\)\}`/u);
+    assert.match(manuales, /\/manuales\/tecnico\/desbloquear/u);
+    assert.match(manuales, /method:\s*'POST'/u);
+    assert.match(manuales, /input\.type\s*=\s*'password'/u);
+    assert.match(manuales, /MANUAL_PROTEGIDO/u);
+    assert.match(manuales, /function bloquearManualTecnicoAlSalir\(\)/u);
+    assert.match(manuales, /cache\.delete\('tecnico'\)/u);
+    assert.doesNotMatch(manuales, /localStorage[\s\S]{0,180}contrasena|contrasena[\s\S]{0,180}localStorage/u);
+    assert.match(manuales, /document\.createDocumentFragment\(\)/u);
+    assert.doesNotMatch(manuales, /innerHTML/u);
+    assert.match(estilos, /\.manuals-workspace\s*\{/u);
+    assert.match(estilos, /\.manuals-reader\s*\{/u);
+    assert.match(estilos, /\.manuals-toc\s*\{/u);
+    assert.match(
+        estilos,
+        /#section-configuracion \.settings-tab-panel\s*\{[\s\S]+min-height:\s*0/u
+    );
+    assert.match(
+        estilos,
+        /#section-configuracion \.manuals-settings-panel\s*\{[\s\S]+min-height:\s*0/u
+    );
+    assert.match(
+        estilos,
+        /\.manuals-reader\s*\{[\s\S]+min-height:\s*0[\s\S]+overflow:\s*visible/u
+    );
+    assert.match(estilos, /\.manuals-locked-state\s*\{/u);
+    assert.match(estilos, /\.manuals-unlock-form\s*\{/u);
+    assert.match(estilos, /\.settings-global-actions\[hidden\]\s*\{/u);
+    assert.match(bootstrap, /bloquearManualTecnicoAlSalir\(\)/u);
+    assert.match(lineas, /bloquearManualTecnicoAlSalir\(\)/u);
+});
+
+test('las acciones de Configuración aparecen solo donde hay preferencias para guardar', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+
+    for (const panel of [
+        'general',
+        'publicacion',
+        'seguridad',
+        'rendimiento',
+        'agendamiento',
+        'apariencia'
+    ]) {
+        assert.match(
+            html,
+            new RegExp(
+                `data-settings-panel="${panel}"[^>]+data-settings-editable="true"`,
+                'u'
+            )
+        );
+    }
+    assert.match(
+        html,
+        /data-settings-panel="general"[\s\S]+id="btn-probar-notificacion"/u
+    );
+    assert.match(html, /id="settings-global-actions"/u);
 });
 
 test('el envío incierto se confirma por solicitud sin cerrar el progreso', () => {
@@ -503,6 +618,38 @@ test('Ajustes gestiona únicamente los logs internos mediante el puente seguro',
             )
         );
     }
+});
+
+test('Ajustes ofrece un restablecimiento completo protegido y sin rutas del renderer', () => {
+    const html = fs.readFileSync(path.join(rutaPublica, 'index.html'), 'utf8');
+    const bootstrap = fs.readFileSync(
+        path.join(rutaPublica, 'js', 'bootstrap.js'),
+        'utf8'
+    );
+    const preload = fs.readFileSync(path.join(raiz, 'preload.js'), 'utf8');
+    const principal = fs.readFileSync(path.join(raiz, 'main.js'), 'utf8');
+
+    assert.match(html, /id="btn-restablecer-datos"/u);
+    assert.match(html, /id="modal-restablecer-datos"/u);
+    assert.match(html, /id="restablecer-datos-confirmacion"/u);
+    assert.match(html, /Escribí\s*<strong>RESTABLECER<\/strong>/u);
+    assert.match(
+        bootstrap,
+        /btn-restablecer-datos[\s\S]+window\.sistema\.restablecerDatos\(confirmacion\)/u
+    );
+    assert.match(
+        preload,
+        /restablecerDatos\(confirmacion\)\s*\{\s*return ipcRenderer\.invoke\('sistema:restablecer-datos', confirmacion\)/u
+    );
+    assert.match(
+        principal,
+        /ipcMain\.handle\('sistema:restablecer-datos', \(evento, confirmacion\)[\s\S]+eventoProvieneDeVentanaPrincipal/u
+    );
+    assert.match(principal, /RESTABLECER/u);
+    assert.match(principal, /ARGUMENTO_RESTABLECER_DATOS/u);
+    assert.match(principal, /app\.relaunch\(\{/u);
+    assert.match(principal, /app\.setPath\(\s*'sessionData'/u);
+    assert.match(principal, /ejecutarRestablecimientoLocal\(/u);
 });
 
 test('Windows recibe la identidad y el icono nativo de ZeroOne', () => {

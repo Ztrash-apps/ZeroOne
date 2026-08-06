@@ -5,7 +5,6 @@ const {
     jidNormalizedUser,
     WAMessageStatus,
     DisconnectReason,
-    fetchLatestWaWebVersion,
     proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
@@ -30,6 +29,9 @@ const {
     obtenerPrefijoLinea,
     indexarConexiones
 } = require('./agendamiento');
+const {
+    crearProveedorVersionVinculacionWhatsApp
+} = require('./whatsapp-link-version');
 const {
     MAXIMO_MENSAJES_POR_VENTANA,
     SEPARACION_MAXIMA_MS,
@@ -63,6 +65,13 @@ const {
 const {
     registrarRutasConfiguracion
 } = require('./routes/configuration');
+const {
+    debeOmitirMigracionLegada
+} = require('./factory-reset');
+const {
+    ErrorManual,
+    leerManualLocal
+} = require('./manuals');
 
 const app = express();
 app.disable('x-powered-by');
@@ -86,6 +95,7 @@ const CARPETA_DATOS = path.resolve(
 );
 const CARPETA_PUBLIC = path.join(RAIZ_PROYECTO, 'public');
 const CARPETA_FUENTES = path.join(RAIZ_PROYECTO, 'font');
+const CARPETA_DOCUMENTACION = path.join(RAIZ_PROYECTO, 'docs');
 const CARPETA_UPLOADS = path.join(CARPETA_DATOS, 'uploads');
 const CARPETA_SESIONES = path.join(CARPETA_DATOS, 'sesiones');
 const CARPETA_PROGRAMADOS = path.join(CARPETA_DATOS, 'programados');
@@ -132,6 +142,11 @@ function carpetaTieneContenido(ruta) {
 
 function migrarCarpetaAnterior(nombreCarpeta) {
     if (CARPETA_DATOS === RAIZ_PROYECTO) return;
+
+    // El restablecimiento intencional deja este marcador para evitar que los
+    // directorios históricos del repositorio restauren sesiones o campañas
+    // que el usuario acabó de eliminar.
+    if (debeOmitirMigracionLegada(CARPETA_DATOS)) return;
 
     const origen = path.join(RAIZ_PROYECTO, nombreCarpeta);
     const destino = path.join(CARPETA_DATOS, nombreCarpeta);
@@ -652,7 +667,6 @@ const RETRASOS_RECONEXION_405_MS = [
     15 * 60 * 1000,
     30 * 60 * 1000
 ];
-const TIEMPO_MAXIMO_VERSION_VINCULACION_MS = 7000;
 const VIGENCIA_VERSION_VINCULACION_MS = 15 * 60 * 1000;
 const TIEMPO_MAXIMO_INTENTO_CONEXION_MS = 45000;
 const VENTANA_ESTABILIDAD_CONEXION_MS = 60000;
@@ -793,9 +807,6 @@ const colaSincronizacionHistorialAgendamiento = [];
 let sincronizacionHistorialAgendamientoActiva = null;
 let secuenciaSincronizacionHistorialAgendamiento = 0;
 let temporizadorGuardadoHistorialAgendamiento = null;
-let versionVinculacionWhatsApp = null;
-let versionVinculacionWhatsAppObtenidaEn = 0;
-let promesaVersionVinculacionWhatsApp = null;
 let ultimaAdvertenciaVersionVinculacionEn = 0;
 
 function crearProgresoVacio() {
@@ -856,18 +867,6 @@ function esperar(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function normalizarVersionVinculacionWhatsApp(valor) {
-    if (!Array.isArray(valor) || valor.length !== 3) return null;
-
-    const version = valor.map(Number);
-    if (!version.every(numero =>
-        Number.isSafeInteger(numero) && numero > 0
-    )) {
-        return null;
-    }
-
-    return version;
-}
 
 function informarFalloVersionVinculacion(error) {
     const ahora = Date.now();
@@ -889,62 +888,14 @@ function informarFalloVersionVinculacion(error) {
     );
 }
 
-async function obtenerVersionVinculacionWhatsApp({ forzar = false } = {}) {
-    const ahora = Date.now();
-    if (
-        !forzar &&
-        versionVinculacionWhatsApp &&
-        ahora - versionVinculacionWhatsAppObtenidaEn <
-            VIGENCIA_VERSION_VINCULACION_MS
-    ) {
-        return versionVinculacionWhatsApp;
-    }
-
-    if (promesaVersionVinculacionWhatsApp) {
-        return promesaVersionVinculacionWhatsApp;
-    }
-
-    promesaVersionVinculacionWhatsApp = (async () => {
-        const controlador = typeof AbortController === 'function'
-            ? new AbortController()
-            : null;
-        const temporizador = controlador
-            ? setTimeout(
-                () => controlador.abort(),
-                TIEMPO_MAXIMO_VERSION_VINCULACION_MS
-            )
-            : null;
-
-        try {
-            const resultado = await fetchLatestWaWebVersion(
-                controlador ? { signal: controlador.signal } : {}
-            );
-            const version = resultado?.isLatest === true
-                ? normalizarVersionVinculacionWhatsApp(resultado.version)
-                : null;
-
-            if (!version) {
-                informarFalloVersionVinculacion(resultado?.error);
-                return null;
-            }
-
-            versionVinculacionWhatsApp = version;
-            versionVinculacionWhatsAppObtenidaEn = Date.now();
-            return version;
-        } catch (error) {
-            informarFalloVersionVinculacion(error);
-            return null;
-        } finally {
-            if (temporizador) clearTimeout(temporizador);
-        }
-    })();
-
-    try {
-        return await promesaVersionVinculacionWhatsApp;
-    } finally {
-        promesaVersionVinculacionWhatsApp = null;
-    }
-}
+// La consulta de versión es auxiliar: nunca debe impedir que se genere un QR.
+// Este proveedor usa node:https en vez de fetch/Undici y absorbe por completo
+// los cierres transitorios de TLS de web.whatsapp.com.
+const proveedorVersionVinculacionWhatsApp =
+    crearProveedorVersionVinculacionWhatsApp({
+        cacheTtlMs: VIGENCIA_VERSION_VINCULACION_MS,
+        alFallar: informarFalloVersionVinculacion
+    });
 
 function normalizarProgresoHistorialAgendamiento(valor, respaldo = null) {
     if (valor === null || valor === undefined || valor === '') return respaldo;
@@ -9992,8 +9943,8 @@ function programarReconexionAutomatica(
     linea.conexionEnVerificacion = false;
     if (esRechazoVinculacion) {
         // No se borran credenciales: antes del QR todavía no hay una sesión
-        // registrada. Sólo se fuerza una comprobación nueva de versión antes
-        // de crear el siguiente socket.
+        // registrada. Sólo se pide una actualización auxiliar de versión en
+        // segundo plano; el siguiente QR nunca queda esperando esa red.
         linea.refrescarVersionVinculacion = true;
     }
     linea.ultimoCodigoDesconexion = codigo !== null &&
@@ -10004,7 +9955,7 @@ function programarReconexionAutomatica(
     linea.proximoIntentoReconexion = new Date(Date.now() + retraso).toISOString();
     linea.ultimoError = `${mensaje || 'La línea se desconectó.'}` +
         (esRechazoVinculacion
-            ? ' WhatsApp rechazó el vínculo antes de entregar un QR; se reintentará con una versión actual del protocolo.'
+            ? ' WhatsApp rechazó el vínculo antes de entregar un QR; se reintentará pronto mientras se actualiza el protocolo en segundo plano.'
             : aplicarEsperaLarga405
             ? ' El reintento por código 405 quedó aislado a esta línea.'
             : '') +
@@ -10216,14 +10167,14 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
         const sesionExistente = state.creds.registered === true;
         linea.sesionRegistrada = sesionExistente;
 
-        // Los vínculos nuevos son el único momento en que necesitamos una
-        // versión de Web actual. Las sesiones ya registradas conservan su
-        // arranque habitual para no alterar conexiones existentes.
+        // El vínculo nuevo toma en el acto una versión segura ya guardada.
+        // Si aún no existe, Baileys usa su versión incluida; el QR nunca
+        // espera una descarga HTTPS para poder generarse.
         const versionVinculacion = !sesionExistente
-            ? await obtenerVersionVinculacionWhatsApp({
-                forzar: linea.refrescarVersionVinculacion === true
-            })
+            ? proveedorVersionVinculacionWhatsApp.obtenerVersionEnCache()
             : null;
+        const forzarActualizacionVersion =
+            linea.refrescarVersionVinculacion === true;
         linea.refrescarVersionVinculacion = false;
 
         if (!conexionSigueVigente(lineaId, linea, generacionConexion)) {
@@ -10252,6 +10203,16 @@ async function iniciarWhatsApp(lineaId, turnoInicio = null) {
 
         const sock = makeWASocket(configuracionSocket);
 
+        if (!sesionExistente) {
+            // El proveedor absorbe los fallos de transporte y esta barrera
+            // evita que un error futuro de la optimización auxiliar alcance
+            // el proceso principal de Electron.
+            Promise.resolve(
+                proveedorVersionVinculacionWhatsApp.actualizarEnSegundoPlano({
+                    forzar: forzarActualizacionVersion
+                })
+            ).catch(informarFalloVersionVinculacion);
+        }
         linea.socket = sock;
         linea.iniciando = false;
         programarWatchdogConexion(
@@ -14865,6 +14826,73 @@ app.post(
     });
     }
 );
+
+function responderErrorManualLocal(error, res) {
+    if (error instanceof ErrorManual) {
+        const noExiste = error.codigo === 'MANUAL_NO_ENCONTRADO';
+        const protegido = error.codigo === 'MANUAL_PROTEGIDO';
+        const contrasenaIncorrecta =
+            error.codigo === 'MANUAL_CONTRASENA_INCORRECTA';
+
+        if (!noExiste && !protegido && !contrasenaIncorrecta) {
+            console.error('No se pudo cargar un manual local:', error.message);
+        }
+
+        if (noExiste) {
+            return res.status(404).json({
+                codigo: error.codigo,
+                error: 'El manual solicitado no existe.'
+            });
+        }
+
+        if (protegido) {
+            return res.status(423).json({
+                codigo: error.codigo,
+                error: 'El manual técnico está protegido.'
+            });
+        }
+
+        if (contrasenaIncorrecta) {
+            return res.status(401).json({
+                codigo: error.codigo,
+                error: 'La contraseña no coincide.'
+            });
+        }
+
+        return res.status(503).json({
+            codigo: error.codigo,
+            error: 'El manual no está disponible en esta instalación.'
+        });
+    }
+
+    console.error('No se pudo cargar un manual local:', error);
+    return res.status(500).json({
+        error: 'No se pudo abrir el manual local.'
+    });
+}
+
+app.get('/manuales/:tipo', (req, res) => {
+    try {
+        res.json(leerManualLocal(req.params.tipo, {
+            carpetaDocumentacion: CARPETA_DOCUMENTACION
+        }));
+    } catch (error) {
+        responderErrorManualLocal(error, res);
+    }
+});
+
+app.post('/manuales/tecnico/desbloquear', (req, res) => {
+    try {
+        res.json(leerManualLocal('tecnico', {
+            carpetaDocumentacion: CARPETA_DOCUMENTACION,
+            contrasena: typeof req.body?.contrasena === 'string'
+                ? req.body.contrasena
+                : ''
+        }));
+    } catch (error) {
+        responderErrorManualLocal(error, res);
+    }
+});
 
 registrarRutasConfiguracion(app, {
     obtenerConfiguracion: () => configuracion,

@@ -68,9 +68,18 @@
                 'seguridad',
                 'rendimiento',
                 'agendamiento',
+                'manuales',
                 'apariencia'
             ]);
             const activa = disponibles.has(nombre) ? nombre : 'general';
+            const panelAnterior = document.querySelector(
+                '[data-settings-panel].active'
+            );
+            if (panelAnterior?.dataset.settingsPanel === 'manuales' &&
+                activa !== 'manuales' &&
+                typeof bloquearManualTecnicoAlSalir === 'function') {
+                bloquearManualTecnicoAlSalir();
+            }
 
             document.querySelectorAll('[data-settings-tab]').forEach(boton => {
                 const seleccionada = boton.dataset.settingsTab === activa;
@@ -84,8 +93,27 @@
                 panel.classList.toggle('active', seleccionada);
             });
 
+            const accionesConfiguracion = document.getElementById(
+                'settings-global-actions'
+            );
+            const panelActivo = document.querySelector(
+                `[data-settings-panel="${activa}"]`
+            );
+            const permiteGuardar = panelActivo?.dataset.settingsEditable === 'true';
+            if (accionesConfiguracion) {
+                accionesConfiguracion.hidden = !permiteGuardar;
+                accionesConfiguracion.setAttribute(
+                    'aria-hidden',
+                    String(!permiteGuardar)
+                );
+            }
+
             if (guardar) {
                 localStorage.setItem('zeroone-settings-tab', activa);
+            }
+
+            if (activa === 'manuales' && typeof cargarManualZeroOne === 'function') {
+                void cargarManualZeroOne();
             }
         }
 
@@ -1258,6 +1286,9 @@
         });
 
         document.getElementById('btn-actualizar-historial').onclick = actualizarHistorial;
+        if (typeof inicializarManuales === 'function') {
+            inicializarManuales();
+        }
         document.querySelectorAll('[data-settings-tab]').forEach(boton => {
             boton.addEventListener('click', () => {
                 activarPestanaConfiguracion(boton.dataset.settingsTab);
@@ -1534,6 +1565,114 @@
             }
         };
 
+        const botonRestablecerDatos = document.getElementById(
+            'btn-restablecer-datos'
+        );
+        const modalRestablecerDatos = document.getElementById(
+            'modal-restablecer-datos'
+        );
+        const campoRestablecerDatos = document.getElementById(
+            'restablecer-datos-confirmacion'
+        );
+        const botonConfirmarRestablecer = document.getElementById(
+            'restablecer-datos-aceptar'
+        );
+        const botonCancelarRestablecer = document.getElementById(
+            'restablecer-datos-cancelar'
+        );
+        let restablecimientoDatosSolicitado = false;
+
+        function actualizarConfirmacionRestablecimiento() {
+            const confirmado = campoRestablecerDatos.value
+                .trim()
+                .toUpperCase() === 'RESTABLECER';
+            botonConfirmarRestablecer.disabled =
+                !confirmado || restablecimientoDatosSolicitado;
+        }
+
+        function cerrarRestablecimientoDatos() {
+            if (restablecimientoDatosSolicitado) return;
+            campoRestablecerDatos.value = '';
+            actualizarConfirmacionRestablecimiento();
+            cerrarModal('modal-restablecer-datos');
+        }
+
+        botonRestablecerDatos.onclick = () => {
+            if (!window.sistema?.restablecerDatos) {
+                toast(
+                    'El restablecimiento solo está disponible en la aplicación de escritorio.',
+                    'error'
+                );
+                return;
+            }
+
+            campoRestablecerDatos.value = '';
+            actualizarConfirmacionRestablecimiento();
+            abrirModal('modal-restablecer-datos');
+            requestAnimationFrame(() => {
+                campoRestablecerDatos.focus({ preventScroll: true });
+            });
+        };
+
+        campoRestablecerDatos.addEventListener(
+            'input',
+            actualizarConfirmacionRestablecimiento
+        );
+        botonCancelarRestablecer.onclick = cerrarRestablecimientoDatos;
+        modalRestablecerDatos.addEventListener('click', evento => {
+            if (evento.target === modalRestablecerDatos) {
+                cerrarRestablecimientoDatos();
+            }
+        });
+        campoRestablecerDatos.addEventListener('keydown', evento => {
+            if (evento.key !== 'Enter' || botonConfirmarRestablecer.disabled) {
+                return;
+            }
+            evento.preventDefault();
+            botonConfirmarRestablecer.click();
+        });
+        document.addEventListener('keydown', evento => {
+            if (
+                evento.key === 'Escape' &&
+                modalRestablecerDatos.classList.contains('open')
+            ) {
+                evento.preventDefault();
+                cerrarRestablecimientoDatos();
+            }
+        });
+
+        botonConfirmarRestablecer.onclick = async () => {
+            const confirmacion = campoRestablecerDatos.value.trim().toUpperCase();
+            if (confirmacion !== 'RESTABLECER' || restablecimientoDatosSolicitado) {
+                actualizarConfirmacionRestablecimiento();
+                return;
+            }
+
+            restablecimientoDatosSolicitado = true;
+            botonRestablecerDatos.disabled = true;
+            botonCancelarRestablecer.disabled = true;
+            campoRestablecerDatos.disabled = true;
+            botonConfirmarRestablecer.disabled = true;
+            botonConfirmarRestablecer.innerHTML =
+                `${iconoSVG('loader', 'spin')}<span>Restableciendo...</span>`;
+
+            try {
+                await window.sistema.restablecerDatos(confirmacion);
+            } catch (error) {
+                restablecimientoDatosSolicitado = false;
+                botonRestablecerDatos.disabled = false;
+                botonCancelarRestablecer.disabled = false;
+                campoRestablecerDatos.disabled = false;
+                botonConfirmarRestablecer.innerHTML =
+                    `${iconoSVG('trash')}<span>Borrar y reiniciar</span>`;
+                actualizarConfirmacionRestablecimiento();
+                toast(
+                    error?.message || 'No se pudo iniciar el restablecimiento.',
+                    'error'
+                );
+            }
+        };
+
         document.getElementById('btn-alto-total').onclick = async () => {
             if (!publicacionActivaActual || altoTotalSolicitado) return;
 
@@ -1676,10 +1815,25 @@
             const botonDescargar = document.getElementById('btn-update-download');
             const botonInstalar = document.getElementById('btn-update-install');
 
-            const versionActual = estado.versionActual || '1.5.2';
+            const versionActual = estado.versionActual || '1.7.0';
             version.textContent = `v${versionActual}`;
-            if (versionSidebar) versionSidebar.textContent = `ZeroOne ${versionActual}`;
             mensaje.textContent = estado.mensaje || 'Estado de actualización no disponible.';
+
+            const hayActualizacionDisponible = [
+                'disponible',
+                'descargando',
+                'descargada',
+                'instalando'
+            ].includes(estado.estado);
+            const nombreRelease = hayActualizacionDisponible
+                ? estado.tituloVersionDisponible
+                : estado.tituloVersionActual;
+            if (versionSidebar) {
+                const titulo = String(nombreRelease || '').trim();
+                const etiqueta = titulo || `ZeroOne ${versionActual}`;
+                versionSidebar.textContent = etiqueta;
+                versionSidebar.title = etiqueta;
+            }
 
             const porcentaje = Math.max(0, Math.min(100, Number(estado.porcentaje) || 0));
             barra.style.width = `${porcentaje}%`;

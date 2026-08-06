@@ -63,5 +63,9 @@ contextBridge.exposeInMainWorld('sistema', {
 
     eliminarLog() {
         return ipcRenderer.invoke('sistema:eliminar-log');
+    },
+
+    restablecerDatos(confirmacion) {
+        return ipcRenderer.invoke('sistema:restablecer-datos', confirmacion);
     }
 });

@@ -218,8 +218,16 @@
 
         .sidebar-version {
             margin-top: 10px;
+            display: -webkit-box;
+            max-width: 100%;
+            overflow: hidden;
             color: #687a92;
             font-size: 11px;
+            font-weight: 650;
+            letter-spacing: .015em;
+            line-height: 1.35;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
         }
 
         .main {

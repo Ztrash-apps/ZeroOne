@@ -3,6 +3,12 @@
                 nombre = 'dashboard';
             }
 
+            if (seccionActual === 'configuracion' &&
+                nombre !== 'configuracion' &&
+                typeof bloquearManualTecnicoAlSalir === 'function') {
+                bloquearManualTecnicoAlSalir();
+            }
+
             seccionActual = nombre;
 
             document.querySelectorAll('.section').forEach(seccion => {

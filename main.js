@@ -2,6 +2,7 @@ const {
     app,
     BrowserWindow,
     clipboard,
+    dialog,
     ipcMain,
     Menu,
     Notification,
@@ -13,12 +14,16 @@ const {
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const os = require('os');
 const { autoUpdater } = require('electron-updater');
 const {
     abrirDirectorioLogsSeguro,
     crearRegistradorLocal,
     instalarCapturaConsola
 } = require('./src/desktop-logs');
+const {
+    ejecutarRestablecimientoLocal
+} = require('./src/factory-reset');
 
 const NOMBRE_APLICACION = 'ZeroOne';
 // La versión instalada conserva el ID histórico para no romper accesos directos
@@ -31,6 +36,9 @@ const ID_APLICACION_WINDOWS = app.isPackaged
 const URL_APLICACION = 'http://127.0.0.1:3000';
 const ORIGEN_APLICACION = new URL(URL_APLICACION).origin;
 const INTERVALO_ACTUALIZACIONES = 5 * 60 * 60 * 1000;
+const TITULOS_VERSION_LOCALES = Object.freeze({
+    '1.7.0': 'The Update that Changed the World'
+});
 const RUTA_ICONO = path.join(
     __dirname,
     'public',
@@ -53,11 +61,36 @@ const TOKEN_SESION_ESCRITORIO = MODO_DESARROLLO_WEB
     : crypto.randomBytes(32).toString('base64url');
 const ARGUMENTO_INICIO_AUTOMATICO = '--zeroone-inicio-automatico';
 const ARGUMENTO_FIXTURES_UI = '--zeroone-ui-fixtures';
+const ARGUMENTO_RESTABLECER_DATOS = '--zeroone-restablecer-datos';
 const INICIO_AUTOMATICO_SOLICITADO = process.argv.includes(
     ARGUMENTO_INICIO_AUTOMATICO
 );
 const MODO_FIXTURES_UI = !app.isPackaged &&
     process.argv.includes(ARGUMENTO_FIXTURES_UI);
+const RESTABLECIMIENTO_DATOS_SOLICITADO = process.argv.includes(
+    ARGUMENTO_RESTABLECER_DATOS
+);
+const RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO =
+    RESTABLECIMIENTO_DATOS_SOLICITADO
+        ? path.join(
+            os.tmpdir(),
+            'zeroone-restablecimiento',
+            `${process.pid}-${crypto.randomBytes(8).toString('hex')}`
+        )
+        : null;
+
+// El proceso auxiliar de restablecimiento nunca abre el perfil real. Así
+// evita bloqueos de Chromium o archivos de sesión mientras borra los datos.
+if (RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO) {
+    app.setPath(
+        'userData',
+        path.join(RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO, 'perfil')
+    );
+    app.setPath(
+        'sessionData',
+        path.join(RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO, 'sesion')
+    );
+}
 
 app.setName(NOMBRE_APLICACION);
 if (process.platform === 'win32') {
@@ -75,6 +108,7 @@ let cierreAplicacionCompletado = false;
 let rutaCarpetaLogs = null;
 let registradorLocal = null;
 let restaurarCapturaConsola = null;
+let restablecimientoDatosEnCurso = false;
 let preferenciasEscritorio = {
     mantenerEnSegundoPlano: true,
     iniciarConWindows: true
@@ -87,21 +121,60 @@ let estadoActualizacion = {
     mensaje: 'Todavía no se buscaron actualizaciones.',
     versionActual: app.getVersion(),
     versionDisponible: null,
+    tituloVersionActual: null,
+    tituloVersionDisponible: null,
     porcentaje: 0
 };
+
+function normalizarTituloActualizacion(valor) {
+    const titulo = String(valor || '')
+        .replace(/[\r\n\t]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return titulo ? titulo.slice(0, 140) : null;
+}
+
+function obtenerTituloVersionLocal(version = app.getVersion()) {
+    return normalizarTituloActualizacion(
+        TITULOS_VERSION_LOCALES[String(version || '').trim()]
+    );
+}
 
 function obtenerEstadoActualizacion() {
     return {
         ...estadoActualizacion,
-        versionActual: app.getVersion()
+        versionActual: app.getVersion(),
+        tituloVersionActual:
+            estadoActualizacion.tituloVersionActual ||
+            obtenerTituloVersionLocal()
     };
 }
 
 function enviarEstadoActualizacion(datos = {}) {
+    const tieneTituloActual = Object.prototype.hasOwnProperty.call(
+        datos,
+        'tituloVersionActual'
+    );
+    const tieneTituloDisponible = Object.prototype.hasOwnProperty.call(
+        datos,
+        'tituloVersionDisponible'
+    );
+
     estadoActualizacion = {
         ...estadoActualizacion,
         ...datos,
-        versionActual: app.getVersion()
+        versionActual: app.getVersion(),
+        tituloVersionActual:
+            (tieneTituloActual
+                ? normalizarTituloActualizacion(datos.tituloVersionActual)
+                : null) ||
+            estadoActualizacion.tituloVersionActual ||
+            obtenerTituloVersionLocal(),
+        tituloVersionDisponible:
+            tieneTituloDisponible
+                ? normalizarTituloActualizacion(datos.tituloVersionDisponible)
+                : estadoActualizacion.tituloVersionDisponible || null
     };
 
     if (
@@ -128,6 +201,7 @@ function configurarActualizador() {
         enviarEstadoActualizacion({
             estado: 'buscando',
             mensaje: 'Buscando una nueva versión...',
+            tituloVersionDisponible: null,
             porcentaje: 0
         });
     });
@@ -139,6 +213,7 @@ function configurarActualizador() {
             estado: 'disponible',
             mensaje: `Nueva versión disponible: ${informacion.version}`,
             versionDisponible: informacion.version,
+            tituloVersionDisponible: informacion.releaseName,
             porcentaje: 0
         });
     });
@@ -150,6 +225,8 @@ function configurarActualizador() {
             estado: 'actualizada',
             mensaje: 'Ya tenés la versión más reciente.',
             versionDisponible: informacion?.version || null,
+            tituloVersionActual: informacion?.releaseName,
+            tituloVersionDisponible: null,
             porcentaje: 0
         });
     });
@@ -169,6 +246,7 @@ function configurarActualizador() {
             estado: 'descargada',
             mensaje: `La versión ${informacion.version} está lista para instalar.`,
             versionDisponible: informacion.version,
+            tituloVersionDisponible: informacion.releaseName,
             porcentaje: 100
         });
     });
@@ -498,6 +576,119 @@ function eliminarLogActual() {
     return exigirRegistradorLocal().eliminarRegistroActual();
 }
 
+function obtenerArgumentosRelanzamiento({ restablecerDatos = false } = {}) {
+    const argumentos = process.argv
+        .slice(1)
+        .filter(argumento => argumento !== ARGUMENTO_RESTABLECER_DATOS);
+
+    if (restablecerDatos) {
+        argumentos.push(ARGUMENTO_RESTABLECER_DATOS);
+    }
+
+    return argumentos;
+}
+
+function obtenerRutasPersistentesRestablecimiento() {
+    const rutaAppData = app.getPath('appData');
+    const rutaLocalAppData = process.env.LOCALAPPDATA || rutaAppData;
+
+    return {
+        rutaAppData,
+        rutaLocalAppData
+    };
+}
+
+function limpiarPerfilTemporalRestablecimiento() {
+    if (!RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO) return;
+
+    try {
+        fs.rmSync(RUTA_PERFIL_TEMPORAL_RESTABLECIMIENTO, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 120
+        });
+    } catch (error) {
+        console.warn(
+            'No se pudo eliminar el perfil temporal de restablecimiento:',
+            error?.message || error
+        );
+    }
+}
+
+function ejecutarModoRestablecimientoDatos() {
+    const argumentosNormales = obtenerArgumentosRelanzamiento();
+
+    if (MODO_FIXTURES_UI) {
+        dialog.showErrorBox(
+            'Restablecimiento no disponible',
+            'La vista de prueba no puede restablecer los datos reales.'
+        );
+        limpiarPerfilTemporalRestablecimiento();
+        app.relaunch({ args: argumentosNormales });
+        app.exit(1);
+        return;
+    }
+
+    try {
+        const plan = ejecutarRestablecimientoLocal(
+            obtenerRutasPersistentesRestablecimiento()
+        );
+        console.log(
+            `ZeroOne eliminó sus datos locales de ${plan.perfilHistorico}.`
+        );
+        app.relaunch({ args: argumentosNormales });
+    } catch (error) {
+        const mensaje = error?.message || String(error);
+        console.error(
+            'No se pudieron restablecer todos los datos de ZeroOne:',
+            mensaje
+        );
+        dialog.showErrorBox(
+            'No se pudo restablecer ZeroOne',
+            `La app no pudo borrar todos los datos locales. ${mensaje}`
+        );
+        // Volvemos a abrir la aplicación normal para que el usuario pueda
+        // recuperar sus datos o intentar la acción otra vez.
+        app.relaunch({ args: argumentosNormales });
+    }
+
+    // Este proceso usó exclusivamente un perfil temporal. No debe ejecutar
+    // el cierre normal ni iniciar el backend antes de que la nueva instancia
+    // vuelva a abrirse.
+    limpiarPerfilTemporalRestablecimiento();
+    app.exit(0);
+}
+
+function solicitarRestablecimientoDatos(confirmacion) {
+    if (MODO_FIXTURES_UI) {
+        throw new Error(
+            'El restablecimiento no está disponible en la vista de prueba.'
+        );
+    }
+    if (String(confirmacion || '').trim().toUpperCase() !== 'RESTABLECER') {
+        throw new Error('Escribí RESTABLECER para confirmar el borrado total.');
+    }
+    if (restablecimientoDatosEnCurso) {
+        throw new Error('El restablecimiento ya está en curso.');
+    }
+
+    restablecimientoDatosEnCurso = true;
+    app.relaunch({
+        args: obtenerArgumentosRelanzamiento({ restablecerDatos: true })
+    });
+
+    // Damos tiempo a que el IPC responda antes de cerrar. app.quit() conserva
+    // el cierre normal de IA, SQLite, logs y la publicación actual.
+    const temporizador = setTimeout(() => app.quit(), 120);
+    temporizador.unref?.();
+
+    return {
+        correcto: true,
+        mensaje: 'ZeroOne se cerrará para eliminar sus datos y abrirse limpio.'
+    };
+}
+
 function cifrarDatoLocal(valor) {
     if (!safeStorage.isEncryptionAvailable()) {
         throw new Error('El cifrado seguro de Windows no está disponible.');
@@ -563,6 +754,15 @@ function configurarIPC() {
             throw new Error('La solicitud para eliminar el log no es válida.');
         }
         return eliminarLogActual();
+    });
+
+    ipcMain.handle('sistema:restablecer-datos', (evento, confirmacion) => {
+        if (!eventoProvieneDeVentanaPrincipal(evento)) {
+            throw new Error(
+                'La solicitud para restablecer los datos no es válida.'
+            );
+        }
+        return solicitarRestablecimientoDatos(confirmacion);
     });
 }
 
@@ -818,6 +1018,11 @@ if (!bloqueoObtenido) {
     });
 
     app.whenReady().then(() => {
+        if (RESTABLECIMIENTO_DATOS_SOLICITADO) {
+            ejecutarModoRestablecimientoDatos();
+            return;
+        }
+
         // Conserva la ubicación histórica para que una actualización de marca
         // no cree un perfil vacío ni obligue a volver a vincular las líneas.
         app.setPath(
